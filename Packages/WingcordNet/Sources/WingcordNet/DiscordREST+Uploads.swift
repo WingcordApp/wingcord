@@ -62,17 +62,21 @@ public struct UploadRequest: Sendable {
     /// Whether the file is hidden behind a spoiler. Discord carries no flag for
     /// it: the *name* is the flag, and it is prefixed on the way out.
     public var isSpoiler: Bool
+    /// What makes it a Discord clip rather than a video — see `ClipUpload`.
+    public var clip: ClipUpload?
 
     public init(
         filename: String,
         size: Int,
         altText: String? = nil,
-        isSpoiler: Bool = false
+        isSpoiler: Bool = false,
+        clip: ClipUpload? = nil
     ) {
         self.filename = filename
         self.size = size
         self.altText = altText
         self.isSpoiler = isSpoiler
+        self.clip = clip
     }
 
     /// The name Discord is asked to reserve. `SPOILER_` is how every client
@@ -92,19 +96,24 @@ public struct UploadedAttachment: Sendable {
     /// The type the file was chosen as — Discord's `original_content_type`,
     /// which says "image/heic" for a picture its client sent as a JPEG.
     public var originalContentType: String?
+    /// The clip half, written again on the message's attachment entry as
+    /// Discord's own does.
+    public var clip: ClipUpload?
 
     public init(
         id: String,
         filename: String,
         uploadedFilename: String,
         altText: String? = nil,
-        originalContentType: String? = nil
+        originalContentType: String? = nil,
+        clip: ClipUpload? = nil
     ) {
         self.id = id
         self.filename = filename
         self.uploadedFilename = uploadedFilename
         self.altText = altText
         self.originalContentType = originalContentType
+        self.clip = clip
     }
 }
 
@@ -128,6 +137,19 @@ extension DiscordREST {
                 /// object with a different default size limit, and Discord reads
                 /// this key to decide which.
                 var is_clip = false
+                /// A clip's own fields, as `getUploadPayload` writes them.
+                var clip: ClipFields?
+
+                enum CodingKeys: String, CodingKey { case filename, file_size, id, is_clip }
+
+                func encode(to encoder: any Encoder) throws {
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode(filename, forKey: .filename)
+                    try container.encode(file_size, forKey: .file_size)
+                    try container.encode(id, forKey: .id)
+                    try container.encode(is_clip, forKey: .is_clip)
+                    try clip?.encode(to: encoder)
+                }
             }
             var files: [File]
         }
@@ -144,7 +166,9 @@ extension DiscordREST {
             Body.File(
                 filename: file.wireFilename,
                 file_size: file.size,
-                id: String(index)
+                id: String(index),
+                is_clip: file.clip != nil,
+                clip: file.clip.map(ClipFields.init)
             )
         })
         let response = try await post(

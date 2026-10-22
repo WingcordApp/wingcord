@@ -107,6 +107,83 @@ struct ProfileEditWriteTests {
         #expect(body["theme_colors"] as? [Int] == [0x46_1F_63, 0x7A_2A_5C])
     }
 
+    // MARK: The per-server half
+
+    /// Discord's own per-server save (build 643186): the avatar, decoration,
+    /// nameplate and name style go to the member route, the nameplate nested.
+    @Test("A per-server member patch writes Discord's keys, the nameplate nested")
+    func memberPatch() throws {
+        let body = try json(
+            CurrentMemberPatch(
+                avatar: .set("data:image/gif;base64,R0lG"),
+                avatar_decoration_sku_id: .set("111"),
+                nameplate: .set("222"),
+                style: .set(DisplayNameStyleWrite(fontID: 3, effectID: 1, colors: [0xFF0000]))
+            )
+        )
+        #expect(body.keys.sorted() == [
+            "avatar", "avatar_decoration_sku_id", "collectibles",
+            "display_name_colors", "display_name_effect_id", "display_name_font_id",
+        ])
+        let collectibles = try #require(body["collectibles"] as? [String: Any])
+        let plate = try #require(collectibles["nameplate"] as? [String: Any])
+        #expect(plate["sku_id"] as? String == "222")
+    }
+
+    @Test("Taking a server's nameplate off writes it as null inside collectibles")
+    func memberPatchClearsNameplate() throws {
+        let body = try json(CurrentMemberPatch(nameplate: .cleared))
+        let collectibles = try #require(body["collectibles"] as? [String: Any])
+        #expect(collectibles.keys.sorted() == ["nameplate"])
+        #expect(collectibles["nameplate"] is NSNull)
+    }
+
+    @Test("An emptied nickname is sent as null, an untouched one not at all")
+    func memberPatchNickname() throws {
+        let emptied = try json(CurrentMemberPatch(nick: .set("")))
+        #expect(emptied["nick"] is NSNull)
+        let untouched = try json(CurrentMemberPatch(avatar_id: .set("9")))
+        #expect(untouched.keys.sorted() == ["avatar_id"])
+    }
+
+    /// What a member wears in one server rides the member object.
+    @Test("A member's own decoration, plate and name style decode")
+    func memberCosmetics() throws {
+        let json = """
+        {"user":{"id":"1","username":"a","discriminator":"0"},"nick":"lex","roles":[],
+         "avatar_decoration_data":{"asset":"a_deco","sku_id":"5"},
+         "collectibles":{"nameplate":{"asset":"nameplates/x/","palette":"cobalt","sku_id":"6"}},
+         "display_name_styles":{"font_id":3,"effect_id":1,"colors":[16711680]}}
+        """
+        let member = try JSONDecoder().decode(MemberDTO.self, from: Data(json.utf8)).domain(userID: UserID(rawValue: 1))
+        let worn = try #require(member.cosmetics)
+        #expect(worn.avatarDecorationHash == "a_deco")
+        #expect(worn.avatarDecorationSKU == "5")
+        #expect(worn.nameplate?.skuID == "6")
+        #expect(worn.displayNameStyle != nil)
+        let plain = try JSONDecoder().decode(MemberDTO.self, from: Data(#"{"user":{"id":"1","username":"a","discriminator":"0"},"roles":[]}"#.utf8))
+        #expect(plain.domain(userID: UserID(rawValue: 1)).cosmetics == nil)
+    }
+
+    // MARK: Collectibles
+
+    /// Discord sends the profile's whole list back with the edited kind
+    /// swapped — so whatever else it carried survives the save.
+    @Test("Changing the effect keeps every other worn collectible")
+    func collectibleSwapKeepsTheRest() {
+        let worn = [
+            WornCollectible(skuID: "deco", kind: .avatarDecoration),
+            WornCollectible(skuID: "old-effect", kind: .profileEffect),
+            WornCollectible(skuID: "frame", kind: .profileFrame),
+            WornCollectible(skuID: "unknown", type: 9),
+        ]
+        let skus = worn.skus(effect: .set("new-effect"), frame: .unchanged)
+        #expect(skus == ["deco", "frame", "unknown", "new-effect"])
+        let cleared = worn.skus(effect: .unchanged, frame: .cleared)
+        #expect(cleared == ["deco", "old-effect", "unknown"])
+        #expect(worn.skus(effect: .unchanged, frame: .unchanged) == nil)
+    }
+
     // MARK: Dirt
 
     @Test("Only a touched field reports itself dirty")

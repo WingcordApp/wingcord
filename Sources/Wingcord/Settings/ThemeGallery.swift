@@ -1,4 +1,5 @@
 import SwiftUI
+import WingcordCore
 
 // MARK: - The tiles
 //
@@ -360,6 +361,77 @@ private struct DiscordSwatch: View {
                 Path(box),
                 with: .linearGradient(theme.gradient, startPoint: start, endPoint: end)
             )
+        }
+    }
+}
+
+// MARK: - Saved themes
+
+/// Themes kept from conversations — Discord's theme card's Save — and the
+/// account's own, as Discord's Appearance panel lists them
+/// (`GET /users/@me/custom-themes`, asked as the gallery appears, as Discord
+/// asks when its panel opens). Choosing one makes it the reader's theme.
+struct SavedThemeGallery: View {
+    /// Shared with the other galleries: the choice is one choice.
+    var ring: Namespace.ID
+
+    @Environment(AppModel.self) private var model
+    @State private var theme = ThemeStore.shared
+    @State private var shareRequest: ThemeShareRequest?
+
+    var body: some View {
+        Group {
+            if theme.savedThemes.isEmpty && accountOnly.isEmpty {
+                SettingsCard {
+                    SettingsValueRow(
+                        title: "None yet",
+                        value: "—",
+                        help: "When somebody shares a custom theme in a conversation, Save on its card keeps it here."
+                    )
+                }
+            } else {
+                ThemeGrid {
+                    ForEach(theme.savedThemes) { saved in
+                        tile(saved.theme, title: saved.creatorName.map { "By \($0)" } ?? "Custom Theme") {
+                            Button("Delete", role: .destructive) { theme.removeSaved(saved.id) }
+                        }
+                    }
+                    ForEach(accountOnly, id: \.self) { shared in
+                        tile(shared, title: "Your Theme") {
+                            Button("Save") { theme.save(shared, creatorName: nil) }
+                        }
+                    }
+                }
+            }
+        }
+        .task { model.sessionController.loadAccountCustomThemes() }
+        .sheet(item: $shareRequest) { request in
+            ThemeShareSheet(theme: request.theme) { shareRequest = nil }
+        }
+    }
+
+    /// The account's that are not kept here already.
+    private var accountOnly: [SharedClientTheme] {
+        (model.accountCustomThemes ?? []).filter { !theme.isSaved($0) }
+    }
+
+    private func tile(
+        _ shared: SharedClientTheme, title: String, @ViewBuilder actions: () -> some View
+    ) -> some View {
+        ThemeTile(
+            title: title,
+            help: nil,
+            isSelected: theme.choice == .shared(shared),
+            ring: ring
+        ) {
+            theme.select(.shared(shared))
+        } swatch: {
+            SharedThemeSwatch(theme: shared)
+        }
+        .contextMenu {
+            Button("Share\u{2026}") { shareRequest = ThemeShareRequest(theme: shared) }
+                .disabled(model.connectionState != .ready)
+            actions()
         }
     }
 }

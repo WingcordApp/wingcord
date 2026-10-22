@@ -76,7 +76,12 @@ private struct GameActivityPublisher: ViewModifier {
             // idempotent, which is what lets this be a blunt re-evaluation
             // rather than four separate handlers.
             .onChange(of: settings.isOverlayEnabled) { _, _ in model.refreshOverlay() }
-            .onChange(of: settings.clipsEnabled) { _, _ in model.refreshOverlay() }
+            // Clips are armed the same way, and also reach the call: its
+            // voices, and the flags everybody in it is told.
+            .onChange(of: settings.clipsEnabled) { _, _ in model.clipsSettingsChanged() }
+            .onChange(of: settings.clipLength) { _, _ in model.clipsSettingsChanged() }
+            .onChange(of: settings.clipResolution) { _, _ in model.clipsSettingsChanged() }
+            .onChange(of: settings.clipFrameRate) { _, _ in model.clipsSettingsChanged() }
             .onChange(of: settings.overlayHasClickableRegions) { _, _ in
                 model.overlay.refreshPresentation()
             }

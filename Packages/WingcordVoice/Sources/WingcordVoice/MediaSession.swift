@@ -3,6 +3,7 @@ import CoreMedia
 import Foundation
 import QuartzCore
 import Synchronization
+import WingcordCore
 
 // MARK: - One media session
 //
@@ -156,6 +157,9 @@ public actor MediaSession {
         case inputSilent(Bool)
         /// Which kind of client somebody in the call is on — opcode 20.
         case platform(userID: UInt64, platform: Int)
+        /// What somebody's client says about clips — opcode 18's flags. See
+        /// `VoiceGateway.Event.clientFlags`.
+        case clientFlags(userID: UInt64, flags: Int)
     }
 
     /// What a session can promise about who else can see and hear it.
@@ -321,6 +325,11 @@ public actor MediaSession {
     /// A watched stream's sound, mixed into this call's output. See
     /// `setStreamAudio`.
     private let streamMix = Mutex(StreamMix())
+    /// See `setClipTap`. Read from the mix thread, the microphone's and the
+    /// actor.
+    private let clipTap = Mutex<ClipAudioTap?>(nil)
+    /// See `setStreamClipSink`. Read on VideoToolbox's callback thread.
+    private let streamClip = Mutex<StreamClipSink?>(nil)
     /// A long sound looped under the call — a stage's waiting music. See
     /// `setLoopedTrack`.
     private let loopedTrack = Mutex<LoopedTrack?>(nil)
@@ -606,6 +615,9 @@ public actor MediaSession {
 
         case .clientPlatform(let userID, let platform):
             if isCall { emit(.platform(userID: userID, platform: platform)) }
+
+        case .clientFlags(let userID, let flags):
+            if isCall { emit(.clientFlags(userID: userID, flags: flags)) }
 
         case .clientDisconnected(let userID):
             announcedUsers.remove(userID)
@@ -1002,6 +1014,9 @@ public actor MediaSession {
             width: quality.width, height: quality.height,
             framerate: quality.framerate, bitrate: controller.bitrate
         ))
+        if case .stream = kind {
+            encoder.onSample = { [weak self] sample in self?.streamClip.withLock { $0 }?.video.append(sample) }
+        }
         encoder.onEncodedFrame = { [videoSend] units, sets, isKeyframe, captured in
             videoSend.send(
                 units: units,
@@ -1540,13 +1555,60 @@ public actor MediaSession {
     /// playback synchronised by an event — and routing it through the call's
     /// mixer is what puts it on the call's device, at the call's volume, inside
     /// the echo canceller's reference.
-    public func playLocalClip(_ samples: [Float], volume: Float) {
+    ///
+    /// - Parameter isSoundboard: a soundboard sound rather than one of the
+    ///   app's own — only those go into a clip's soundboard track.
+    public func playLocalClip(_ samples: [Float], volume: Float, isSoundboard: Bool = false) {
         inbound.playLocal(samples, volume: volume)
+        if isSoundboard {
+            // It starts with the next mixed frame, which is heard about three
+            // frames from now.
+            clipTap.withLock { $0 }?.noteSoundboard(samples, volume: volume, at: CACurrentMediaTime() + 0.06)
+        }
+    }
+
+    // MARK: Clips
+
+    /// Where this call's sound goes for clips — each kept speaker, the
+    /// microphone, the soundboard, who spoke when — or nil to keep none.
+    /// docs/CLIPS-PRESENCE.md, Phase 3.2.
+    public nonisolated func setClipTap(_ tap: ClipAudioTap?) {
+        clipTap.withLock { $0 = tap }
+        inbound.setClipTap(tap)
+        let sink: (@Sendable (TimedAudioFrame) -> Void)? = tap.map { tap in
+            { @Sendable frame in tap.noteMicrophone(frame) }
+        }
+        audioSend.setClipSink(sink)
+    }
+
+    /// Where a Go Live stream's own picture and sound go for clips —
+    /// Discord's `STREAMER` source: "clips are captured at the same quality
+    /// as your stream when streaming", off the encoder that is already
+    /// running. Only a stream session has one.
+    public struct StreamClipSink: Sendable {
+        public var video: ReplayVideoRing
+        public var sound: TimedAudioBuffer
+
+        public init(video: ReplayVideoRing, sound: TimedAudioBuffer) {
+            self.video = video
+            self.sound = sound
+        }
+    }
+
+    public nonisolated func setStreamClipSink(_ sink: StreamClipSink?) {
+        streamClip.withLock { $0 = sink }
+        let sound: (@Sendable (TimedAudioFrame) -> Void)? = sink.map { sink in
+            { @Sendable frame in sink.sound.append(frame) }
+        }
+        audioSend.setClipSink(sound)
     }
 
     private func gateDidChange(_ isOpen: Bool) async {
         isGateOpen = isOpen
         emit(.selfSpeaking(isOpen))
+        clipTap.withLock { $0 }?.noteSpeaking(
+            connection.userID, flags: isOpen ? ClipTimeline.voiceFlag : 0, at: CACurrentMediaTime()
+        )
         if reducer.speaking(isOpen, at: .now) { updateVideoQuality() }
         await gateway?.setSpeaking(speakingFlags, ssrc: ourSSRC)
     }
@@ -1577,11 +1639,14 @@ public actor MediaSession {
         // that it is not audible as delay.
         guard audio.queuedFrames < Int(OpusFormat.frameSize) * 3 else { return true }
         let now = CACurrentMediaTime()
+        // What is mixed now is heard once the frames already queued have
+        // played — the stamp a clip keeps it under.
+        let heardAt = now + Double(audio.queuedFrames) / Double(OpusFormat.sampleRate)
         // The music's frame is read from its file here, before the call's
         // lock, and only added under it.
         let track = loopedTrack.withLock { $0 }
         let hasMusic = track?.read() ?? false
-        let mixed = inbound.mixNextFrame(at: now) { mix, isSpeech in
+        let mixed = inbound.mixNextFrame(at: now, heardAt: heardAt) { mix, isSpeech in
             var added = false
             // The stream's gain for this frame, then its sound — outside the
             // lock that decided the gain, inside the call's own.
@@ -1594,8 +1659,10 @@ public actor MediaSession {
             }
             return added
         }
+        let tap = clipTap.withLock { $0 }
         for change in mixed.speakingChanges {
             emit(.speaking(userID: change.userID, isSpeaking: change.isSpeaking))
+            tap?.noteSpeaking(change.userID, flags: change.isSpeaking ? ClipTimeline.voiceFlag : 0, at: heardAt)
         }
         guard !mixed.isSilent else { return true }
         mixed.samples.withUnsafeBufferPointer { buffer in

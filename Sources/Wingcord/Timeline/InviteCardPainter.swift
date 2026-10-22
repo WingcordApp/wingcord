@@ -27,10 +27,16 @@ nonisolated extension TimelineRowPainter {
         isSettled: Bool,
         hovered: CGPoint?,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        style: MessageTextStyle
     ) {
         let ink = ThemeInk.current
-        let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
+        // A voice card's plate stops above the line that sits under it.
+        let frame: CGRect = switch slot.body {
+        case .voice(let voice): voice.plateRect.offsetBy(dx: offset.x, dy: offset.y)
+        case .voiceRow(let row): row.plateRect.offsetBy(dx: offset.x, dy: offset.y)
+        default: slot.rect.offsetBy(dx: offset.x, dy: offset.y)
+        }
         let corner: CGFloat = if case .profile = slot.body {
             InviteCardLayoutEngine.profileCorner
         } else {
@@ -44,6 +50,12 @@ nonisolated extension TimelineRowPainter {
         switch slot.body {
         case .classic(let classic):
             drawClassic(classic, offset: offset, context: context, images: images, scale: scale)
+        case .voice(let voice):
+            drawVoice(voice, offset: offset, context: context, ink: ink, hovered: hovered,
+                      images: images, scale: scale, style: style)
+        case .voiceRow(let row):
+            drawVoiceRow(row, offset: offset, context: context, ink: ink, hovered: hovered,
+                         images: images, scale: scale, style: style)
         case .profile(let profile):
             // Everything the card holds is cut to its outline — the banner's
             // corners, and the content a folded card hides under its fade.
@@ -119,6 +131,132 @@ nonisolated extension TimelineRowPainter {
         if !button.isEnabled { context.setAlpha(0.5) }
         drawTextFrame(face.label, at: shifted(face.labelOrigin, offset), context: context, images: images, scale: scale)
         if !button.isEnabled { context.setAlpha(1) }
+        // The channel-row card's Join Voice carries the speaker, as Discord's does.
+        if case .voiceRow(let row) = slot.body, !isSettled {
+            drawSymbol("speaker.wave.2.fill", tint: .white,
+                       in: row.buttonSpeakerRect.offsetBy(dx: offset.x, dy: offset.y), context: context)
+        }
+    }
+
+    // MARK: The voice card
+
+    private static func drawVoice(
+        _ voice: InviteCardSlot.Voice,
+        offset: CGPoint,
+        context: CGContext,
+        ink: ThemeInk,
+        hovered: CGPoint?,
+        images: ImageStore,
+        scale: CGFloat,
+        style: MessageTextStyle
+    ) {
+        // The way to the channel: brighter under the pointer, as a link is.
+        let crumbTint = hovered == voice.breadcrumbRect.origin ? style.primaryColor : style.secondaryColor
+        drawSymbol("speaker.wave.2.fill", tint: crumbTint,
+                   in: voice.speakerRect.offsetBy(dx: offset.x, dy: offset.y), context: context)
+        drawTextFrame(voice.breadcrumb, at: shifted(voice.breadcrumbOrigin, offset), context: context,
+                      images: images, scale: scale)
+        drawSymbol("chevron.right", tint: crumbTint,
+                   in: voice.chevronRect.offsetBy(dx: offset.x, dy: offset.y).insetBy(dx: 2, dy: 2), context: context)
+        drawTextFrame(voice.label, at: shifted(voice.labelOrigin, offset), context: context, images: images, scale: scale)
+        if let sublabel = voice.sublabel {
+            drawTextFrame(sublabel, at: shifted(voice.sublabelOrigin, offset), context: context, images: images, scale: scale)
+        }
+
+        // Last first, so each face lies over the smaller one after it, ringed
+        // in the card's own fill where they overlap.
+        for face in voice.faces.reversed() {
+            let rect = face.rect.offsetBy(dx: offset.x, dy: offset.y)
+            context.addEllipse(in: rect.insetBy(dx: -2, dy: -2))
+            context.setFillColor(ink.cardFill)
+            context.fillPath()
+            if let url = face.avatarURL,
+               let image = images.cached(InviteCardSlot.imageKey(url, in: face.rect, scale: scale)) {
+                context.saveGState()
+                context.addEllipse(in: rect)
+                context.clip()
+                drawFlipped(image, in: rect, context: context)
+                context.restoreGState()
+            } else {
+                context.addEllipse(in: rect)
+                context.setFillColor(ink.surfaceRaised)
+                context.fillPath()
+                drawTextFrame(face.monogram, at: shifted(face.monogramOrigin, offset), context: context,
+                              images: images, scale: scale)
+            }
+        }
+        if let overflow = voice.overflow {
+            let rect = overflow.rect.offsetBy(dx: offset.x, dy: offset.y)
+            context.addEllipse(in: rect.insetBy(dx: -2, dy: -2))
+            context.setFillColor(ink.cardFill)
+            context.fillPath()
+            context.addEllipse(in: rect)
+            context.setFillColor(ink.lift(0.14))
+            context.fillPath()
+            drawTextFrame(overflow.label, at: shifted(overflow.labelOrigin, offset), context: context,
+                          images: images, scale: scale)
+        }
+
+        drawSymbol("eye.slash", tint: style.secondaryColor,
+                   in: voice.footerSymbolRect.offsetBy(dx: offset.x, dy: offset.y), context: context)
+        drawTextFrame(voice.footer, at: shifted(voice.footerOrigin, offset), context: context, images: images, scale: scale)
+    }
+
+    private static func drawVoiceRow(
+        _ row: InviteCardSlot.VoiceRow,
+        offset: CGPoint,
+        context: CGContext,
+        ink: ThemeInk,
+        hovered: CGPoint?,
+        images: ImageStore,
+        scale: CGFloat,
+        style: MessageTextStyle
+    ) {
+        // Discord's `TEXT_FEEDBACK_POSITIVE` while somebody is inside.
+        let green = NSColor(srgbRed: 0x23 / 255, green: 0xA5 / 255, blue: 0x59 / 255, alpha: 1)
+        drawSymbol("speaker.wave.2.fill", tint: row.isOccupied ? green : style.secondaryColor,
+                   in: row.speakerRect.offsetBy(dx: offset.x, dy: offset.y), context: context)
+        drawTextFrame(row.header, at: shifted(row.headerOrigin, offset), context: context, images: images, scale: scale)
+        if hovered == row.headerRect.origin {
+            // Under the pointer, the channel's name is underlined, as a link is.
+            let line = CGRect(
+                x: row.headerOrigin.x + offset.x, y: row.headerOrigin.y + offset.y + row.header.size.height - 1,
+                width: row.header.size.width, height: 1
+            )
+            context.setFillColor(style.primaryColor.cgColor)
+            context.fill(line)
+        }
+        for person in row.people {
+            let rect = person.avatarRect.offsetBy(dx: offset.x, dy: offset.y)
+            if let url = person.avatarURL,
+               let image = images.cached(InviteCardSlot.imageKey(url, in: person.avatarRect, scale: scale)) {
+                context.saveGState()
+                context.addEllipse(in: rect)
+                context.clip()
+                drawFlipped(image, in: rect, context: context)
+                context.restoreGState()
+            } else {
+                context.addEllipse(in: rect)
+                context.setFillColor(ink.surfaceRaised)
+                context.fillPath()
+                drawTextFrame(person.monogram, at: shifted(person.monogramOrigin, offset), context: context,
+                              images: images, scale: scale)
+            }
+            drawTextFrame(person.name, at: shifted(person.nameOrigin, offset), context: context, images: images, scale: scale)
+            if let liveRect = person.liveRect, let live = person.live {
+                let badge = liveRect.offsetBy(dx: offset.x, dy: offset.y)
+                context.addPath(CGPath(roundedRect: badge, cornerWidth: 4, cornerHeight: 4, transform: nil))
+                context.setFillColor(CGColor(srgbRed: 0xDA / 255, green: 0x37 / 255, blue: 0x3C / 255, alpha: 1))
+                context.fillPath()
+                drawTextFrame(live, at: shifted(person.liveOrigin, offset), context: context, images: images, scale: scale)
+            }
+        }
+        if let note = row.note {
+            drawTextFrame(note, at: shifted(row.noteOrigin, offset), context: context, images: images, scale: scale)
+        }
+        drawSymbol("eye.slash", tint: style.secondaryColor,
+                   in: row.footerSymbolRect.offsetBy(dx: offset.x, dy: offset.y), context: context)
+        drawTextFrame(row.footer, at: shifted(row.footerOrigin, offset), context: context, images: images, scale: scale)
     }
 
     // MARK: The profile card

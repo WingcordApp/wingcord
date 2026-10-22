@@ -289,6 +289,14 @@ public enum CDN {
         URL(string: "\(host)/badge-icons/\(hash).png?size=64")
     }
 
+    /// A personal widget's picture — Discord's own address (build 643186,
+    /// `326009`'s `m`): `/widget-assets/{owner}/{file_id}`, as WebP, moving
+    /// when asked. **Keyed by the widget's owner**, which is why a picture
+    /// could not be drawn from the widget alone.
+    public static func widgetAsset(owner: UserID, fileID: String, animated: Bool) -> URL? {
+        URL(string: "\(host)/widget-assets/\(owner.rawValue)/\(fileID)?format=webp&animated=\(animated)")
+    }
+
     /// An app's own icon.
     ///
     /// **Two path segments, not one** — `/app-icons/{application_id}/{hash}`.

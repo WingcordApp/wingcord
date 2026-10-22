@@ -110,21 +110,65 @@ final class ThemeStore {
     /// exactly as it was, because it never stopped being the selection.
     private(set) var serverTheme: ActiveServerTheme?
 
+    // MARK: A shared theme, previewed
+
+    /// A theme from somebody's message, worn for a look before keeping it —
+    /// Discord's Preview. **An override, like a server's theme, and above it**:
+    /// the reader asked to see this one. Never persisted; a relaunch, Stop
+    /// Preview or choosing any theme takes it off.
+    private(set) var previewTheme: SharedClientTheme?
+
+    func setPreview(_ theme: SharedClientTheme?) {
+        guard theme != previewTheme else { return }
+        previewTheme = theme
+        apply(notifyingDrawnSurfaces: true)
+    }
+
+    // MARK: Saved themes
+
+    /// Themes the reader kept from conversations, newest first — Settings ›
+    /// Appearance › Saved Themes. On this Mac: Discord writes no saved theme
+    /// from its client, so there is no route to keep them on the account.
+    private(set) var savedThemes: [SavedTheme] = []
+
+    /// Keeps a theme, once: saving one already kept moves nothing.
+    @discardableResult
+    func save(_ theme: SharedClientTheme, creatorName: String?) -> Bool {
+        guard theme.isValid, !savedThemes.contains(where: { $0.theme == theme }) else { return false }
+        savedThemes.insert(SavedTheme(theme: theme, creatorName: creatorName), at: 0)
+        persistSavedThemes()
+        return true
+    }
+
+    func removeSaved(_ id: SavedTheme.ID) {
+        savedThemes.removeAll { $0.id == id }
+        persistSavedThemes()
+    }
+
+    func isSaved(_ theme: SharedClientTheme) -> Bool {
+        savedThemes.contains { $0.theme == theme }
+    }
+
+    private func persistSavedThemes() {
+        defaults.set(try? JSONEncoder().encode(savedThemes), forKey: Key.savedThemes)
+    }
+
     /// What the window's ground cross-fades on: a change of choice, or going
     /// into or out of a themed server — never an edit. See `ThemeGroundLayer`.
     var groundIdentity: GroundIdentity {
-        GroundIdentity(choice: choice, server: serverTheme?.guildID)
+        GroundIdentity(choice: choice, server: serverTheme?.guildID, preview: previewTheme)
     }
 
     /// The reader's picture, unless a server's theme is on — which **replaces
     /// the room, picture and all**. A server theme under a photograph would
     /// reach nothing but the surfaces, and "Use my theme" is the setting for a
     /// reader who wants their own.
-    var shownBackdrop: Backdrop? { serverTheme == nil ? backdrop : nil }
+    var shownBackdrop: Backdrop? { serverTheme == nil && previewTheme == nil ? backdrop : nil }
 
     struct GroundIdentity: Equatable {
         var choice: ThemeChoice
         var server: GuildID?
+        var preview: SharedClientTheme?
     }
 
     // MARK: Reading
@@ -144,6 +188,7 @@ final class ThemeStore {
         // touches nothing else.
         case .discord(let theme): theme.colors
         case .custom: ThemeColors(customSeed.at(vividness: vividness), followsSystemAccent: systemAccent)
+        case .shared(let theme): ServerTheme(shared: theme).colors
         }
     }
 
@@ -154,6 +199,7 @@ final class ThemeStore {
         case .preset(let preset): preset.ground(vividness: vividness)
         case .discord(let theme): ThemeGround(theme, vividness: vividness)
         case .custom: ThemeGround(customSeed.at(vividness: vividness))
+        case .shared(let theme): ThemeGround(server: ServerTheme(shared: theme))
         }
     }
 
@@ -177,6 +223,8 @@ final class ThemeStore {
     }
 
     func select(_ choice: ThemeChoice) {
+        // Choosing anything ends a preview: the reader has decided.
+        if previewTheme != nil { setPreview(nil) }
         guard adopt(choice) else { return }
         onChoose?(choice)
     }
@@ -287,7 +335,9 @@ final class ThemeStore {
         let own = forcedDark ? dark.colors(vividness: vividness) : chosen
         // A server's theme is drawn in the reader's own room: it carries a
         // version for each, and choosing which is the reader's theme's job.
-        let server = serverTheme.flatMap { ServerTheme($0.theme, room: own.appearance) }
+        // A theme being previewed is above both: the reader asked to see it.
+        let server = previewTheme.map(ServerTheme.init(shared:))
+            ?? serverTheme.flatMap { ServerTheme($0.theme, room: own.appearance) }
 
         // The ground first and on its own test — see `ground`. Written only
         // when it moved: an `@Observable` setter invalidates its readers
@@ -360,6 +410,8 @@ final class ThemeStore {
         vividness = min(1, max(0, defaults.object(forKey: Key.vividness) as? Double ?? 0))
         choice = (defaults.object(forKey: Key.choice) as? String)
             .flatMap(Self.choice(forStorageValue:)) ?? .system
+        savedThemes = defaults.data(forKey: Key.savedThemes)
+            .flatMap { try? JSONDecoder().decode([SavedTheme].self, from: $0) } ?? []
         backdrop = (defaults.object(forKey: Key.backdrop) as? [String: Any])
             .flatMap(Backdrop.init(storageValue:))
         // A picture whose file is gone — a reader who emptied Application
@@ -417,6 +469,8 @@ final class ThemeStore {
         case .preset(let preset): preset.rawValue
         case .discord(let theme): discordStoragePrefix + theme.rawValue
         case .custom: customStorageValue
+        case .shared(let theme):
+            sharedStoragePrefix + ((try? JSONEncoder().encode(theme)).map { $0.base64EncodedString() } ?? "")
         }
     }
 
@@ -426,6 +480,11 @@ final class ThemeStore {
         if value.hasPrefix(discordStoragePrefix) {
             return DiscordTheme(rawValue: String(value.dropFirst(discordStoragePrefix.count)))
                 .map(ThemeChoice.discord)
+        }
+        if value.hasPrefix(sharedStoragePrefix) {
+            return Data(base64Encoded: String(value.dropFirst(sharedStoragePrefix.count)))
+                .flatMap { try? JSONDecoder().decode(SharedClientTheme.self, from: $0) }
+                .flatMap { $0.isValid ? ThemeChoice.shared($0) : nil }
         }
         return ThemePreset(rawValue: value).map(ThemeChoice.preset)
     }
@@ -443,12 +502,16 @@ final class ThemeStore {
     /// would otherwise quietly become Discord's.
     private static let discordStoragePrefix = "discord·"
 
+    /// A kept shared theme, carried whole after it.
+    private static let sharedStoragePrefix = "shared·"
+
     private enum Key {
         static let choice = "appearance.theme"
         static let customSeed = "appearance.themeCustomSeed"
         static let customSystemAccent = "appearance.themeCustomSystemAccent"
         static let vividness = "appearance.themeVividness"
         static let backdrop = "appearance.backdrop"
+        static let savedThemes = "appearance.savedThemes"
     }
 }
 

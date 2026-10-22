@@ -36,12 +36,14 @@ struct BoardTile: Hashable, Sendable, Identifiable {
         case application(BoardApplicationTile)
         /// A widget the reader wrote: a cover and up to four labelled slots.
         case personal(PersonalWidget)
+        /// "Clips Gallery": up to four clips, the first drawn large.
+        case clips([BoardClip])
     }
 
     var games: [BoardGame] {
         switch content {
         case .detailed(let games), .grid(let games): games
-        case .application, .personal: []
+        case .application, .personal, .clips: []
         }
     }
 
@@ -71,6 +73,17 @@ struct BoardGame: Hashable, Sendable, Identifiable {
     var tags: [GameWidgetTag]
 
     var id: ApplicationID { gameID }
+}
+
+/// One clip on a board, resolved for drawing: its picture, its words and its
+/// video. docs/CLIPS-PRESENCE.md, Phase 7 (D18).
+struct BoardClip: Hashable, Sendable, Identifiable {
+    var id: String
+    var title: String?
+    /// The clip's game, once `/games` has answered.
+    var gameName: String?
+    var thumbnailURL: URL?
+    var videoURL: URL?
 }
 
 /// The proportions a game's art is drawn at.
@@ -123,12 +136,16 @@ enum WidgetPreview: Hashable, Sendable, Identifiable {
     case games(GameCollection)
     /// A widget the person wrote.
     case personal(id: String, widget: PersonalWidget)
+    /// "Clips Gallery" — Discord's `K` in the stacked previews: its pictures,
+    /// and "View all" onto the board.
+    case clips(id: String, clips: [BoardClip])
 
     var id: String {
         switch self {
         case .application(let widget): "application-\(widget.applicationID.rawValue)"
         case .games: "games"
         case .personal(let id, _): id
+        case .clips(let id, _): id
         }
     }
 }

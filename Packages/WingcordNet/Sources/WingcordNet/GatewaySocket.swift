@@ -272,6 +272,7 @@ public actor GatewaySocket {
             if case .ready = frame.payload { Self.traceReadyShape(data) }
             // Every Go Live frame, verbatim. See `traceStreamFrame`.
             if let name = Self.streamEventName(of: frame) { Self.traceStreamFrame(name, data) }
+            if frame.name == "SESSIONS_REPLACE" { Self.traceOwnSessions(data) }
             if let sequence = frame.sequence { self.sequence = sequence }
             process(frame)
         } catch {
@@ -309,6 +310,31 @@ public actor GatewaySocket {
         case is [Any]: "array"
         case is [String: Any]: "object"
         default: "other"
+        }
+    }
+
+    /// What Discord holds for each of the account's own sessions — the one
+    /// place it says back what this client published, as it stored it: the
+    /// activity's name and lines, and the picture as resolved (`mp:` or an
+    /// asset id). Diagnostic only, and gated on the trace sink.
+    nonisolated private static func traceOwnSessions(_ data: Data) {
+        guard traceSink != nil,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sessions = root["d"] as? [[String: Any]]
+        else { return }
+        for session in sessions {
+            let info = session["client_info"] as? [String: Any]
+            let activities = (session["activities"] as? [[String: Any]] ?? []).map { activity in
+                let assets = activity["assets"] as? [String: Any]
+                return "\(activity["type"] ?? "?") \(activity["name"] ?? "?")"
+                    + " | \(activity["details"] ?? "-") | \(activity["state"] ?? "-")"
+                    + " | large=\(assets?["large_image"] ?? "-")"
+                    + " | buttons=\((activity["buttons"] as? [Any])?.count ?? 0)"
+            }
+            trace(
+                "own session \(info?["client"] ?? "?")/\(info?["os"] ?? "?") \(session["status"] ?? "?"): "
+                    + (activities.isEmpty ? "no activities" : activities.joined(separator: " ;; "))
+            )
         }
     }
 
@@ -680,37 +706,43 @@ public actor GatewaySocket {
     ///   - selfVideo: whether the camera is on. Sent with the join rather than
     ///     afterwards where possible — the media session is negotiated for
     ///     video or not at identify time.
+    ///   - flags: what this client says about clips — `VoiceStateFlags`.
     public func updateVoiceState(
         guildID: GuildID?,
         channelID: ChannelID?,
         selfMute: Bool,
         selfDeaf: Bool,
-        selfVideo: Bool = false
+        selfVideo: Bool = false,
+        flags: VoiceStateFlags = []
     ) {
         struct Update: Encodable {
             var op = 4
             var d: Data
 
-            /// **Five keys, and both ids are written even when they are
+            /// **Six keys, and both ids are written even when they are
             /// absent.** Swift omits a nil optional, and this payload needs
             /// `guild_id: null` on the wire rather than no `guild_id` at all —
             /// that is how a direct-message call is distinguished from a
             /// malformed one, and how leaving is distinguished from a payload
             /// that forgot to say where.
             ///
-            /// Nothing else is sent. An earlier version added `flags` and
-            /// `preferred_region` with a justification nobody had captured;
-            /// they are gone, because a field invented for a wire protocol is a
-            /// field the server may refuse the whole frame over.
+            /// **`flags` is Discord's own, every time** — its `voiceStateUpdate`
+            /// writes `{guild_id, channel_id, self_mute, self_deaf,
+            /// self_video, flags}` with `flags` defaulting to 0 (web build
+            /// 641803, read in docs/CLIPS-PRESENCE.md Phase 3). An earlier
+            /// version sent it on a guess and was rightly reverted; this one
+            /// is read off the client. `preferred_region` stays out: Discord
+            /// sends it only behind a check this client has not read.
             struct Data: Encodable {
                 var guild_id: String?
                 var channel_id: String?
                 var self_mute: Bool
                 var self_deaf: Bool
                 var self_video: Bool
+                var flags: Int
 
                 enum CodingKeys: String, CodingKey {
-                    case guild_id, channel_id, self_mute, self_deaf, self_video
+                    case guild_id, channel_id, self_mute, self_deaf, self_video, flags
                 }
 
                 func encode(to encoder: any Encoder) throws {
@@ -720,16 +752,18 @@ public actor GatewaySocket {
                     try container.encode(self_mute, forKey: .self_mute)
                     try container.encode(self_deaf, forKey: .self_deaf)
                     try container.encode(self_video, forKey: .self_video)
+                    try container.encode(flags, forKey: .flags)
                 }
             }
         }
-        Self.trace("voice state -> guild=\(guildID?.description ?? "-") channel=\(channelID?.description ?? "-")")
+        Self.trace("voice state -> guild=\(guildID?.description ?? "-") channel=\(channelID?.description ?? "-") flags=\(flags.rawValue)")
         send(Update(d: .init(
             guild_id: guildID.map { String($0.rawValue) },
             channel_id: channelID.map { String($0.rawValue) },
             self_mute: selfMute,
             self_deaf: selfDeaf,
-            self_video: selfVideo
+            self_video: selfVideo,
+            flags: flags.rawValue
         )))
     }
 
@@ -1271,6 +1305,11 @@ public struct ReadySnapshot: Sendable {
     /// Whether the reader has confirmed an e-mail and holds a phone — off
     /// READY's own `user`, nil where it did not say. See `AccountVerification`.
     public var accountVerification: AccountVerification?
+    /// The reader's custom typing indicator, off READY's own `user`; nil for
+    /// the plain one.
+    public var typingIndicatorStyle: TypingIndicatorStyle?
+    /// What READY says the account and its servers are in — see `Experiments`.
+    public var experiments: ExperimentSnapshot
     /// What Discord holds back by age in the reader's region. Empty when READY
     /// gated nothing or did not say.
     public var ageGatedFeatures: AgeGatedFeatures
@@ -1382,6 +1421,10 @@ public struct ReadySnapshot: Sendable {
     init(payload: ReadyPayload) {
         currentUser = payload.user.domain
         premiumType = payload.user.premium_type
+        typingIndicatorStyle = payload.user.typing_indicator_style.map(\.domain).flatMap { $0.isPlain ? nil : $0 }
+        experiments = ExperimentWire.snapshot(
+            experiments: payload.experiments, guild: payload.guild_experiments, apex: payload.apex_experiments
+        )
         ageVerificationStatus = payload.user.age_verification_status
         accountVerification = payload.user.accountVerification
         ageGatedFeatures = AgeGatedFeatures(rawValue: payload.regional_feature_config?.ageGatedFeatures ?? 0)
@@ -1754,7 +1797,9 @@ public enum GatewayUpdate: Sendable {
     /// member list is not something this client draws.
     case threadMemberCountChanged(ChannelID, count: Int?)
     case presenceUpdated(Presence)
-    case typingStarted(ChannelID, userID: UserID, at: Date)
+    /// Somebody started typing — with their custom indicator, or nil for the
+    /// plain one. **Every event says which**, so nil replaces what came before.
+    case typingStarted(ChannelID, userID: UserID, at: Date, style: TypingIndicatorStyle?)
     case membersChunk(GuildID, members: [UserID: Member], users: [UserID: User], presences: [UserID: Presence])
     /// Somebody left the server, or was kicked or banned from it.
     case memberRemoved(GuildID, UserID)
@@ -1828,6 +1873,9 @@ public enum GatewayUpdate: Sendable {
     /// Where our media session lives. Half a credential — see `VoiceServer`.
     case voiceServerChanged(VoiceServer)
     case voiceEffect(VoiceChannelEffect)
+    /// Somebody in the reader's call clipped a moment — Discord's
+    /// distributed clips (docs/CLIPS-PRESENCE.md, Phase 7.3).
+    case clipsRemoteTrigger(ClipsRemoteTrigger)
     /// A voice channel's own two facts moved: its status line, its session
     /// clock, or both. **One case for three events**, because all three answer
     /// the same question and a store that told them apart would be telling
@@ -2062,7 +2110,8 @@ public enum GatewayUpdate: Sendable {
             self = .typingStarted(
                 payload.channel_id,
                 userID: payload.user_id,
-                at: payload.timestamp.map { Date(timeIntervalSince1970: $0) } ?? .now
+                at: payload.timestamp.map { Date(timeIntervalSince1970: $0) } ?? .now,
+                style: payload.typing_indicator_style.map(\.domain).flatMap { $0.isPlain ? nil : $0 }
             )
         case .guildMembersChunk(let payload):
             var members: [UserID: Member] = [:]
@@ -2156,6 +2205,9 @@ public enum GatewayUpdate: Sendable {
             self = .voiceServerChanged(server)
         case .voiceChannelEffect(let dto):
             self = .voiceEffect(dto.domain)
+        case .clipsRemoteTrigger(let dto):
+            guard let trigger = dto.domain else { return nil }
+            self = .clipsRemoteTrigger(trigger)
         case .voiceChannelStatusUpdate(let dto):
             self = .voiceChannelInfoChanged(
                 dto.guild_id, patches: [dto.id: VoiceChannelPatch(status: .some(dto.status))]

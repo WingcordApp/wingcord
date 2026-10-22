@@ -9,8 +9,12 @@ public enum SyncedPreferencesProto {
         static let voiceAndVideo = 5
         static let textAndImages = 6
         static let appearance = 13
+        static let clips = 19
         static let safetySettings = 21
     }
+    /// `ClipsSettings { BoolValue allow_voice_recording = 1 }` (web build
+    /// 641803's descriptor `discord_protos.discord_users.v1.ClipsSettings`).
+    static let allowVoiceRecording = 1
     /// `AppearanceSettings`: `Theme theme = 1`, `ClientThemeSettings
     /// client_theme_settings = 3`; and in that, `UInt32Value
     /// background_gradient_preset_id = 2` and `custom_user_theme_settings = 4`.
@@ -42,6 +46,8 @@ public enum SyncedPreferencesProto {
         /// client theme settings whole — the preset, or an empty message for
         /// a plain theme, which also clears a custom one.
         case accountTheme(base: Int, gradientPresetID: Int?)
+        /// "Allow my voice to be recorded in Clips".
+        case allowsVoiceRecordingInClips(Bool)
     }
 
     /// What a blob says, each preference nil where its message is absent — see
@@ -94,6 +100,22 @@ public enum SyncedPreferencesProto {
                 delta.alwaysPreviewsVideo = previews
             case Top.appearance where field.wireType == 2:
                 delta.accountTheme = decodeAccountTheme(reader.reader(for: field))
+            case Top.clips where field.wireType == 2:
+                // `clips.allowVoiceRecording?.value ?? true`: no wrapper is
+                // on, a wrapper is its value — and an empty one is off.
+                var allows = true
+                var inner = reader.reader(for: field)
+                while let entry = inner.next() {
+                    guard entry.number == allowVoiceRecording, entry.wireType == 2 else { continue }
+                    var wrapper = inner.reader(for: entry)
+                    var value = false
+                    while let bit = wrapper.next() {
+                        guard bit.number == 1, bit.wireType == 0 else { continue }
+                        value = bit.value != 0
+                    }
+                    allows = value
+                }
+                delta.allowsVoiceRecordingInClips = allows
             case Top.safetySettings where field.wireType == 2:
                 var skips = false
                 var inner = reader.reader(for: field)
@@ -186,6 +208,12 @@ public enum SyncedPreferencesProto {
             var writer = ProtobufWriter()
             writer.message(field: soundboardSettings, settings.data)
             replacements = [(soundboardSettings, writer.data)]
+        case .allowsVoiceRecordingInClips(let allows):
+            top = Top.clips
+            // `BoolValue.create({value})` either way, as Discord writes it.
+            var writer = ProtobufWriter()
+            writer.message(field: allowVoiceRecording, ActivityPrivacyProto.boolValue(allows))
+            replacements = [(allowVoiceRecording, writer.data)]
         case .alwaysPreviewsVideo(let previews):
             top = Top.voiceAndVideo
             // Discord writes `BoolValue.create({value})` either way, so off is

@@ -107,7 +107,10 @@ struct WallpaperLayer: View {
                 }
                 .overlay {
                     if shown.wallpaper.source.isVideo, let url = shown.wallpaper.source.fileURL {
-                        WallpaperVideo(url: url, plays: !reduceMotion)
+                        // Held while Game Mode throttles: a video playing on
+                        // a visible window beside a game is the one moving
+                        // picture the app's own clock never stops.
+                        WallpaperVideo(url: url, plays: !reduceMotion && !GameMode.shared.isThrottling)
                     }
                 }
                 .clipped()

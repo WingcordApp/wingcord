@@ -61,10 +61,29 @@ if [ -f "$ROOT/build/Wingcord.app/Contents/Resources/Assets.car" ]; then
         || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$APP/Contents/Info.plist"
 fi
 
-codesign --force --sign - \
+# The Now Playing adapter, as build-app.sh places it.
+ADAPTER="$("$ROOT/scripts/build-mediaremote-adapter.sh")"
+mkdir -p "$APP/Contents/Frameworks"
+cp -R "$ADAPTER" "$APP/Contents/Frameworks/"
+cp "$ROOT/Packaging/MediaRemoteAdapter/bin/mediaremote-adapter.pl" "$APP/Contents/Resources/"
+
+# The Focus filter and the Shortcuts actions, under the demo's own identifier —
+# System Settings offers "Wingcord Demo" beside the real app, never instead of it.
+"$ROOT/scripts/extract-app-intents.sh" "$APP" "$CONFIG" "$DEMO_ID"
+
+# **Signed with the team identity when there is one**, as build-app.sh does.
+# Ad hoc was enough while the demo only drew fixtures, but App Intents answers
+# an ad-hoc app with "Unable to get teamId" — the Focus filter and Shortcuts
+# need a team. Ad hoc stays the fallback.
+SIGN_IDENTITY="$(security find-identity -p codesigning 2>/dev/null \
+    | grep -F "Apple Development" | awk '{ print $2 }' | sort -u | head -1)"
+codesign --force --sign "${SIGN_IDENTITY:--}" --timestamp=none \
+    "$APP/Contents/Frameworks/MediaRemoteAdapter.framework" 2>/dev/null \
+    || echo "warning: signing MediaRemoteAdapter.framework failed." >&2
+codesign --force --sign "${SIGN_IDENTITY:--}" \
     --entitlements "$ROOT/Packaging/Wingcord.entitlements" \
     --timestamp=none "$APP" 2>/dev/null \
-    || echo "warning: ad-hoc signing failed." >&2
+    || echo "warning: signing the demo failed." >&2
 
 open -n "$APP" --args --demo "$@"
 echo "Demo: $APP ($DEMO_ID)"

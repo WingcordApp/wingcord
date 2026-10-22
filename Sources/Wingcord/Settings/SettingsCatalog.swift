@@ -23,6 +23,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     case activity
     case overlay
     case clips
+    case streamerMode
     // Who you are.
     case account
     case connectedApps
@@ -32,6 +33,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     case performance
     case storage
     case diagnostics
+    case experiments
     case about
 
     var id: String { rawValue }
@@ -50,6 +52,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .activity: "Activity"
         case .overlay: "Game Overlay"
         case .clips: "Clips"
+        case .streamerMode: "Streamer Mode"
         case .account: "Account"
         case .connectedApps: "Connected Apps"
         case .privacy: "Privacy"
@@ -57,6 +60,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .performance: "Performance"
         case .storage: "Storage"
         case .diagnostics: "Diagnostics"
+        case .experiments: "Experiments"
         case .about: "About"
         }
     }
@@ -75,6 +79,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .activity: "gamecontroller.fill"
         case .overlay: "rectangle.on.rectangle.fill"
         case .clips: "scissors"
+        case .streamerMode: "dot.radiowaves.left.and.right"
         case .account: "person.crop.circle.fill"
         case .connectedApps: "link"
         case .privacy: "hand.raised.fill"
@@ -82,6 +87,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .performance: "speedometer"
         case .storage: "internaldrive.fill"
         case .diagnostics: "waveform.path.ecg"
+        case .experiments: "flask.fill"
         case .about: "info.circle.fill"
         }
     }
@@ -104,6 +110,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .activity: Color(hex: 0xFF6482)
         case .overlay: Color(hex: 0x7D7AFF)
         case .clips: Color(hex: 0xFFD426)
+        case .streamerMode: Color(hex: 0x9146FF)
         case .account: Color(hex: 0x5E5CE6)
         case .connectedApps: Color(hex: 0x1D_B9_54)
         case .privacy: Color(hex: 0x30D158)
@@ -111,6 +118,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .performance: Color(hex: 0xFF9F0A)
         case .storage: Color(hex: 0x00C7BE)
         case .diagnostics: Color(hex: 0xBF5AF2)
+        case .experiments: Color(hex: 0x5856D6)
         case .about: Color(hex: 0x32ADE6)
         }
     }
@@ -131,7 +139,8 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .shortcuts: "Every key the app answers to"
         case .activity: "What you're playing, and who gets to see it"
         case .overlay: "Wingcord over the game, and the key that summons it"
-        case .clips: "The last fifteen seconds, whenever you want them"
+        case .clips: "The last moments of a game, whenever you want them"
+        case .streamerMode: "What a stream of your screen should never show"
         case .account: "Who you are signed in as, on this Mac"
         case .connectedApps: "Linked accounts, and what you've authorized"
         case .privacy: "What leaves this machine, which is nothing"
@@ -139,6 +148,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .performance: "What the app is costing you right now"
         case .storage: "What Wingcord keeps on this Mac, and how to reclaim it"
         case .diagnostics: "The state of the connection, and where the logs are"
+        case .experiments: "Wingcord's previews, and what Discord is trying on you"
         case .about: "Version, source and the one dependency"
         }
     }
@@ -156,9 +166,10 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .voiceVideo: "voice video call microphone mic camera input output device speaker headphones push to talk ptt soundboard screen share echo noise sensitivity webcam"
         case .notifications: "sounds badges alerts mentions"
         case .shortcuts: "keyboard keys bindings navigation"
-        case .activity: "game games playing detection detected registered presence rich status share sharing activity privacy servers join party"
+        case .activity: "game games playing detection detected registered presence rich status share sharing activity privacy servers join party game mode performance cpu gpu animated emoji gif"
         case .overlay: "overlay in-game hud widgets lock unlock keybind hotkey notifications toolbar"
         case .clips: "clip clips record recording capture replay screenshot highlight gallery save share"
+        case .streamerMode: "streamer mode stream streaming obs streamlabs xsplit ecamm broadcast hide personal information email phone notes invite links sounds notifications screen capture content protection overlay widgets privacy"
         case .account: "sign in out switch token keychain"
         case .connectedApps: "connections spotify steam xbox playstation github twitch authorized apps oauth deauthorize unlink"
         case .privacy: "data telemetry crash reports"
@@ -166,6 +177,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .performance: "memory cache inspector frames"
         case .storage: "disk space cache clear reclaim downloads images"
         case .diagnostics: "logs trace crash report"
+        case .experiments: "experiments rollout treatment bucket preview previews beta lab typing indicator voice invite"
         case .about: "version build licence acknowledgements"
         }
     }
@@ -176,9 +188,9 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     static let groups: [[SettingsSection]] = [
         [.general, .appearance, .accessibility],
         [.messages, .expressions, .media, .voiceVideo, .notifications, .shortcuts],
-        [.activity, .overlay, .clips],
+        [.activity, .overlay, .clips, .streamerMode],
         [.account, .connectedApps, .privacy, .messagingPermissions],
-        [.performance, .storage, .diagnostics, .about],
+        [.performance, .storage, .diagnostics, .experiments, .about],
     ]
 }
 

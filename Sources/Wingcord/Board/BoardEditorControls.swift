@@ -193,10 +193,12 @@ struct GameSearchField: View {
 /// **A kind already on the board is not offered.** The route accepts at most one
 /// widget of each list kind, so a second "Games I Like" is a save that fails
 /// whole — the same reason the `+` disappears at a list's cap.
-struct AddWidgetSheet: View {
+struct AddWidgetFlyout: View {
     var existing: Set<ProfileWidgetKind>
+    /// Whether the account may make a custom widget — Nitro's, as saving one
+    /// is (Discord keeps a stored copy and takes no edit otherwise).
+    var makesCustomWidgets: Bool = true
     var add: (ProfileWidgetKind) -> Void
-    var dismiss: () -> Void
 
     /// The four list widgets, in the order Discord's own sheet offers them. The
     /// application widget is deliberately absent: it is created by linking a
@@ -207,6 +209,8 @@ struct AddWidgetSheet: View {
         // the only kind that is not a list of games, and the only one where the
         // reader supplies everything.
         .personal,
+        // Second, where Discord's list puts it (`229231`'s order).
+        .clipsGallery,
         .currentGames, .playedGames, .wantToPlayGames, .favouriteGames,
     ]
 
@@ -215,77 +219,51 @@ struct AddWidgetSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Add Profile Widget")
-                    .font(.system(.title3, weight: .bold))
-                    .foregroundStyle(InkColor.primary)
-                Spacer(minLength: Spacing.margin)
-                Button(action: dismiss) {
-                    Image(systemName: "xmark")
-                        .font(.system(.caption, weight: .bold))
-                        .foregroundStyle(InkColor.secondary)
-                        .frame(width: Metrics.control, height: Metrics.control)
-                        .contentShape(.circle)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("Close"))
-            }
-            .padding(.horizontal, Spacing.group)
-            .padding(.vertical, Spacing.margin)
-
-            Divider().overlay(Palette.railHairline)
-
+        FlyoutScaffold(title: "Add Profile Widget", width: 340) {
             if available.isEmpty {
                 Text("You already have every widget this client can add.")
-                    .font(Typeface.rowSubtitle)
+                    .font(.system(.subheadline))
                     .foregroundStyle(InkColor.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 140)
-                    .padding(Spacing.group)
+                    .frame(maxWidth: .infinity, minHeight: 80)
             } else {
-                VStack(spacing: Spacing.snug) {
+                VStack(spacing: Spacing.base) {
                     ForEach(available, id: \.self) { kind in
-                        Button { add(kind) } label: {
+                        let locked = kind == .personal && !makesCustomWidgets
+                        FlyoutTile(isSelected: false, height: 40, insets: Spacing.snug) {
+                            add(kind)
+                        } content: {
                             HStack(spacing: Spacing.snug) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(kind.title)
                                         .font(.system(.subheadline, weight: .semibold))
                                         .foregroundStyle(InkColor.primary)
-                                    if let limit = kind.gameLimit {
-                                        Text(
-                                            limit == 1
-                                                ? "Choose 1 game"
-                                                : "Add up to \(limit) games"
-                                        )
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(InkColor.tertiary)
-                                    } else if kind == .personal {
-                                        Text("A cover and up to four slots, all yours")
-                                            .font(.system(.subheadline))
-                                            .foregroundStyle(InkColor.tertiary)
-                                    }
+                                    Text(detail(kind, locked: locked))
+                                        .font(.system(.caption))
+                                        .foregroundStyle(InkColor.secondary)
                                 }
                                 Spacer(minLength: 0)
-                                Image(systemName: "plus")
+                                Image(systemName: locked ? "lock.fill" : "plus")
                                     .font(.system(size: 12, weight: .bold))
                                     .foregroundStyle(InkColor.secondary)
                             }
-                            .padding(Spacing.margin)
-                            .background {
-                                RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                                    .fill(Palette.skeletonPlate)
-                            }
-                            .contentShape(.rect(cornerRadius: Radius.chip, style: .continuous))
                         }
-                        .buttonStyle(.plain)
+                        .disabled(locked)
+                        .opacity(locked ? 0.5 : 1)
                     }
                 }
-                .padding(Spacing.group)
             }
         }
-        .frame(width: 420)
-        .background(Palette.surface)
-        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
+    }
+
+    private func detail(_ kind: ProfileWidgetKind, locked: Bool) -> String {
+        if let limit = kind.gameLimit {
+            return limit == 1 ? "Choose 1 game" : "Add up to \(limit) games"
+        }
+        switch kind {
+        case .personal: return locked ? "Nitro only — a cover and up to four slots" : "A cover and up to four slots, all yours"
+        case .clipsGallery: return "Up to four of your clips"
+        default: return ""
+        }
     }
 }
 
@@ -301,6 +279,7 @@ extension ProfileWidget.Content {
         case .wantToPlayGames: .wantToPlayGames
         case .application: .application
         case .personal: .personal
+        case .clipsGallery: .clipsGallery
         case .unknown: nil
         }
     }
@@ -311,7 +290,7 @@ extension ProfileWidget.Content {
         case .favouriteGames(let games), .currentGames(let games),
              .playedGames(let games), .wantToPlayGames(let games):
             games
-        case .application, .personal, .unknown:
+        case .application, .personal, .clipsGallery, .unknown:
             []
         }
     }
@@ -326,6 +305,7 @@ extension ProfileWidgetKind {
         case .playedGames: .playedGames([])
         case .wantToPlayGames: .wantToPlayGames([])
         case .personal: .personal(PersonalWidget())
+        case .clipsGallery: .clipsGallery([])
         // Unreachable from `AddWidgetSheet`, which does not offer it: an
         // application widget is created by linking a game account.
         case .application: .playedGames([])

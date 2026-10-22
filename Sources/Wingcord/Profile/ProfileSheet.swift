@@ -69,7 +69,13 @@ struct ProfileSheet: View {
     /// see `ProfileEditor.applied(to:)`.
     private var shown: ProfilePresentation {
         guard let editor else { return profile }
-        return editor.applied(to: editor.base)
+        var draft = editor.applied(to: editor.base)
+        // An effect or a frame is drawn from its product, which the editor
+        // cannot reach — so the sheet resolves the draft's choice here, and
+        // the card wears it before it is saved.
+        draft.effect = editor.profileEffectSKU.flatMap { model.profileEffects[$0] }
+        draft.frame = editor.profileFrameSKU.flatMap { model.profileFrames[$0] }
+        return draft
     }
 
     private var ground: ProfileGround {
@@ -129,8 +135,7 @@ struct ProfileSheet: View {
                     profile: shown,
                     scopes: scopes,
                     selectScope: selectScope,
-                    collapse: endEditing,
-                    present: presentPicker
+                    collapse: endEditing
                 )
                 .frame(maxHeight: maximumSize.height)
                 .transition(.move(edge: .leading).combined(with: .opacity))
@@ -181,7 +186,13 @@ struct ProfileSheet: View {
         // hanging in free space, cast by nothing. Scoped to the panel because
         // that is the box the artwork was authored for; given the sheet's width
         // it is the stage's bug again.
-        .profileFrame(shown.frame, over: ProfileIdentityPanel.width)
+        .profileFrame(
+            shown.frame,
+            over: ProfileIdentityPanel.width,
+            // The rail comes first while editing, and the frame belongs to
+            // the card after it.
+            leadingInset: editor == nil ? 0 : ProfileEditRail.width
+        )
         .presentationBackground(.clear)
         .presentsExpressionInfo(for: $inspectedEmoji)
     }

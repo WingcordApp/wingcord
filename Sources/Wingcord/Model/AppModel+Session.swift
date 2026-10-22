@@ -189,7 +189,8 @@ extension AppModel {
                 poll: request.poll?.poll(postedAt: id.timestamp),
                 reference: reference,
                 nonce: String(id.rawValue),
-                listenAlong: request.listenAlong
+                listenAlong: request.listenAlong,
+                mediaMention: request.mediaMention
             )
         )
     }

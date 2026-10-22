@@ -32,6 +32,10 @@ nonisolated struct InviteCardSlot: Sendable {
     enum Body: Sendable {
         case classic(Classic)
         case profile(Profile)
+        /// Discord's voice invite — see `Voice`.
+        case voice(Voice)
+        /// Its channel-row variant — see `VoiceRow`.
+        case voiceRow(VoiceRow)
     }
 
     /// How a profile card taller than Discord's 292 points is shown.
@@ -138,6 +142,83 @@ nonisolated struct InviteCardSlot: Sendable {
         }
     }
 
+    /// Discord's voice invite (`dF`, web 641803): where it leads, who is in
+    /// there, and Join Voice — for an invite to a server's voice channel the
+    /// reader can see.
+    struct Voice: Sendable {
+        var channelID: ChannelID
+        /// The card itself. **The line about who can see this is under it,
+        /// outside the plate**, as Discord sets it.
+        var plateRect: CGRect
+        /// "Server / channel" with its speaker and chevron — the way to the
+        /// channel without joining it.
+        var breadcrumbRect: CGRect
+        var speakerRect: CGRect
+        var breadcrumb: TimelineTextBlock
+        var breadcrumbOrigin: CGPoint
+        var chevronRect: CGRect
+        var label: TimelineTextBlock
+        var labelOrigin: CGPoint
+        var sublabel: TimelineTextBlock?
+        var sublabelOrigin: CGPoint
+        /// The faces, largest first, each overlapping the one before.
+        var faces: [Face]
+        var overflow: Overflow?
+        var footerSymbolRect: CGRect
+        var footer: TimelineTextBlock
+        var footerOrigin: CGPoint
+
+        struct Face: Sendable {
+            var rect: CGRect
+            var avatarURL: URL?
+            var monogram: TimelineTextBlock
+            var monogramOrigin: CGPoint
+        }
+
+        /// "+N" past four faces.
+        struct Overflow: Sendable {
+            var rect: CGRect
+            var label: TimelineTextBlock
+            var labelOrigin: CGPoint
+        }
+    }
+
+    /// Discord's channel-row voice invite (`d_`, under the server experiment
+    /// `2026-05_voice_channel_list_invite_embed`): the channel as the sidebar
+    /// draws it — its speaker, its name, who is inside — and Join Voice.
+    struct VoiceRow: Sendable {
+        var channelID: ChannelID
+        var plateRect: CGRect
+        /// The channel's line — the way to it.
+        var headerRect: CGRect
+        var speakerRect: CGRect
+        /// Green while somebody is in there.
+        var isOccupied: Bool
+        var header: TimelineTextBlock
+        var headerOrigin: CGPoint
+        var people: [Person]
+        /// "and 4 more", or "No one is currently in voice".
+        var note: TimelineTextBlock?
+        var noteOrigin: CGPoint
+        var buttonSpeakerRect: CGRect
+        var footerSymbolRect: CGRect
+        var footer: TimelineTextBlock
+        var footerOrigin: CGPoint
+
+        struct Person: Sendable {
+            var avatarRect: CGRect
+            var avatarURL: URL?
+            var monogram: TimelineTextBlock
+            var monogramOrigin: CGPoint
+            var name: TimelineTextBlock
+            var nameOrigin: CGPoint
+            /// Discord's red LIVE badge, for somebody streaming.
+            var liveRect: CGRect?
+            var live: TimelineTextBlock?
+            var liveOrigin: CGPoint
+        }
+    }
+
     /// Who sent it: their face and name.
     struct Inviter: Sendable {
         var avatarURL: URL?
@@ -161,6 +242,10 @@ nonisolated struct InviteCardSlot: Sendable {
             if let url = profile.iconURL { out.append((url, profile.iconRect)) }
             for trait in profile.traits { if let url = trait.emojiURL { out.append((url, trait.emojiRect)) } }
             if let inviter = profile.inviter, let url = inviter.avatarURL { out.append((url, inviter.avatarRect)) }
+        case .voice(let voice):
+            for face in voice.faces { if let url = face.avatarURL { out.append((url, face.rect)) } }
+        case .voiceRow(let row):
+            for person in row.people { if let url = person.avatarURL { out.append((url, person.avatarRect)) } }
         }
         return out
     }
@@ -211,6 +296,11 @@ nonisolated enum InviteCardLayoutEngine {
     static let hideHeight: CGFloat = 28
     static let inviterSide: CGFloat = 16
 
+    /// - Parameters:
+    ///   - voice: the room a voice invite leads to, as the reader may see it —
+    ///     nil for every other invite, and for a channel the reader cannot see,
+    ///     which then gets the ordinary card as on Discord.
+    ///   - authorID: who posted it, whose face leads the voice card's pile.
     static func layout(
         code: String,
         lookup: InviteLookup,
@@ -218,6 +308,8 @@ nonisolated enum InviteCardLayoutEngine {
         selfIDs: Set<UInt64>,
         isExpanded: Bool,
         palettes: [URL: [UInt32]],
+        voice: VoiceInviteState? = nil,
+        authorID: UserID? = nil,
         origin: CGPoint,
         availableWidth: CGFloat,
         style: MessageTextStyle
@@ -225,6 +317,11 @@ nonisolated enum InviteCardLayoutEngine {
         guard case .resolved(let card) = lookup else {
             return classic(code: code, card: nil, sentByReader: sentByReader, selfIDs: selfIDs,
                            origin: origin, availableWidth: availableWidth, style: style)
+        }
+        if card.kind == .server, card.isVoiceChannel, let voice, let channelID = card.channelID {
+            return voiceCard(code: code, card: card, voice: voice, channelID: channelID,
+                             sentByReader: sentByReader, authorID: authorID,
+                             origin: origin, availableWidth: availableWidth, style: style)
         }
         if card.kind == .server, let profile = card.profile {
             return profileCard(code: code, card: card, profile: profile, isExpanded: isExpanded,
@@ -712,6 +809,275 @@ nonisolated enum InviteCardLayoutEngine {
                 onlineDot: onlineDot,
                 membersDot: membersDot,
                 inviter: inviter
+            )),
+            button: button,
+            mark: nil,
+            markRect: .zero,
+            fold: .none
+        )
+    }
+
+    // MARK: The voice card
+
+    /// The faces at four fifths of Discord's sizes (80, 60, 48, 40), which are
+    /// for its wider message column.
+    static let voiceFaceScale: CGFloat = 0.8
+    static let voiceOverflowSide: CGFloat = 32
+
+    private static func voiceCard(
+        code: String,
+        card: InviteCard,
+        voice: VoiceInviteState,
+        channelID: ChannelID,
+        sentByReader: Bool,
+        authorID: UserID?,
+        origin: CGPoint,
+        availableWidth: CGFloat,
+        style: MessageTextStyle
+    ) -> InviteCardSlot {
+        if voice.asChannelRow {
+            return voiceRowCard(code: code, card: card, voice: voice, channelID: channelID,
+                                origin: origin, availableWidth: availableWidth, style: style)
+        }
+        let width = min(Metrics.embedMaxWidth, availableWidth)
+        let contentX = origin.x + inset
+        let contentRight = origin.x + width - inset
+        var y = origin.y + inset
+
+        // **The pile first: how wide it is decides how much the words get.**
+        let byID = Dictionary(voice.people.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let ordered = authorID.map { VoiceInvite.ordered(voice.people.map(\.id), author: $0) }
+            ?? voice.people.map(\.id)
+        let pile = VoiceInvite.pile(count: ordered.count)
+        let sides = VoiceInvite.faceSides(faces: pile.faces, hasOverflow: pile.overflow != nil)
+            .map { (CGFloat($0) * voiceFaceScale).rounded() }
+        var slots: [(side: CGFloat, x: CGFloat)] = []
+        var cursor: CGFloat = 0
+        for (index, side) in sides.enumerated() {
+            if index > 0 { cursor -= (min(side, sides[index - 1]) * 0.25).rounded() }
+            slots.append((side, cursor))
+            cursor += side
+        }
+        if pile.overflow != nil {
+            if let last = sides.last { cursor -= (min(voiceOverflowSide, last) * 0.25).rounded() }
+            cursor += voiceOverflowSide
+        }
+        let pileWidth = cursor
+        let pileHeight = max(sides.max() ?? 0, pile.overflow == nil ? 0 : voiceOverflowSide)
+
+        // The words: the way in, then who asked and who is there.
+        let textWidth = max(80, contentRight - contentX - (pileWidth > 0 ? pileWidth + gutter : 0))
+        let crumbSide: CGFloat = 12
+        let breadcrumb = block("\(voice.guildName) / \(voice.channelName)", font: style.metadataFont,
+                               color: style.secondaryColor,
+                               width: max(20, textWidth - (crumbSide + 4) * 2), style: style, hugs: true)
+        let authorInChannel = authorID.map { id in voice.people.contains { $0.id == id } } ?? false
+        let lines = VoiceInvite.lines(
+            sentByReader: sentByReader, authorIsInChannel: authorInChannel, peopleInChannel: voice.people.count
+        )
+        let label = block(lines.label, font: NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .medium),
+                          color: style.primaryColor, width: textWidth, style: style, wraps: true)
+        let sublabel = lines.sublabel.map {
+            block($0, font: style.metadataFont, color: style.secondaryColor, width: textWidth, style: style)
+        }
+        let crumbHeight = max(crumbSide, breadcrumb.size.height)
+        let headerHeight = crumbHeight + 6 + label.size.height + (sublabel.map { 2 + $0.size.height } ?? 0)
+        let rowHeight = max(headerHeight, pileHeight)
+
+        var headerY = y + (rowHeight - headerHeight) / 2
+        let speakerRect = CGRect(x: contentX, y: headerY + (crumbHeight - crumbSide) / 2, width: crumbSide, height: crumbSide)
+        let breadcrumbOrigin = CGPoint(x: speakerRect.maxX + 4, y: headerY + (crumbHeight - breadcrumb.size.height) / 2)
+        let chevronRect = CGRect(
+            x: breadcrumbOrigin.x + breadcrumb.size.width + 4, y: speakerRect.minY,
+            width: crumbSide, height: crumbSide
+        )
+        let breadcrumbRect = CGRect(x: contentX, y: headerY, width: chevronRect.maxX - contentX, height: crumbHeight)
+        headerY += crumbHeight + 6
+        let labelOrigin = CGPoint(x: contentX, y: headerY)
+        headerY += label.size.height
+        let sublabelOrigin = CGPoint(x: contentX, y: headerY + 2)
+
+        // Each face on one midline, the pile against the right edge.
+        let pileX = contentRight - pileWidth
+        let midY = y + rowHeight / 2
+        var faces: [InviteCardSlot.Voice.Face] = []
+        for (index, slot) in slots.enumerated() {
+            let person = byID[ordered[index]]
+            let rect = CGRect(x: pileX + slot.x, y: midY - slot.side / 2, width: slot.side, height: slot.side)
+            let monogram = centred(String((person?.name ?? "?").prefix(1)).uppercased(),
+                                   font: NSFont.systemFont(ofSize: slot.side * 0.4, weight: .semibold),
+                                   color: style.secondaryColor, width: slot.side, style: style)
+            faces.append(.init(
+                rect: rect, avatarURL: person?.avatarURL, monogram: monogram,
+                monogramOrigin: CGPoint(x: rect.minX, y: rect.midY - monogram.size.height / 2)
+            ))
+        }
+        var overflow: InviteCardSlot.Voice.Overflow?
+        if let extra = pile.overflow {
+            let rect = CGRect(x: pileX + pileWidth - voiceOverflowSide, y: midY - voiceOverflowSide / 2,
+                              width: voiceOverflowSide, height: voiceOverflowSide)
+            let text = centred(VoiceInvite.overflowLabel(extra),
+                               font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold),
+                               color: style.primaryColor, width: rect.width, style: style)
+            overflow = .init(rect: rect, label: text, labelOrigin: CGPoint(x: rect.minX, y: rect.midY - text.size.height / 2))
+        }
+        y += rowHeight + 14
+
+        // Join Voice — or Open, for a reader already in there.
+        let buttonRect = CGRect(x: contentX, y: y, width: contentRight - contentX, height: buttonHeight)
+        let button = self.button(
+            in: buttonRect, pending: "Join Voice", pendingProminent: true,
+            settled: "Open", settledProminent: false, isEnabled: true, style: style
+        )
+        y = buttonRect.maxY + inset
+        let plateRect = CGRect(x: origin.x, y: origin.y, width: width, height: y - origin.y)
+
+        // Under the card: who else could have seen this.
+        y += 6
+        let footer = block("Only server members can see who\u{2019}s in voice", font: style.metadataFont,
+                           color: style.secondaryColor, width: width - 20, style: style)
+        let footerSymbolRect = CGRect(x: origin.x + 2, y: y + (footer.size.height - 13) / 2, width: 14, height: 13)
+        let footerOrigin = CGPoint(x: footerSymbolRect.maxX + 5, y: y)
+        y += footer.size.height
+
+        return InviteCardSlot(
+            rect: CGRect(x: origin.x, y: origin.y, width: width, height: y - origin.y),
+            code: code,
+            card: card,
+            body: .voice(.init(
+                channelID: channelID,
+                plateRect: plateRect,
+                breadcrumbRect: breadcrumbRect,
+                speakerRect: speakerRect,
+                breadcrumb: breadcrumb,
+                breadcrumbOrigin: breadcrumbOrigin,
+                chevronRect: chevronRect,
+                label: label,
+                labelOrigin: labelOrigin,
+                sublabel: sublabel,
+                sublabelOrigin: sublabelOrigin,
+                faces: faces,
+                overflow: overflow,
+                footerSymbolRect: footerSymbolRect,
+                footer: footer,
+                footerOrigin: footerOrigin
+            )),
+            button: button,
+            mark: nil,
+            markRect: .zero,
+            fold: .none
+        )
+    }
+
+    /// Rows at most, before "and N more": a card that grew with the room would
+    /// push the conversation away for a crowd.
+    static let voiceRowLimit = 5
+    static let voiceRowAvatarSide: CGFloat = 24
+
+    private static func voiceRowCard(
+        code: String,
+        card: InviteCard,
+        voice: VoiceInviteState,
+        channelID: ChannelID,
+        origin: CGPoint,
+        availableWidth: CGFloat,
+        style: MessageTextStyle
+    ) -> InviteCardSlot {
+        let width = min(Metrics.embedMaxWidth, availableWidth)
+        let contentX = origin.x + inset
+        let contentRight = origin.x + width - inset
+        var y = origin.y + inset
+
+        // The channel's line: its speaker, its name — and, where Discord has a
+        // tooltip the canvas does not ("Server / channel"), the server after it.
+        let speakerSide: CGFloat = 18
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let words = NSMutableAttributedString(string: voice.channelName, attributes: [
+            .font: style.bodyFont, .foregroundColor: style.primaryColor, .paragraphStyle: paragraph,
+        ])
+        words.append(NSAttributedString(string: "  \(voice.guildName)", attributes: [
+            .font: style.metadataFont, .foregroundColor: style.secondaryColor, .paragraphStyle: paragraph,
+        ]))
+        let header = TimelineTextBlock(
+            text: .plain(words), width: contentRight - contentX - speakerSide - 8, style: style, hugsText: true
+        )
+        let headerHeight = max(speakerSide, header.size.height)
+        let speakerRect = CGRect(x: contentX, y: y + (headerHeight - speakerSide) / 2, width: speakerSide, height: speakerSide)
+        let headerOrigin = CGPoint(x: speakerRect.maxX + 8, y: y + (headerHeight - header.size.height) / 2)
+        let headerRect = CGRect(x: contentX, y: y, width: headerOrigin.x + header.size.width - contentX, height: headerHeight)
+        y += headerHeight + 8
+
+        // Streamers first, as Discord lists them.
+        let ordered = voice.people.filter(\.isStreaming) + voice.people.filter { !$0.isStreaming }
+        var people: [InviteCardSlot.VoiceRow.Person] = []
+        let rowX = contentX + speakerSide + 8
+        for person in ordered.prefix(voiceRowLimit) {
+            let side = voiceRowAvatarSide
+            let avatarRect = CGRect(x: rowX, y: y, width: side, height: side)
+            let monogram = centred(String(person.name.prefix(1)).uppercased(),
+                                   font: NSFont.systemFont(ofSize: side * 0.4, weight: .semibold),
+                                   color: style.secondaryColor, width: side, style: style)
+            let live = person.isStreaming
+                ? centred("LIVE", font: NSFont.systemFont(ofSize: 10, weight: .bold), color: .white, width: 34, style: style)
+                : nil
+            let nameWidth = contentRight - avatarRect.maxX - 8 - (live == nil ? 0 : 42)
+            let name = block(person.name, font: style.bodyFont, color: style.secondaryColor,
+                             width: max(40, nameWidth), style: style, hugs: true)
+            let nameOrigin = CGPoint(x: avatarRect.maxX + 8, y: avatarRect.midY - name.size.height / 2)
+            let liveRect = live.map { _ in
+                CGRect(x: nameOrigin.x + name.size.width + 6, y: avatarRect.midY - 8, width: 34, height: 16)
+            }
+            people.append(.init(
+                avatarRect: avatarRect, avatarURL: person.avatarURL, monogram: monogram,
+                monogramOrigin: CGPoint(x: avatarRect.minX, y: avatarRect.midY - monogram.size.height / 2),
+                name: name, nameOrigin: nameOrigin, liveRect: liveRect, live: live,
+                liveOrigin: liveRect.map { CGPoint(x: $0.minX, y: $0.midY - (live?.size.height ?? 0) / 2) } ?? .zero
+            ))
+            y += side + 6
+        }
+        var note: TimelineTextBlock?
+        var noteOrigin = CGPoint.zero
+        let more = ordered.count - people.count
+        if ordered.isEmpty || more > 0 {
+            let words = ordered.isEmpty ? "No one is currently in voice" : "and \(more.formatted()) more"
+            let text = block(words, font: style.metadataFont, color: style.secondaryColor,
+                             width: contentRight - rowX, style: style)
+            note = text
+            noteOrigin = CGPoint(x: ordered.isEmpty ? contentX : rowX, y: y)
+            y += text.size.height + 6
+        }
+        y += 6
+
+        // Join Voice, the speaker on it.
+        let buttonRect = CGRect(x: contentX, y: y, width: contentRight - contentX, height: buttonHeight)
+        let button = self.button(in: buttonRect, pending: "Join Voice", pendingProminent: true,
+                                 settled: "Open", settledProminent: false, isEnabled: true, style: style)
+        let labelWidth = (("Join Voice" as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold),
+        ])).width
+        let buttonSpeakerRect = CGRect(
+            x: buttonRect.midX - labelWidth / 2 - 22, y: buttonRect.midY - 8, width: 16, height: 16
+        )
+        y = buttonRect.maxY + inset
+        let plateRect = CGRect(x: origin.x, y: origin.y, width: width, height: y - origin.y)
+
+        y += 6
+        let footer = block("Only server members can see who\u{2019}s in voice", font: style.metadataFont,
+                           color: style.secondaryColor, width: width - 20, style: style)
+        let footerSymbolRect = CGRect(x: origin.x + 2, y: y + (footer.size.height - 13) / 2, width: 14, height: 13)
+        let footerOrigin = CGPoint(x: footerSymbolRect.maxX + 5, y: y)
+        y += footer.size.height
+
+        return InviteCardSlot(
+            rect: CGRect(x: origin.x, y: origin.y, width: width, height: y - origin.y),
+            code: code,
+            card: card,
+            body: .voiceRow(.init(
+                channelID: channelID, plateRect: plateRect, headerRect: headerRect, speakerRect: speakerRect,
+                isOccupied: !voice.people.isEmpty, header: header, headerOrigin: headerOrigin,
+                people: people, note: note, noteOrigin: noteOrigin, buttonSpeakerRect: buttonSpeakerRect,
+                footerSymbolRect: footerSymbolRect, footer: footer, footerOrigin: footerOrigin
             )),
             button: button,
             mark: nil,

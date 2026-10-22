@@ -32,6 +32,7 @@ struct ProfileIdentityPanel: View {
     var present: ((ProfileEditPicker) -> Void)?
 
     @Environment(AppModel.self) private var model
+    @Environment(ProfileFlyouts.self) private var flyouts: ProfileFlyouts?
 
     /// What this account and this server permit — see `ProfileEditCapability`.
     /// `.account` outside an edit, where nothing is being gated anyway.
@@ -156,9 +157,10 @@ struct ProfileIdentityPanel: View {
     @ViewBuilder
     private var avatarEditMenu: some View {
         if let editor {
+            let locked = capability.cosmeticsLocked
             EditOverlayButton(isVisible: isHovered) {
-                Button("Change Avatar") { present?(.avatar) }
-                Button("Change Avatar Decoration") { present?(.decoration) }
+                Button("Change Avatar") { flyouts?.show(.avatar, from: .card) }
+                Button("Change Avatar Decoration") { flyouts?.show(.decoration, from: .card) }
                 Divider()
                 Button("Remove Avatar", role: .destructive) { editor.avatar = .removed }
                 // Only offered where there is one to take off.
@@ -169,22 +171,42 @@ struct ProfileIdentityPanel: View {
                     }
                 }
             }
+            .disabled(locked)
+            // The flyouts hang off the pencil that raised them — two anchors,
+            // one per flyout, so each popover has a view of its own.
+            .background { Color.clear.profileFlyout(.avatar, at: .card, arrowEdge: .bottom) }
+            .overlay { Color.clear.allowsHitTesting(false).profileFlyout(.decoration, at: .card, arrowEdge: .bottom) }
             .padding(.leading, Self.gutter + Self.avatarSide - 34)
             .padding(.top, Self.bannerHeight - Self.avatarDrop)
         }
     }
 
-    /// The pencil over the banner.
-    ///
-    /// The frame is deliberately absent: nothing captured names the field that
-    /// sets one, so a menu item for it would open a grid whose Apply could not
-    /// be written — `INVARIANTS.md` §5.5. See `ProfileEditRail.sections`.
+    /// The pencil over the banner: the picture, the colours, the effect and
+    /// the frame — everything that dresses the top of the card.
     @ViewBuilder
     private var bannerEditMenu: some View {
-        if editor != nil {
+        if let editor {
             EditOverlayButton(isVisible: isHovered) {
-                Button("Change Profile Effect") { present?(.effect) }
+                Button("Change Banner") { flyouts?.show(.banner, from: .card) }
+                    .disabled(!capability.canEditCurrentBanner)
+                Button(capability.canEditCurrentTheme ? "Change Profile Theme" : "Change Banner Colour") {
+                    flyouts?.show(.colours, from: .card)
+                }
+                Divider()
+                Button("Change Profile Effect") { flyouts?.show(.effect, from: .card) }
+                    .disabled(!capability.canEditCurrentEffect)
+                Button("Change Profile Frame") { flyouts?.show(.frame, from: .card) }
+                    .disabled(!capability.canEditCurrentEffect)
+                if editor.base.bannerURL != nil || editor.banner != .unchanged, editor.banner != .removed {
+                    Divider()
+                    Button("Remove Banner", role: .destructive) { editor.banner = .removed }
+                }
             }
+            .disabled(capability.cosmeticsLocked)
+            .background { Color.clear.profileFlyout(.banner, at: .card, arrowEdge: .bottom) }
+            .overlay { Color.clear.allowsHitTesting(false).profileFlyout(.colours, at: .card, arrowEdge: .bottom) }
+            .background { Color.clear.allowsHitTesting(false).profileFlyout(.effect, at: .card, arrowEdge: .bottom) }
+            .overlay { Color.clear.allowsHitTesting(false).profileFlyout(.frame, at: .card, arrowEdge: .bottom) }
             .padding(Spacing.snug)
         }
     }
@@ -208,9 +230,7 @@ struct ProfileIdentityPanel: View {
                 // `PATCH /guilds/{id}/members/@me` marks `bio` premium and
                 // `PATCH /users/@me/profile` does not — so the same control is
                 // gated in one scope and free in the other.
-                let allowed = editor.scope.guildID == nil
-                    ? capability.canEditBio
-                    : capability.canEditGuildBio
+                let allowed = capability.canEditCurrentBio
                 EditableBioField(
                     text: Binding(get: { editor.bio }, set: { editor.bio = $0 })
                 )
@@ -427,8 +447,11 @@ struct ProfileIdentityPanel: View {
                                 ? profile.handle
                                 : editor.accountName,
                             style: profile.displayNameStyle,
-                            editStyle: { present?(.displayNameStyle) }
+                            editStyle: capability.cosmeticsLocked
+                                ? nil
+                                : { flyouts?.show(.displayNameStyle, from: .card) }
                         )
+                        .profileFlyout(.displayNameStyle, at: .card, arrowEdge: .bottom)
                         .disabled(!nameAllowed)
                         .opacity(nameAllowed ? 1 : 0.45)
                         if !nameAllowed {
@@ -470,7 +493,18 @@ struct ProfileIdentityPanel: View {
                     .foregroundStyle(InkColor.secondary)
                     .lineLimit(1)
                     .textSelection(.enabled)
-                if let pronouns = profile.pronouns, !pronouns.isEmpty {
+                if let editor {
+                    // **The pronouns were never editable** — the field existed
+                    // and nothing drew it, though pronouns are one of the two
+                    // things a server profile without Nitro may change at all.
+                    Text("·").foregroundStyle(InkColor.secondary)
+                    EditableInlineField(
+                        text: Binding(get: { editor.pronouns }, set: { editor.pronouns = $0 }),
+                        placeholder: "Add pronouns",
+                        limit: 40
+                    )
+                    .accessibilityLabel(Text("Pronouns"))
+                } else if let pronouns = profile.pronouns, !pronouns.isEmpty {
                     Text("·").foregroundStyle(InkColor.tertiary)
                     Text(pronouns)
                         .font(.system(.subheadline))
@@ -478,7 +512,11 @@ struct ProfileIdentityPanel: View {
                         .lineLimit(1)
                         .textSelection(.enabled)
                 }
-                if let editor {
+                // **The tag is the account's, worn everywhere** — `PUT
+                // /users/@me/clan`, which only the account's save sends. In a
+                // server's profile it is shown, not offered: a choice there
+                // was silently dropped at Save.
+                if let editor, editor.scope == .account {
                     ServerTagChooser(
                         options: tagOptions,
                         selection: Binding(
@@ -501,7 +539,7 @@ struct ProfileIdentityPanel: View {
             // second line anyway. Splitting them costs nothing and the handle
             // fits.
             if !profile.badges.isEmpty {
-                BadgeRow(badges: profile.badges, premiumSince: profile.premiumSince)
+                BadgeRow(badges: profile.badges, premiumSince: profile.premiumSince, userID: profile.userID, isEditing: editor != nil && profile.isSelf)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -618,7 +656,12 @@ struct ProfileIdentityPanel: View {
         // **The section appears while editing even with nothing in it**, because
         // that is where "Add Connection" lives — a reader with no connections is
         // exactly the one who needs the control.
-        if !profile.connections.isEmpty || editor != nil {
+        //
+        // Streamer Mode's personal information covers the reader's own
+        // connected accounts — on their own profile, where a stream would
+        // show them.
+        if (!profile.connections.isEmpty || editor != nil),
+           !(profile.isSelf && StreamerMode.shared.hidesPersonalInformation) {
             section("Connections", topGap: 24) {
                 VStack(alignment: .leading, spacing: Spacing.base) {
                     if !profile.connections.isEmpty {
@@ -642,7 +685,9 @@ struct ProfileIdentityPanel: View {
 
     @ViewBuilder
     private var note: some View {
-        if !profile.isSelf {
+        // A note is the reader's own words about somebody — Streamer Mode's
+        // personal information.
+        if !profile.isSelf, !StreamerMode.shared.hidesPersonalInformation {
             section("Note", topGap: 22, aside: "only visible to you") {
                 ProfileNoteField(
                     userID: profile.userID,

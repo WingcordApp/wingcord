@@ -290,6 +290,18 @@ nonisolated enum TimelineImageRequests {
                 }
             }
 
+            // A shared theme card's face of who shared it.
+            if let theme = row.sharedTheme {
+                for picture in theme.pictures {
+                    let key = ImageStore.Key(
+                        url: picture.url, maximumPixelSize: Int((picture.rect.width * scale).rounded(.up))
+                    )
+                    if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                        requests.append(Request(key: key, source: .still(.thumbnail)))
+                    }
+                }
+            }
+
             // An invite card's splash, icon and the face of who sent it.
             for card in row.inviteCards {
                 for picture in card.pictures {
@@ -372,6 +384,18 @@ nonisolated enum TimelineImageRequests {
             let revealed = row.attachments.contains(where: \.isSpoiler) ? revealedAttachments(row.id) : []
             for (index, slot) in row.attachments.enumerated()
             where slot.carriesArtwork && (!slot.isSpoiler || revealed.contains(index)) {
+                // A clip's faces, keyed as `drawClipHeader` peeks them — faces,
+                // not artwork, so they come whatever the artwork setting.
+                for face in slot.clip?.faces ?? [] {
+                    guard let url = face.url else { continue }
+                    let key = ImageStore.Key(
+                        url: url,
+                        maximumPixelSize: Int((ClipTileHeader.faceSide * scale).rounded(.up))
+                    )
+                    if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                        requests.append(Request(key: key, source: .still(.thumbnail)))
+                    }
+                }
                 guard loadsArtwork, let url = slot.url else { continue }
                 let key = ImageStore.Key(
                     url: url,

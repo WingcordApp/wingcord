@@ -151,6 +151,16 @@ extension AppModel {
                     title: personal.header,
                     content: .personal(personal)
                 )
+            case .clipsGallery(let clips):
+                // Only what can play: a clip whose video has not been
+                // processed yet has nothing behind its picture.
+                let playable = clips.filter { $0.videoURL != nil }
+                guard !playable.isEmpty else { return nil }
+                return BoardTile(
+                    id: widget.id,
+                    title: widget.title,
+                    content: .clips(playable.map(boardClip))
+                )
             case .unknown:
                 // A widget kind added after this was written draws nothing
                 // rather than an empty frame — `INVARIANTS.md` §5.5.
@@ -268,11 +278,59 @@ extension AppModel {
                 previews.append(.games(collection))
             case .personal(let personal):
                 previews.append(.personal(id: widget.id, widget: personal))
+            case .clipsGallery(let clips):
+                let playable = clips.filter { $0.videoURL != nil }
+                guard !playable.isEmpty else { continue }
+                previews.append(.clips(id: widget.id, clips: playable.map(boardClip)))
             case .unknown:
                 continue
             }
         }
         return previews
+    }
+
+    /// A gallery's clip as a board draws it.
+    func boardClip(_ clip: ProfileClip) -> BoardClip {
+        BoardClip(
+            id: clip.id,
+            title: clip.title,
+            gameName: clip.gameID.flatMap { games[$0]?.name },
+            thumbnailURL: clip.thumbnailURL,
+            videoURL: clip.videoURL
+        )
+    }
+
+    /// Plays a board's clips in the viewer, from `index` — Discord's carousel
+    /// (`location: "user_profile_widget_clip"`), one clip after another.
+    func playBoardClips(_ clips: [BoardClip], from index: Int, owner: String) {
+        var items: [MediaItem] = []
+        var start = 0
+        for (position, clip) in clips.enumerated() {
+            guard let video = clip.videoURL else { continue }
+            if position == index { start = items.count }
+            // An attachment in all but name — the viewer's one item shape. Its
+            // id only has to be distinct among these, for this viewing.
+            let attachment = Attachment(
+                id: AttachmentID(rawValue: UInt64(position + 1)),
+                filename: (clip.title ?? "Clip") + ".mp4",
+                url: video.absoluteString,
+                proxyURL: video.absoluteString,
+                contentType: "video/mp4"
+            )
+            guard let item = MediaItem(
+                attachment, posterWidth: 640, posterURL: clip.thumbnailURL, attachmentIndex: position
+            ) else { continue }
+            items.append(item)
+        }
+        guard !items.isEmpty else { return }
+        mediaViewer = MediaViewerRequest(
+            items: items,
+            index: start,
+            messageID: nil,
+            channelID: nil,
+            authorName: owner,
+            sentAt: .now
+        )
     }
 
     private func miniApplicationWidget(

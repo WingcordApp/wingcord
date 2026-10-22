@@ -80,16 +80,50 @@ struct ProfileEditGatingTests {
         #expect(paid.canEditProfileEffect)
     }
 
-    @Test("The section's own name is the reader-visible half of the gate")
-    func sectionTitle() {
-        #expect(
-            model(tier: .none).profileEditCapability(for: .account).colourSectionTitle
-                == "Banner Colour"
-        )
-        #expect(
-            model(tier: .nitro).profileEditCapability(for: .account).colourSectionTitle
-                == "Theme & Banner"
-        )
+    @Test("One colour on a free account, the theme pair on Nitro")
+    func colourGate() {
+        let free = model(tier: .none).profileEditCapability(for: .account)
+        #expect(!free.canEditCurrentTheme)
+        #expect(free.canEditAccentColor)
+        #expect(model(tier: .nitro).profileEditCapability(for: .account).canEditCurrentTheme)
+    }
+
+    /// Discord's own rule: a server's profile without Nitro is a nickname and
+    /// pronouns, and every other control is locked.
+    @Test("A server profile without Nitro is a nickname and pronouns")
+    func serverProfileLock() {
+        let free = model(tier: .none).profileEditCapability(for: .guild(guildID))
+        #expect(free.cosmeticsLocked)
+        #expect(!free.canEditCurrentBio)
+        #expect(!free.canEditCurrentBanner)
+        #expect(!free.canEditCurrentTheme)
+        #expect(!free.canEditCurrentEffect)
+        #expect(!free.canUseAnimatedPictures)
+        #expect(free.canEditGuildPronouns)
+
+        let paid = model(tier: .nitro).profileEditCapability(for: .guild(guildID))
+        #expect(!paid.cosmeticsLocked)
+        #expect(paid.canEditCurrentBio && paid.canEditCurrentBanner && paid.canEditCurrentTheme)
+        #expect(paid.canUseAnimatedPictures)
+
+        // The account's own profile is never "locked" — its gates are field
+        // by field.
+        #expect(!model(tier: .none).profileEditCapability(for: .account).cosmeticsLocked)
+    }
+
+    /// `MANAGE_NICKNAMES` covers everybody's nickname, the reader's own
+    /// included — Discord's check takes either.
+    @Test("Managing nicknames is enough to change one's own")
+    func manageNicknamesIsEnough() {
+        let model = model(tier: .none)
+        let moderator = RoleID(rawValue: 20)
+        model.guilds[guildID] = Guild(id: guildID, name: "Server", ownerID: UserID(rawValue: 99))
+        model.roles[guildID] = [
+            RoleID(rawValue: guildID.rawValue): Role(id: RoleID(rawValue: guildID.rawValue), name: "@everyone"),
+            moderator: Role(id: moderator, name: "Mod", position: 1, permissions: [.manageNicknames]),
+        ]
+        model.members[guildID] = [readerID: Member(userID: readerID, roleIDs: [moderator])]
+        #expect(model.profileEditCapability(for: .guild(guildID)).canEditNickname)
     }
 
     @Test("A per-server bio is premium where an account's is not")

@@ -82,6 +82,9 @@ extension UserDecoration {
             badges: badges,
             profileEffectSKU: suppressed.contains(.profileEffects) ? nil : profileEffectSKU,
             profileFrameSKU: suppressed.contains(.profileFrames) ? nil : profileFrameSKU,
+            // What is worn, not what is drawn: the editor writes from this,
+            // and a filtered copy would save the reader's own frame away.
+            wornCollectibles: wornCollectibles,
             pronouns: pronouns,
             connectedAccounts: connectedAccounts,
             premiumTier: premiumTier,
@@ -92,7 +95,11 @@ extension UserDecoration {
             isProfilePrivate: isProfilePrivate,
             primaryGuildTag: primaryGuildTag,
             primaryGuildBadgeHash: primaryGuildBadgeHash,
-            primaryGuildID: primaryGuildID
+            primaryGuildID: primaryGuildID,
+            // **Carried, like every other fact that is not a cosmetic.** This
+            // was left out, so a reader with any switch off lost an app's
+            // install buttons and store links from its profile.
+            application: application
         )
     }
 }

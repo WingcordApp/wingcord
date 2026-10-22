@@ -212,7 +212,7 @@ private struct CustomStatusEditor: View {
                     ExpressionPicker(
                         mode: .emoji,
                         onPick: { item in
-                            emoji = Self.reference(item)
+                            emoji = EmojiRef(picked: item)
                             isPickingEmoji = false
                         },
                         // An emoji picker has no GIF tab to pick from; the
@@ -325,21 +325,6 @@ private struct CustomStatusEditor: View {
             expiresAt: duration.expiry()
         )
         commit(next.isEmpty ? nil : next)
-    }
-
-    /// The picked item, as the wire's own emoji reference.
-    ///
-    /// **A custom emoji is an id, a name and whether it moves**; a Unicode one
-    /// is the glyph and nothing else. The picker hands back what it would type
-    /// into the composer, so the id comes off the item rather than out of the
-    /// string — parsing `<a:name:id>` back apart would be building a shape this
-    /// side of the app already has.
-    private static func reference(_ item: ExpressionItem) -> EmojiRef? {
-        guard case .insert(let inserted) = item.pick else { return nil }
-        if case .image(_, let animated) = item.art, let id = UInt64(item.id) {
-            return EmojiRef(id: EmojiID(rawValue: id), name: item.name, isAnimated: animated)
-        }
-        return EmojiRef(name: inserted)
     }
 }
 

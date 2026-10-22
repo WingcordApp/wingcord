@@ -164,7 +164,8 @@ extension SessionController {
     /// favourites answers an empty list, and that is a real answer the picker
     /// would otherwise re-ask for on every open.
     func loadFavoriteGIFs() async {
-        guard !hasLoadedFavoriteGIFs else { return }
+        // `--demo` keeps none, and asks for none.
+        guard !hasLoadedFavoriteGIFs, !LaunchOptions.current.usesDemoFixtures else { return }
         hasLoadedFavoriteGIFs = true
         do {
             model.favoriteGIFs = try await rest.favoriteGIFs()

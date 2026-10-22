@@ -100,6 +100,8 @@ final class VoiceSoundPlayer {
 
     func play(_ sound: VoiceSound) {
         guard AppSettings.shared.playsCallSounds else { return }
+        // Streamer Mode's "Disable all sound effects".
+        guard !StreamerMode.shared.disablesSounds else { return }
         guard let clip = load(sound) else { return }
 
         if !sound.loops, let callSink {

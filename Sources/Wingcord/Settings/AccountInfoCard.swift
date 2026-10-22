@@ -73,7 +73,17 @@ struct AccountInfoCard: View {
         // **Nothing to reveal is a row, not a control.** An account with no
         // phone number gets "Not added" and no Reveal, rather than a button
         // that uncovers an empty string — §5.5.
-        if let plain, let masked {
+        //
+        // Streamer Mode withholds both whole, and takes Reveal away with them:
+        // a button that prints an address onto a stream is the one thing the
+        // mode exists to stop.
+        if let plain, StreamerMode.shared.hidesPersonalInformation {
+            SettingsValueRow(
+                title: title,
+                value: field == .email ? StreamerModeMask.email(plain) : StreamerModeMask.phone(plain),
+                help: "Hidden while Streamer Mode is on."
+            )
+        } else if let plain, let masked {
             let isShown = revealed.contains(field)
             SettingsControlRow(title) {
                 HStack(spacing: Spacing.snug) {

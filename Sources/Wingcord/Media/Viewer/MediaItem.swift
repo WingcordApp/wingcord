@@ -63,6 +63,10 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
     var altText: String?
     var durationSeconds: Double?
     var isSpoiler: Bool
+    /// What makes a video a Discord clip — its title, game, people and
+    /// timeline — for the player's faces, markers and timeline comments
+    /// (docs/CLIPS-PRESENCE.md, D16). Nil for every other video.
+    var clip: AttachmentClip?
 
     /// The widths the proxy is asked for.
     ///
@@ -139,6 +143,7 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
         altText = attachment.description
         durationSeconds = attachment.durationSeconds
         isSpoiler = attachment.isSpoiler
+        clip = kind == .video ? attachment.clip : nil
     }
 
     /// Whether an asset is worth attempting a filmstrip decode on.
@@ -175,6 +180,8 @@ nonisolated struct MediaViewerRequest: Equatable, Sendable {
     var index: Int
     /// The message the pictures belong to, for finding their thumbnails.
     var messageID: MessageID?
+    /// Where that message is — what a clip's timeline comment is sent to.
+    var channelID: ChannelID?
     var origin: Origin = .transcript
     /// Who posted it and when, for the info card. On the request rather than on
     /// each item: it belongs to the message, and copying it per attachment would

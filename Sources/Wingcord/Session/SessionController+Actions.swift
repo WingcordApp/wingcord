@@ -314,6 +314,53 @@ extension SessionController {
         }
     }
 
+    /// Shares a custom theme into conversations — Discord's share modal's
+    /// send, `shared_client_theme`, with whatever the reader wrote as the
+    /// message's words. Lands as the theme's card.
+    ///
+    /// Sequential, for `forward`'s reason.
+    func shareTheme(_ theme: SharedClientTheme, to targets: [ChannelID], comment: String) {
+        model.forwardsInFlight.formUnion(targets)
+        let nonce = Self.nonce()
+        Task { [weak self] in
+            guard let self else { return }
+            for (index, target) in targets.enumerated() {
+                defer { model.forwardsInFlight.remove(target) }
+                do {
+                    let message = try await rest.sendMessage(
+                        in: target, content: comment, nonce: nonce + String(index), sharedTheme: theme
+                    )
+                    guard model.messages(in: target)?.messages.isEmpty == false else { continue }
+                    receiveOwn(message, in: target)
+                } catch {
+                    Self.trace("theme share to \(target) failed: \(Self.describe(error))")
+                    model.reportActionFailure(Self.describe(error))
+                }
+            }
+        }
+    }
+
+    /// The account's own custom themes, once a session — Saved Themes lists
+    /// them beside the ones kept on this Mac. Discord's client has no route to
+    /// change the list, so nothing here writes back.
+    ///
+    /// **Left absent on a failure**, so the next visit to Appearance asks again.
+    func loadAccountCustomThemes() {
+        guard model.connectionState == .ready, model.accountCustomThemes == nil,
+              !accountCustomThemesFetchInFlight
+        else { return }
+        accountCustomThemesFetchInFlight = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { accountCustomThemesFetchInFlight = false }
+            do {
+                model.accountCustomThemes = try await rest.customThemes()
+            } catch {
+                Self.trace("custom themes failed: \(Self.describe(error))")
+            }
+        }
+    }
+
     // MARK: Relationships
 
     func writeBlock(_ isBlocked: Bool, userID: UserID) {

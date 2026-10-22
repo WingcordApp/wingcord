@@ -63,6 +63,46 @@ final class OverlayController {
         }
     }
 
+    /// Arrangements the reader kept, beside the built-in presets. Phase 6.
+    private(set) var savedLayouts: [OverlaySavedLayout] = OverlayLayoutStore.loadSaved() {
+        didSet { OverlayLayoutStore.saveSaved(savedLayouts) }
+    }
+
+    /// The built-in preset the current layout is, if it is one.
+    var currentPreset: OverlayLayoutPreset? { OverlayLayoutPreset.matching(layout) }
+
+    /// The saved layout the current one is, if it is one.
+    var currentSavedLayout: OverlaySavedLayout? {
+        savedLayouts.first { $0.layout.isEquivalent(to: layout) }
+    }
+
+    func apply(_ preset: OverlayLayoutPreset) {
+        layout = preset.layout
+    }
+
+    func apply(_ saved: OverlaySavedLayout) {
+        layout = saved.layout
+    }
+
+    /// Keeps the current arrangement under the next free name. Refused at the
+    /// limit, and when it is already kept.
+    func saveCurrentLayout() {
+        guard savedLayouts.count < OverlaySavedLayout.limit, currentSavedLayout == nil else { return }
+        savedLayouts.append(
+            OverlaySavedLayout(name: OverlaySavedLayout.nextName(after: savedLayouts), layout: layout)
+        )
+    }
+
+    func renameSavedLayout(_ id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let index = savedLayouts.firstIndex(where: { $0.id == id }) else { return }
+        savedLayouts[index].name = String(trimmed.prefix(40))
+    }
+
+    func deleteSavedLayout(_ id: UUID) {
+        savedLayouts.removeAll { $0.id == id }
+    }
+
     /// Which of the sidebar's three lists is showing.
     ///
     /// **Persisted.** Reopening the overlay onto a tab the reader did not choose
@@ -223,7 +263,12 @@ final class OverlayController {
     /// so callers do not have to know whether anything actually moved.
     func refreshPresentation() {
         let settings = AppSettings.shared
-        let wanted = settings.isOverlayEnabled && model?.detectedGame != nil
+        // Registered Games' "Toggle overlay" — Discord's "Overlay is disabled
+        // for this game."
+        let gameAllows = model?.detectedGame.map {
+            RegisteredGamesStore.shared.games.showsOverlay($0.id.rawValue)
+        } ?? false
+        let wanted = settings.isOverlayEnabled && gameAllows
         if wanted {
             present()
         } else {
@@ -593,6 +638,19 @@ final class OverlayController {
 enum OverlayLayoutStore {
     private static let key = "overlay.layout"
     private static let tabKey = "overlay.sidebarTab"
+    private static let savedKey = "overlay.savedLayouts"
+
+    static func loadSaved() -> [OverlaySavedLayout] {
+        guard let data = UserDefaults.standard.data(forKey: savedKey),
+              let saved = try? JSONDecoder().decode([OverlaySavedLayout].self, from: data)
+        else { return [] }
+        return saved
+    }
+
+    static func saveSaved(_ saved: [OverlaySavedLayout]) {
+        guard let data = try? JSONEncoder().encode(saved) else { return }
+        UserDefaults.standard.set(data, forKey: savedKey)
+    }
 
     static func load() -> OverlayLayout {
         guard let data = UserDefaults.standard.data(forKey: key),

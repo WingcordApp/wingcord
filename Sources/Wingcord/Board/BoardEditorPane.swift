@@ -58,25 +58,9 @@ struct BoardEditorPane: View {
             }
         }
         .padding(.top, Spacing.base)
+        // The reader's own widget pictures, by their own id.
+        .environment(\.widgetOwner, model.currentUserID)
         .animation(motion.standard, value: editor.widgets.map(\.id))
-        .sheet(isPresented: $addingWidget) {
-            AddWidgetSheet(
-                existing: Set(editor.widgets.compactMap { $0.content.kind }),
-                add: { kind in
-                    // **No id, which is what makes it a create.** The reply
-                    // assigns one; until the save lands this card is identified
-                    // by a placeholder that cannot collide with a real snowflake.
-                    editor.widgets.append(
-                        ProfileWidget(
-                            id: ProfileEditor.draftIDPrefix + UUID().uuidString,
-                            content: kind.emptyContent
-                        )
-                    )
-                    addingWidget = false
-                },
-                dismiss: { addingWidget = false }
-            )
-        }
         .confirmationDialog(
             "Remove this widget?",
             isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
@@ -109,6 +93,28 @@ struct BoardEditorPane: View {
             }
             .buttonStyle(.plain)
             .interactiveChromeOverMedia(in: .capsule)
+            // **A flyout off the button, not a sheet over the profile** — the
+            // editor's rule (Alex's screenshot 14).
+            .popover(isPresented: $addingWidget, arrowEdge: .bottom) {
+                AddWidgetFlyout(
+                    existing: Set(editor.widgets.compactMap { $0.content.kind }),
+                    makesCustomWidgets: model.entitlements.premiumTier == .nitro,
+                    add: { kind in
+                        // **No id, which is what makes it a create.** The reply
+                        // assigns one; until the save lands this card is
+                        // identified by a placeholder that cannot collide with a
+                        // real snowflake.
+                        editor.widgets.append(
+                            ProfileWidget(
+                                id: ProfileEditor.draftIDPrefix + UUID().uuidString,
+                                content: kind.emptyContent
+                            )
+                        )
+                        addingWidget = false
+                        Haptics.pop()
+                    }
+                )
+            }
         }
     }
 
@@ -157,6 +163,8 @@ struct BoardEditorPane: View {
 
 /// One editable widget: its games, their tags, and the line the reader wrote.
 private struct WidgetEditCard: View {
+    @Environment(AppModel.self) private var model
+
     var widget: ProfileWidget
     var board: BoardPresentation?
     var ground: ProfileGround
@@ -200,12 +208,26 @@ private struct WidgetEditCard: View {
         VStack(alignment: .leading, spacing: Spacing.snug) {
             titleRow
             if case .personal(let personal) = widget.content {
+                // **Saving a custom widget is Nitro's** — without it Discord
+                // keeps the copy it already has and takes no edit — so the
+                // editor says so and stays still rather than taking edits that
+                // would quietly not stick.
+                let canEdit = model.entitlements.premiumTier == .nitro
                 PersonalWidgetEditor(
                     widget: personal,
                     pending: pending,
                     update: { update(.personal($0)) },
                     pick: pickImage
                 )
+                .disabled(!canEdit)
+                .opacity(canEdit ? 1 : 0.5)
+                if !canEdit {
+                    Label("Custom widgets need Nitro. Discord keeps yours as it is.", systemImage: "lock.fill")
+                        .font(.system(.caption, weight: .medium))
+                        .foregroundStyle(InkColor.secondary)
+                }
+            } else if case .clipsGallery(let clips) = widget.content {
+                ClipsGalleryEditor(clips: clips, update: { update(.clipsGallery($0)) })
             } else if let kind, kind != .application {
                 ForEach(games) { game in
                     GameEditRow(
@@ -308,8 +330,9 @@ private struct WidgetEditCard: View {
         case .currentGames: .currentGames(games)
         case .playedGames: .playedGames(games)
         case .wantToPlayGames: .wantToPlayGames(games)
-        // Neither holds games — a personal widget is authored, not filled.
-        case .application, .personal, nil: nil
+        // None of these holds games — a personal widget is authored, not
+        // filled, and a gallery holds clips.
+        case .application, .personal, .clipsGallery, nil: nil
         }
     }
 

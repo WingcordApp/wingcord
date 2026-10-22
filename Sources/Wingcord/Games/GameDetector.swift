@@ -39,14 +39,21 @@ struct DetectedGame: Hashable, Sendable, Identifiable {
     var processIdentifier: pid_t
 
     /// The presence this publishes. Type 0 is "Playing".
+    ///
+    /// **A game added by hand goes out by name alone.** Its id is Wingcord's
+    /// own (`RegisteredGamesStore.manualID`), which no application on Discord
+    /// has; sending it as one would name an application that does not exist.
     var activity: RichPresenceActivity {
         RichPresenceActivity(
             type: 0,
             name: name,
             timestamps: .init(start: Int(startedAt.timeIntervalSince1970 * 1000), end: nil),
-            applicationID: id
+            applicationID: isAddedByHand ? nil : id
         )
     }
+
+    /// Whether the reader added it — Wingcord's own ids carry the top bit.
+    var isAddedByHand: Bool { id.rawValue & (1 << 63) != 0 }
 }
 
 @Observable
@@ -185,7 +192,14 @@ final class GameDetector {
     private func apply(games: [DetectableGame]) {
         index = DetectableGameIndex(games: games)
         // A game may already have been running before the catalog arrived.
+        //
+        // **And the session has to hear about it.** `rescan` only moves the
+        // value; a game already open when Wingcord launched was matched here
+        // and never published, because nothing told the session — it stayed
+        // invisible until the game quit.
+        let before = runningGame
         rescan()
+        if runningGame != before { onChange?() }
     }
 
     // MARK: Watching

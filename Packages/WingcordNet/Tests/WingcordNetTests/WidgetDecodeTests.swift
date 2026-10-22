@@ -732,4 +732,104 @@ struct WidgetDecodeTests {
         #expect(progress.imageURL?.path() == "/app-assets/1520453075142642700/1520454752198879302.png")
         #expect(surface.stats.isEmpty)
     }
+
+    // MARK: Clips on a profile (docs/CLIPS-PRESENCE.md, Phase 7)
+
+    @Test("A clips gallery decodes its clips, and one without a file is dropped")
+    func clipsGalleryDecodes() throws {
+        let json = """
+        {
+          "user": { "id": "1", "username": "a", "discriminator": "0" },
+          "widgets": [{
+            "id": "77",
+            "data": {
+              "type": "clips_gallery",
+              "clips": [
+                {
+                  "id": "900", "file_id": "f-900", "game_id": "1425690433018925056",
+                  "title": "Triple", "tags": ["clutch"], "local_clip_id": "local-1",
+                  "video_url": "https://cdn.discordapp.com/clips/900.mp4",
+                  "thumbnail_url": "https://cdn.discordapp.com/clips/900.webp",
+                  "spritesheet_image_url": "https://cdn.discordapp.com/clips/900-sprite.webp",
+                  "spritesheet_vtt_url": "https://cdn.discordapp.com/clips/900.vtt"
+                },
+                { "title": "still uploading" }
+              ]
+            }
+          }]
+        }
+        """
+        let widgets = try decodeProfile(json).widgets?.compactMap(\.domain) ?? []
+        let clips = try #require(widgets.first).clips
+        #expect(clips.count == 1)
+        let clip = try #require(clips.first)
+        #expect(clip.storage == .saved(id: "900", fileID: "f-900"))
+        #expect(clip.gameID == ApplicationID(rawValue: 1_425_690_433_018_925_056))
+        #expect(clip.title == "Triple")
+        #expect(clip.tags == ["clutch"])
+        #expect(clip.videoURL?.lastPathComponent == "900.mp4")
+        #expect(clip.spritesheetVTTURL?.pathExtension == "vtt")
+        #expect(widgets.first?.typeName == "clips_gallery")
+    }
+
+    @Test("A gallery is written as Discord writes it: kept clips by id, new ones by upload")
+    func clipsGalleryWrite() throws {
+        let write = ProfileWidgetWrite(id: "77", clips: [
+            ProfileClip(storage: .saved(id: "900", fileID: "f-900"), gameID: ApplicationID(rawValue: 5), title: "Triple"),
+            ProfileClip(storage: .staged(uploadFilename: "clips/abc.mp4"), title: "  ", localClipID: "local-2"),
+        ])
+        let object = try encoded(write)
+        #expect(object["id"] as? String == "77")
+        let data = try #require(object["data"] as? [String: Any])
+        #expect(data["type"] as? String == "clips_gallery")
+        let clips = try #require(data["clips"] as? [[String: Any]])
+        #expect(clips.count == 2)
+        #expect(clips[0]["id"] as? String == "900")
+        #expect(clips[0]["file_id"] as? String == "f-900")
+        #expect(clips[0]["game_id"] as? String == "5")
+        #expect(clips[0]["upload_filename"] == nil)
+        #expect(clips[1]["upload_filename"] as? String == "clips/abc.mp4")
+        #expect(clips[1]["id"] == nil)
+        // A blank title is no title.
+        #expect(clips[1]["title"] == nil)
+        #expect(clips[1]["local_clip_id"] as? String == "local-2")
+        // No games, no sections on a gallery.
+        #expect(data["games"] == nil)
+    }
+
+    @Test("A gallery never sends more than four")
+    func clipsGalleryCap() throws {
+        let five = (0 ..< 5).map { ProfileClip(storage: .staged(uploadFilename: "c\($0)")) }
+        let data = try #require(try encoded(ProfileWidgetWrite(clips: five))["data"] as? [String: Any])
+        #expect((data["clips"] as? [[String: Any]])?.count == 4)
+    }
+
+    // MARK: Badges (Phase 8)
+
+    @Test("A badge directory decodes its levels, progress and dates")
+    func badgeDecodes() throws {
+        let json = """
+        {"badges":[{"badge_id":19,"name":"Streaming","description":"Stream more hours.","owned":true,
+          "hidden":false,"is_earnable":true,"current_tier":"breakout","next_tier":"standout",
+          "tiers":[{"key":"breakout","name":"Breakout","milestone_text":"20 hours","simple_icon_url":"https://x/b.png",
+                    "complex_icon_static_url":"https://x/B.png","complex_icon_animated_url":"https://x/B.webm","rarity":3},
+                   {"key":"standout","name":"Standout","milestone_text":"75 hours"}],
+          "progress":[{"current":23,"threshold":75}],
+          "tier_obtained_at":{"breakout":"2026-07-30T10:00:00.000000+00:00"},
+          "info_label":"23 hours streamed to others"},
+          {"badge_id":"22","owned":true},
+          {"name":"no id"}]}
+        """
+        struct Reply: Decodable { var badges: [BadgeDTO] }
+        let badges = try JSONDecoder().decode(Reply.self, from: Data(json.utf8)).badges.compactMap(\.domain)
+        #expect(badges.count == 2)
+        let streaming = try #require(badges.first)
+        #expect(streaming.kind == .streaming)
+        #expect(streaming.currentTier?.rarity == .epic)
+        #expect(streaming.currentTier?.complexIconAnimatedURL?.pathExtension == "webm")
+        #expect(streaming.progress?.threshold == 75)
+        #expect(streaming.unlockedAt != nil)
+        #expect(streaming.infoLabel == "23 hours streamed to others")
+        #expect(badges[1].kind == .staff, "an id sent as a string still reads")
+    }
 }

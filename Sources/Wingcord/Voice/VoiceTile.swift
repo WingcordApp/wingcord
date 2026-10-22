@@ -48,7 +48,6 @@ struct VoiceTile: View {
     @State private var menuAnchor: CGRect = .zero
     /// Drives the ring's breathing. A repeating animation on one number, and
     /// only while somebody is actually talking.
-    @State private var isBreathing = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -210,34 +209,35 @@ struct VoiceTile: View {
     /// works in both cases and is the thing the eye picks up across a grid of
     /// eight without looking at any of them.
     private var edge: some View {
-        RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .strokeBorder(
-                participant.isSpeaking
-                    ? AnyShapeStyle(Palette.presenceOnline)
-                    : AnyShapeStyle(isHovering ? voiceTileHovered : voiceTileResting),
-                lineWidth: participant.isSpeaking ? speakingWidth : 1
-            )
-            .allowsHitTesting(false)
-            .animation(motion.hover, value: isHovering)
-            .task(id: participant.isSpeaking) {
-                guard participant.isSpeaking else {
-                    isBreathing = false
-                    return
-                }
-                withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
-                    isBreathing = true
-                }
-            }
+        // **Read off a timeline, never a `repeatForever` animation.** SwiftUI
+        // keeps a removed view until its animations end, and a breath that
+        // repeats forever never ends: a grid of tiles taken away in any
+        // animated change — the call going full screen — stayed in the window,
+        // invisible and taking clicks (2026-10-22). A timeline has nothing to
+        // wait for, and pauses for anybody not speaking.
+        SwiftUI.TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !participant.isSpeaking || motion.reduceMotion)) { timeline in
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(
+                    participant.isSpeaking
+                        ? AnyShapeStyle(Palette.presenceOnline)
+                        : AnyShapeStyle(isHovering ? voiceTileHovered : voiceTileResting),
+                    lineWidth: participant.isSpeaking ? speakingWidth(at: timeline.date) : 1
+                )
+        }
+        .allowsHitTesting(false)
+        .animation(motion.hover, value: isHovering)
     }
 
     /// **A breath, not a pulse.** The edge grows and settles over a second and a
     /// bit, which reads as somebody talking; a fast flash reads as an alert.
     /// Self-initiated ambient motion, which is the one category §3 exempts from
-    /// the two-hundred-millisecond bar.
-    ///
-    /// It is started and stopped by the edge's own `task`, so a repeating
-    /// animation cannot outlive the person it belongs to.
-    private var speakingWidth: CGFloat { isBreathing ? 2.4 : 1.6 }
+    /// the two-hundred-millisecond bar. Still under Reduce Motion.
+    private func speakingWidth(at date: Date) -> CGFloat {
+        guard !motion.reduceMotion else { return 2 }
+        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.2) / 2.2
+        let breath = 0.5 - 0.5 * cos(phase * 2 * .pi)
+        return 1.6 + 0.8 * breath
+    }
 
     @ViewBuilder
     private func content(in size: CGSize) -> some View {

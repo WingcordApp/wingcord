@@ -164,7 +164,9 @@ struct AvatarView: View {
     /// discover there is one frame.
     private var playsFace: Bool {
         guard animates, let url, CDN.canAnimate(url) else { return false }
-        return settings.playsAnimatedContent && !motion.reduceMotion
+        // Game Mode's animated-emoji override reaches avatars too: they are
+        // the same frames on the same clock.
+        return settings.playsAnimatedContent && !motion.reduceMotion && !GameMode.shared.isThrottling
     }
 
     /// Whether the still under the moving decoration has been taken away.

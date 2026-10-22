@@ -33,6 +33,9 @@ enum SettingsWindow {
         opener = open
     }
 
+    /// Whether the root view has registered — a launch flag waits for it.
+    static var isRegistered: Bool { opener != nil }
+
     /// The page an incoming `request(_:)` asked for, until the window takes it.
     ///
     /// **A pending value rather than a parameter on the scene**, because this is

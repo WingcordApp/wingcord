@@ -164,6 +164,17 @@ struct MediaStage: NSViewRepresentable {
 
     @Environment(\.motion) private var motion
 
+    /// The band a video keeps clear of the chrome. A clip's is deeper at both
+    /// ends (docs/CLIPS-PRESENCE.md, Phase 4.5): its header card beside Close
+    /// is taller than Close, and its marks ride above the scrubber with the
+    /// comment bar above those. Clear glass over the picture's edge lenses
+    /// it — the card has to sit on the scrim.
+    static func letterbox(for item: MediaItem) -> NSEdgeInsets {
+        item.clip == nil
+            ? NSEdgeInsets(top: 76, left: 0, bottom: 76, right: 0)
+            : NSEdgeInsets(top: 100, left: 0, bottom: 172, right: 0)
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(controller: controller) }
 
     func makeNSView(context: Context) -> MediaCanvasView {
@@ -174,6 +185,7 @@ struct MediaStage: NSViewRepresentable {
 
     func updateNSView(_ view: MediaCanvasView, context: Context) {
         view.reducesMotion = motion.reduceMotion
+        view.letterboxInsets = Self.letterbox(for: item)
         let coordinator = context.coordinator
         coordinator.onRequestClose = onRequestClose
         coordinator.onPage = onPage

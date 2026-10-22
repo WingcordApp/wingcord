@@ -266,7 +266,7 @@ struct InvitesPane: View {
 
     private func row(_ invite: GuildInvite) -> some View {
         ObjectRow(
-            title: invite.id,
+            title: StreamerMode.shared.inviteCode(invite.id),
             subtitle: subtitle(invite),
             badge: uses(invite)
         ) {

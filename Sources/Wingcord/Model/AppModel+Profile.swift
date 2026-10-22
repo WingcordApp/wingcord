@@ -64,6 +64,10 @@ extension AppModel {
         // actually drawn, so this one binding is what those three switches turn
         // off — see `AppModel.cosmetics(of:)`.
         let decoration = cosmetics(of: profileUser)
+        // **What they wear in this server, over the account's** — a per-server
+        // decoration, plate or name style rides the member object, and a card
+        // that read only the account's showed the old one after a save.
+        let serverWorn = cosmetics(ofMember: member)
 
         return ProfilePresentation(
             userID: user.id,
@@ -77,7 +81,7 @@ extension AppModel {
             // transcript and the roster, so one person cannot be two people in
             // one window.
             displayName: member?.resolvedName(user: user) ?? user.preferredName,
-            displayNameStyle: decoration?.displayNameStyle,
+            displayNameStyle: serverWorn?.displayNameStyle ?? decoration?.displayNameStyle,
             handle: user.handle,
             nickname: member?.nickname,
             showsMainProfile: request.showsMainProfile,
@@ -104,10 +108,10 @@ extension AppModel {
                 side: Metrics.avatarProfile
             ),
             monogram: user.monogram,
-            decorationURL: decoration?.avatarDecorationHash
+            decorationURL: (serverWorn?.avatarDecorationHash ?? decoration?.avatarDecorationHash)
                 .flatMap { CDN.avatarDecoration(hash: $0) },
-            avatarDecorationSKU: decoration?.avatarDecorationSKU,
-            nameplate: decoration?.nameplate,
+            avatarDecorationSKU: serverWorn?.avatarDecorationSKU ?? decoration?.avatarDecorationSKU,
+            nameplate: serverWorn?.nameplate ?? decoration?.nameplate,
             bannerURL: decoration?.bannerHash.flatMap {
                 CDN.userBanner(userID: user.id, hash: $0, width: 512)
             },
@@ -157,6 +161,11 @@ extension AppModel {
             isSelf: user.id == currentUserID,
             pronouns: decoration?.pronouns,
             effect: decoration?.profileEffectSKU.flatMap { profileEffects[$0] },
+            // The raw layer, not the filtered one, and never the account's
+            // standing in for a server's — this is what a save sends back.
+            wornCollectibles: guildID == nil
+                ? user.decoration?.wornCollectibles
+                : guildUser?.decoration?.wornCollectibles,
             frame: decoration?.profileFrameSKU.flatMap { profileFrames[$0] },
             connections: decoration?.connectedAccounts ?? [],
             // **The reader's own tier from the account, never from the row** —
@@ -485,9 +494,8 @@ extension AppModel {
             customizesServerProfile: entitlements.has(.serverProfile),
             // **Only meaningful in a server, and false outside one.** There is
             // no nickname on an account profile to permit.
-            canChangeNickname: scope.guildID.map {
-                permissionGate.permissions(inGuild: $0).contains(.changeNickname)
-            } ?? false
+            canChangeNickname: scope.guildID.map(permissionGate.canChangeNickname(in:)) ?? false,
+            isServerScope: scope.guildID != nil
         )
     }
 

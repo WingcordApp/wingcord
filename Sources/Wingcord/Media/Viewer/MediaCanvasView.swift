@@ -97,7 +97,9 @@ final class MediaCanvasView: NSView {
     /// The band a video keeps clear of the chrome above and below it. A
     /// picture runs to the window's edges; a video cannot, because glass over
     /// playing video churns and the chrome must sit on the scrim (§4).
-    var letterboxInsets = NSEdgeInsets(top: 76, left: 0, bottom: 76, right: 0)
+    var letterboxInsets = NSEdgeInsets(top: 76, left: 0, bottom: 76, right: 0) {
+        didSet { if !NSEdgeInsetsEqual(oldValue, letterboxInsets) { needsLayout = true } }
+    }
 
     private var activeLayer: CALayer { playerLayer ?? contentLayer }
 

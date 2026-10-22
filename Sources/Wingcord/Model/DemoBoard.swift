@@ -97,7 +97,25 @@ extension DemoFixtures {
             ),
         ]
 
+        // A clips gallery (Phase 7): the demo's own game footage, three
+        // ways — local files, so nothing is fetched.
+        let clipVideo = URL(string: DemoMedia.gameClip().url)
+        let gallery: [ProfileClip] = [
+            ("the bridge triple", 282, DemoMedia.GameLook.dusk, "dusk"),
+            ("night raid", 120, .night, "night"),
+            ("one tap", 420, .dusk, "dusk"),
+        ].enumerated().map { index, entry in
+            ProfileClip(
+                storage: .saved(id: "d-clip-\(index)", fileID: "d-file-\(index)"),
+                gameID: battlefield,
+                title: entry.0,
+                videoURL: clipVideo,
+                thumbnailURL: DemoMedia.gameClipPoster(frame: entry.1, look: entry.2, named: entry.3)
+            )
+        }
+
         model.profileWidgets[owner] = [
+            ProfileWidget(id: "d-clips", content: .clipsGallery(gallery)),
             ProfileWidget(id: "d-application", content: .application(endfieldApplication)),
             ProfileWidget(
                 id: "d-favourite",

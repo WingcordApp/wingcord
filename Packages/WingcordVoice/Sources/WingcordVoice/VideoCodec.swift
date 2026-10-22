@@ -40,6 +40,10 @@ public final class H264Encoder: @unchecked Sendable {
     /// is a keyframe, and the presentation time it was submitted with — which
     /// is when it was captured, not when it finished encoding.
     public var onEncodedFrame: (@Sendable ([[UInt8]], [[UInt8]], Bool, CMTime) -> Void)?
+    /// Each sample as VideoToolbox made it, before anything is taken out of
+    /// it — a Go Live stream's clips come off this (docs/CLIPS-PRESENCE.md,
+    /// Phase 3.6). Set before `start`.
+    public var onSample: (@Sendable (CMSampleBuffer) -> Void)?
 
     private var session: VTCompressionSession?
     private var configuration: Configuration
@@ -199,6 +203,7 @@ public final class H264Encoder: @unchecked Sendable {
     }
 
     private func emit(_ sampleBuffer: CMSampleBuffer) {
+        onSample?(sampleBuffer)
         let units = H264.nalUnits(from: sampleBuffer)
         guard !units.isEmpty else { return }
 

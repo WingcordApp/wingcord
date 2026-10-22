@@ -21,9 +21,22 @@ extension AppModel {
         overlay.attach(model: self)
         overlay.refreshPresentation()
 
-        let wantsClips = AppSettings.shared.clipsEnabled && detectedGame != nil
+        let settings = AppSettings.shared
+        // While the reader streams, clips come off the stream instead — and a
+        // game whose clips are switched off in Registered Games gets none.
+        let recordsThisGame = detectedGame.map {
+            RegisteredGamesStore.shared.games.recordsClips($0.id.rawValue)
+        } ?? false
+        let wantsClips = settings.clipsEnabled && recordsThisGame && !clipRecorder.isStreaming
         let pid = wantsClips ? detectedGame?.processIdentifier : nil
-        Task { await clipRecorder.arm(processIdentifier: pid) }
+        Task {
+            await clipRecorder.arm(processIdentifier: pid)
+            // Auto Clips listens exactly while the buffer runs.
+            autoClips.refresh()
+        }
+        gameEvents.refresh(
+            clipsEnabled: settings.clipsEnabled, window: settings.clipLength.seconds + 3, game: detectedGame
+        )
     }
 
     // MARK: The clip keys
@@ -43,13 +56,16 @@ extension AppModel {
         let length = AppSettings.shared.clipLength.seconds
         let folder = ClipLibrary.folder
         let name = ClipLibrary.name(for: detectedGame?.name)
+        let context = clipSaveContext()
         overlay.showClipFeedback(.working())
         Task { [weak self] in
             guard let self else { return }
             do {
-                let url = try await clipRecorder.save(seconds: length, to: folder, named: name)
+                let url = try await clipRecorder.save(seconds: length, to: folder, named: name, context: context)
                 overlay.showClipFeedback(.saved(url.deletingPathExtension().lastPathComponent))
                 clipsRevision &+= 1
+                // Everybody else in the call keeps the same moment (Phase 7.3).
+                announceClip(url)
             } catch {
                 overlay.showClipFeedback(.failed(Self.clipFailureText(error)))
             }
@@ -152,6 +168,10 @@ extension AppModel {
         guard overlay.isPresented, AppSettings.shared.overlayShowsNotifications else {
             return false
         }
+        // Streamer Mode withholding the toast widget: the message is not shown
+        // over the game — and it is not handed to a banner either, which the
+        // same mode's "Disable notifications" decides on its own.
+        if StreamerMode.shared.hiddenOverlayWidgets.contains(.notifications) { return true }
         overlay.show(notice)
         return true
     }

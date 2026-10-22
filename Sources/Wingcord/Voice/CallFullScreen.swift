@@ -39,12 +39,25 @@ private struct CallFullScreenPresenter: ViewModifier {
     func body(content: Content) -> some View {
         content
             .overlay {
-                if model.isCallFullScreen, let presentation = model.voicePresentation {
-                    CallFullScreenView(presentation: presentation)
-                        .transition(.opacity)
+                ZStack {
+                    if model.isCallFullScreen, let presentation = model.voicePresentation {
+                        CallFullScreenView(presentation: presentation)
+                            .transition(.opacity)
+                    }
                 }
+                // **In with a fade, out with none — and only this layer.** The
+                // animation used to sit on the whole app, so everything the
+                // switch changed was animated, removals included: the call
+                // view on the way out, and the channel's own tile grid on the
+                // way in. A speaking tile breathes its edge on a
+                // `repeatForever` animation, and SwiftUI keeps a removed view
+                // until its animations end — which that one never does. So the
+                // call stayed on screen after leaving full screen, and the
+                // grid it replaced stayed too, invisible, taking the clicks
+                // (Alex, 2026-10-22: "I can't click almost anything"). Out
+                // without an animation, there is nothing to wait for.
+                .animation(model.isCallFullScreen ? motion.standard : nil, value: model.isCallFullScreen)
             }
-            .animation(motion.standard, value: model.isCallFullScreen)
             // The call ended, so there is nothing left to be full screen for.
             .onChange(of: model.connectedVoiceChannelID) { _, channelID in
                 if channelID == nil { model.exitCallFullScreen() }

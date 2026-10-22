@@ -21,17 +21,30 @@ struct ActivityPane: View {
 
     private var privacy: ActivityPrivacy { model.activityPrivacy }
 
+    /// docs/CLIPS-PRESENCE.md, D22: what goes out now, then each source of it —
+    /// what plays, games, connected apps — then who sees it.
     var body: some View {
-        nowPlaying
+        BroadcastPreviewGroup()
+        NowPlayingSettingsGroup()
+        runningGame
+        RegisteredGamesGroup()
+        GameModeSettingsGroup()
+        GameEventsSettingsGroup()
+        ConnectedRPCAppsGroup()
         sharing
         whereShared
         joining
-        registeredGames
     }
 
     // MARK: What is running
 
-    @ViewBuilder private var nowPlaying: some View {
+    private var runningGame: some View {
+        SettingsGroup("Games") {
+            runningGameCard
+        }
+    }
+
+    @ViewBuilder private var runningGameCard: some View {
         SettingsCard {
             if let game = model.detectedGame {
                 SettingsControlRow(game.name, help: detectionHelp(for: game)) {
@@ -43,6 +56,14 @@ struct ActivityPane: View {
                                 : AnyShapeStyle(Ink.secondary)
                         )
                 }
+            } else if let running = model.sessionController.games.runningGame {
+                // Running, and switched off in Registered Games: named here so
+                // the reader can find the switch, and nowhere else.
+                SettingsValueRow(
+                    title: running.name,
+                    value: "Detection off",
+                    help: "Switched off in Registered Games below — not shown as your activity."
+                )
             } else {
                 SettingsValueRow(
                     title: "Nothing detected",
@@ -180,38 +201,6 @@ struct ActivityPane: View {
             )
         }
     }
-
-    // MARK: Registered games
-
-    private var registeredGames: some View {
-        SettingsGroup("Games added by hand") {
-            SettingsCard {
-                if settings.manualGames.isEmpty {
-                    SettingsValueRow(
-                        title: "None yet",
-                        value: "—",
-                        help: "Add anything Wingcord does not recognise — including an "
-                            + "application that is not a game."
-                    )
-                } else {
-                    ForEach(Array(settings.manualGames.enumerated()), id: \.element.path) {
-                        index, entry in
-                        if index > 0 { CardDivider() }
-                        SettingsActionRow(
-                            entry.name,
-                            help: entry.path,
-                            actionTitle: "Remove",
-                            role: .destructive
-                        ) {
-                            settings.removeManualGame(at: entry.path)
-                            model.sessionController.games.removeManualGame(forExecutableAt: entry.path)
-                        }
-                    }
-                }
-            }
-            AddGameRow()
-        }
-    }
 }
 
 /// The "Add it!" picker — everything running, by process.
@@ -220,18 +209,20 @@ struct ActivityPane: View {
 /// `getCandidateGames()`, which is the set of running processes keyed by pid,
 /// and that is what makes it possible to add the thing you are looking at
 /// rather than hunting for its bundle in `/Applications`.
-private struct AddGameRow: View {
+struct AddGameRow: View {
     @Environment(AppModel.self) private var model
     @State private var settings = AppSettings.shared
     @State private var isPicking = false
 
     var body: some View {
         SettingsCard {
+            // Discord's words.
             SettingsControlRow(
-                "Add a game",
-                help: "Everything currently running that has a window."
+                "Not seeing your game?",
+                help: "Add anything that is running and has a window — a game Discord does not "
+                    + "know, or an application that is not a game at all."
             ) {
-                Button("Choose…") { isPicking = true }
+                Button("Add it!") { isPicking = true }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .popover(isPresented: $isPicking, arrowEdge: .bottom) {
@@ -276,9 +267,10 @@ private struct AddGameRow: View {
         // twice is the same entry, and high enough not to collide with a real
         // application id.
         let id = ApplicationID(
-            rawValue: UInt64(bitPattern: Int64(abs(candidate.executableURL.path.hashValue)))
+            rawValue: RegisteredGamesStore.manualID(forExecutableAt: candidate.executableURL.path)
         )
         settings.addManualGame(name: candidate.name, path: candidate.executableURL.path, id: id)
+        RegisteredGamesStore.shared.add(id: id.rawValue, name: candidate.name)
         model.sessionController.games.addManualGame(
             GameDetector.DetectedGameOverride(id: id, name: candidate.name),
             forExecutableAt: candidate.executableURL.path
@@ -416,11 +408,16 @@ struct OverlayPane: View {
             )
             // **The way back, and it has to be here rather than on the
             // overlay.** A layout somebody has made a mess of is hardest to fix
-            // from inside the thing they made a mess of.
-            SettingsCard {
-                SettingsControlRow("Arrangement") {
-                    Button("Reset") { model.overlay.resetLayout() }
-                        .controlSize(.small)
+            // from inside the thing they made a mess of — Default is the reset.
+            OverlayLayoutCard(controller: model.overlay)
+            if StreamerMode.shared.isEnabled, !StreamerMode.shared.hiddenOverlayWidgets.isEmpty {
+                SettingsCard {
+                    SettingsNavigationRow(
+                        title: "Go to Streamer Mode Settings",
+                        subtitle: "Some overlay features are restricted by Streamer Mode.",
+                        symbolName: SettingsSection.streamerMode.symbolName,
+                        tint: SettingsSection.streamerMode.tint
+                    ) { navigate(.streamerMode) }
                 }
             }
         }
@@ -438,7 +435,7 @@ private struct WidgetRow: View {
     @Bindable var controller: OverlayController
 
     var body: some View {
-        SettingsControlRow(kind.title) {
+        SettingsControlRow(kind.title, help: help) {
             HStack(spacing: Spacing.snug) {
                 // **Absent rather than disabled where pinning is refused** — see
                 // `OverlayWidgetKind.canBePinned`. A greyed pin is a control
@@ -487,6 +484,97 @@ private struct WidgetRow: View {
     }
 
     private var isPinned: Bool { controller.layout.placement(for: kind).isPinned }
+
+    private var help: String? {
+        if StreamerMode.shared.hiddenOverlayWidgets.contains(kind) { return "Hidden while Streamer Mode is on." }
+        switch kind {
+        case .activity: return "What you are showing as your activity, and the switches that change it."
+        case .performance: return "Processor, graphics, memory and heat, once a second."
+        default: return nil
+        }
+    }
+}
+
+/// The arrangement: Discord's, three more built in, and the reader's own.
+///
+/// **Menu items with checkmarks, not a picker.** The current layout may be
+/// none of them — it is whatever the reader dragged — and a picker would have
+/// to pretend otherwise.
+private struct OverlayLayoutCard: View {
+    @Bindable var controller: OverlayController
+    @State private var renaming: OverlaySavedLayout?
+    @State private var name = ""
+
+    var body: some View {
+        SettingsCard {
+            SettingsControlRow("Layout", help: help) {
+                Menu(title) {
+                    Section("Presets") {
+                        ForEach(OverlayLayoutPreset.allCases) { preset in
+                            Toggle(isOn: Binding(
+                                get: { controller.currentPreset == preset },
+                                set: { _ in controller.apply(preset) }
+                            )) {
+                                Label(preset.title, systemImage: preset.symbolName)
+                            }
+                        }
+                    }
+                    if !controller.savedLayouts.isEmpty {
+                        Section("Your layouts") {
+                            ForEach(controller.savedLayouts) { saved in
+                                Toggle(saved.name, isOn: Binding(
+                                    get: { controller.currentSavedLayout?.id == saved.id },
+                                    set: { _ in controller.apply(saved) }
+                                ))
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("Save Current Layout") { controller.saveCurrentLayout() }
+                        .disabled(!canSave)
+                }
+                .fixedSize()
+                .controlSize(.small)
+            }
+            ForEach(controller.savedLayouts) { saved in
+                CardDivider()
+                SettingsControlRow(saved.name, help: "Saved") {
+                    HStack(spacing: Spacing.tight) {
+                        Button("Rename…") {
+                            name = saved.name
+                            renaming = saved
+                        }
+                        Button("Delete", role: .destructive) { controller.deleteSavedLayout(saved.id) }
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+        .alert(
+            "Rename Layout",
+            isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
+            presenting: renaming
+        ) { saved in
+            TextField("Name", text: $name)
+            Button("Rename") { controller.renameSavedLayout(saved.id, to: name) }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private var title: String {
+        controller.currentPreset?.title ?? controller.currentSavedLayout?.name ?? "Custom"
+    }
+
+    private var help: String {
+        if let preset = controller.currentPreset { return preset.summary }
+        if controller.currentSavedLayout != nil { return "One of your saved layouts." }
+        return "Arranged by you. Save it to come back to it."
+    }
+
+    private var canSave: Bool {
+        controller.currentSavedLayout == nil && controller.currentPreset == nil
+            && controller.savedLayouts.count < OverlaySavedLayout.limit
+    }
 }
 
 // MARK: - Clips
@@ -496,24 +584,27 @@ struct ClipsPane: View {
     @Environment(\.settingsNavigate) private var navigate
     @State private var settings = AppSettings.shared
     @State private var clips: [Clip] = []
+    /// The account's own setting, mirrored so the switch moves at once; the
+    /// model writes it and puts it back if Discord refuses.
+    @State private var allowsVoiceRecording = true
 
     var body: some View {
         SettingsCard {
             SettingsToggle(
-                title: "Keep the last few seconds",
-                help: "Wingcord buffers your game while you play, so the clip key can save what "
+                title: "Keep the last moments",
+                help: "Wingcord keeps your game while you play, so the clip key can save what "
                     + "already happened.",
                 isOn: $settings.clipsEnabled
             )
         }
         SettingsFootnote(
-            "Nothing is written to disk until you press the key. The buffer runs only while a "
-                + "game is in front, and it captures the game's own window — not your screen, "
-                + "not this app, not your notifications.",
+            "Nothing is written to disk until you press the key. It runs only while a game is in "
+                + "front, and it captures the game's own window — not your screen, not this app, "
+                + "not your notifications.",
             symbolName: "lock.shield"
         )
 
-        SettingsGroup("Quality") {
+        SettingsGroup("Length and quality") {
             SettingsCard {
                 CardHeaderRow(
                     title: "Length",
@@ -539,11 +630,102 @@ struct ClipsPane: View {
                     options: ClipFrameRate.allCases.map { .init($0, $0.title) }
                 )
             }
+            SettingsFootnote(memoryNote, symbolName: "memorychip")
+        }
+
+        SettingsGroup("Voice") {
+            SettingsCard {
+                SettingsToggle(
+                    title: "Allow my voice to be recorded in Clips",
+                    help: "Lets the people in your calls keep your voice in their clips. Saved to your "
+                        + "account, so it holds in Discord too.",
+                    isOn: $allowsVoiceRecording
+                )
+                if model.connectedVoiceChannelID != nil {
+                    CardDivider()
+                    SettingsValueRow(
+                        title: "In this call",
+                        value: callClippingValue,
+                        help: "People here whose clips are on."
+                    )
+                }
+            }
             SettingsFootnote(
-                "Fifteen seconds is the ceiling, and it is macOS's rather than a choice: the "
-                    + "system's rolling clip buffer stops there. Longer clips would mean "
-                    + "Wingcord running its own encoder the whole time you play.",
-                symbolName: "clock.arrow.circlepath"
+                "Your clips keep your microphone, the soundboard, and everybody in the call whose own "
+                    + "setting allows it — each on a track of its own, so the editor can take them "
+                    + "apart. Nobody's voice is kept in a stage.",
+                symbolName: "person.wave.2"
+            )
+        }
+        .task { allowsVoiceRecording = model.syncedPreferences.allowsVoiceRecordingInClips }
+        .onChange(of: model.syncedPreferences.allowsVoiceRecordingInClips) { _, allows in
+            allowsVoiceRecording = allows
+        }
+        .onChange(of: allowsVoiceRecording) { _, allows in
+            model.setAllowsVoiceRecordingInClips(allows)
+        }
+
+        // Discord's Auto Clips (Phase 7.2), in its words where it has them.
+        SettingsGroup("Auto Clips") {
+            SettingsCard {
+                SettingsToggle(
+                    title: "Enable Auto Clips",
+                    help: "Automatically capture gaming moments with Auto Clips.",
+                    isOn: Binding(
+                        get: { settings.autoClipsEnabled },
+                        set: { settings.autoClipsEnabled = $0; model.autoClips.refresh() }
+                    )
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Laughter and shouting",
+                    help: "Listens to what a clip may keep — the call's voices and your microphone.",
+                    isOn: Binding(
+                        get: { settings.autoClipsHearsReactions },
+                        set: { settings.autoClipsHearsReactions = $0; model.autoClips.refresh() }
+                    )
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "In-game events",
+                    help: "Kills, multikills, aces and wins, from the games that report them.",
+                    isOn: Binding(
+                        get: { settings.autoClipsHearsGameEvents },
+                        set: { settings.autoClipsHearsGameEvents = $0; model.autoClips.refresh() }
+                    )
+                )
+            }
+            .disabled(!settings.clipsEnabled)
+            SettingsFootnote(
+                settings.clipsEnabled
+                    ? "Auto Clips wait in the library's To Review until you keep them or throw them away. "
+                        + "Listening happens on this Mac, with Apple's own sound classifier — nothing is sent "
+                        + "anywhere, and nothing is heard while no game is in front."
+                    : "Auto Clips needs Keep the last moments, at the top of this page.",
+                symbolName: "sparkles"
+            )
+        }
+
+        SettingsGroup("Recording") {
+            SettingsCard {
+                SettingsActionRow(
+                    "Library",
+                    help: "Every clip, recording and screenshot — to watch, edit and share.",
+                    actionTitle: "Open"
+                ) { ClipsWindow.open() }
+                CardDivider()
+                SettingsActionRow(
+                    "Capture bar",
+                    help: "Record the screen, a window or an area — or take a picture of one. "
+                        + captureKeySummary,
+                    actionTitle: "Open"
+                ) { model.capture.showBar() }
+            }
+            SettingsFootnote(
+                "A recording keeps the screen without the cursor, the camera as a file of its own, your "
+                    + "microphone and the Mac's sound as separate tracks, and where the cursor went — so "
+                    + "the editor can put them together any way. Wingcord's own sound, a call, is never in it.",
+                symbolName: "record.circle"
             )
         }
 
@@ -597,8 +779,32 @@ struct ClipsPane: View {
         }
     }
 
+    /// What the chosen length and quality hold while a game is in front.
+    private var memoryNote: String {
+        let bytes = ClipRecorder.estimatedBytes()
+        let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
+        let budget = ByteCountFormatter.string(fromByteCount: Int64(ClipRecorder.memoryBudget), countStyle: .memory)
+        return bytes > ClipRecorder.memoryBudget
+            ? "About \(size) while a game is in front. Past \(budget) the oldest seconds wait in a cache "
+                + "file instead of memory, and are gone when the game is."
+            : "About \(size) of memory while a game is in front — the picture, at this quality, for the "
+                + "whole length. Nothing while one is not."
+    }
+
+    private var callClippingValue: String {
+        switch model.callMembersClipping {
+        case 0: "Nobody"
+        case 1: "1 person"
+        case let count: "\(count) people"
+        }
+    }
+
     private var clipKey: String {
         settings.hotkey(for: .saveClip)?.displayString ?? "the clip key"
+    }
+
+    private var captureKeySummary: String {
+        settings.hotkey(for: .showCaptureBar).map { "Or press \($0.displayString) anywhere." } ?? ""
     }
 
     private var sizeSummary: String {
@@ -644,7 +850,24 @@ private struct ClipRow: View {
 
     private var caption: String {
         let size = ByteCountFormatter.string(fromByteCount: Int64(clip.byteCount), countStyle: .file)
-        let kind = clip.isScreenshot ? "Screenshot" : "Clip"
-        return "\(kind) · \(size) · \(clip.created.formatted(.relative(presentation: .named)))"
+        let kind = clip.isRecording ? "Recording" : clip.isScreenshot ? "Screenshot" : "Clip"
+        var parts = [kind, size]
+        if let take = clip.take {
+            parts.append(Duration.seconds(take.duration.rounded()).formatted(.time(pattern: .minuteSecond)))
+            if take.hasCamera { parts.append("camera") }
+        }
+        // What the sidecar knows: how long, and whose voices are in it.
+        if let manifest = clip.manifest {
+            parts.append(Duration.seconds(manifest.duration.rounded()).formatted(.time(pattern: .minuteSecond)))
+            let voices = manifest.tracks.count { track in
+                switch track.role {
+                case .microphone, .voice: true
+                case .mix, .game, .soundboard: false
+                }
+            }
+            if voices > 0 { parts.append(voices == 1 ? "1 voice" : "\(voices) voices") }
+        }
+        parts.append(clip.created.formatted(.relative(presentation: .named)))
+        return parts.joined(separator: " · ")
     }
 }

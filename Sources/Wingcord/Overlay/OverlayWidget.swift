@@ -26,6 +26,8 @@ struct OverlayWidget: View {
         case .voice: OverlayVoiceWidget(controller: controller)
         case .notifications: OverlayNotificationsWidget(controller: controller)
         case .clips: OverlayClipsWidget(controller: controller)
+        case .activity: OverlayActivityWidget(controller: controller)
+        case .performance: OverlayPerformanceWidget()
         }
     }
 }
@@ -449,33 +451,5 @@ private struct OverlayToast: View {
         // slow round trip finds nothing to post twice. One held back for
         // slowmode keeps its text for the next Return.
         model.replyFromOverlay(text, to: notice)
-    }
-}
-
-// MARK: - Clips
-
-/// What the clip key did, and what it will do.
-private struct OverlayClipsWidget: View {
-    @Bindable var controller: OverlayController
-    @Environment(\.motion) private var motion
-
-    var body: some View {
-        if let state = controller.clipFeedback {
-            HStack(spacing: Spacing.base) {
-                Image(symbol: state.symbolName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(state.isFailure ? Palette.destructive : Palette.presenceOnline)
-                Text(state.message)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(2)
-            }
-            .padding(.horizontal, Spacing.snug)
-            .padding(.vertical, Spacing.base)
-            .frame(maxWidth: 280, alignment: .leading)
-            .chromeOverMedia(in: .capsule)
-            .transition(.opacity.combined(with: .scale(scale: 0.95)))
-            .animation(motion.standard, value: state)
-            .accessibilityElement(children: .combine)
-        }
     }
 }

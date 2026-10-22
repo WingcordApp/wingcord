@@ -44,6 +44,15 @@ struct InviteCardDecodeTests {
         #expect(card.mark?.detail == "People with an invite link can join.")
     }
 
+    @Test("An invite to a voice channel says so — Discord's voice card is drawn from it")
+    func voiceChannelInvite() throws {
+        let voice = Self.captured.replacingOccurrences(of: #""type":0,"name""#, with: #""type":2,"name""#)
+        let card = try #require(try JSONDecoder().decode(InviteDTO.self, from: Data(voice.utf8)).card)
+        #expect(card.isVoiceChannel)
+        let text = try #require(try JSONDecoder().decode(InviteDTO.self, from: Data(Self.captured.utf8)).card)
+        #expect(!text.isVoiceChannel)
+    }
+
     /// Discord's own join for an unnamed group, and its member count is the
     /// number of people in it.
     @Test("An unnamed group is named by its members")

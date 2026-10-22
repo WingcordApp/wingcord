@@ -1,4 +1,5 @@
 import SwiftUI
+import WingcordCore
 
 /// The lightbox: a message's pictures, clips and animations, one at a time, at
 /// the size the window can give them — opened out of the thumbnail that was
@@ -29,6 +30,8 @@ struct MediaViewer: View {
     @State private var stage = MediaStageController()
     @State private var playback = VideoPlayback()
     @State private var actions = MediaActions()
+    /// A clip's switches and the comment being written.
+    @State private var clipState = ClipPlayerState()
     /// The strip's pick while the page slides to it.
     @State private var jumpTarget: Int?
     @FocusState private var isFocused: Bool
@@ -62,6 +65,7 @@ struct MediaViewer: View {
                     stage: stage,
                     playback: playback,
                     actions: actions,
+                    clipState: clipState,
                     page: { stage.page(by: $0) },
                     jump: jump,
                     close: { close() }
@@ -81,6 +85,10 @@ struct MediaViewer: View {
         }
         .onExitCommand { close() }
         .onKeyPress(action: handle(key:))
+        // A clip's comment field gives the keyboard back when it is done.
+        .onChange(of: clipState.isCommenting) { _, isCommenting in
+            if !isCommenting { isFocused = true }
+        }
         // The picture on stage is out of its box; the one paged away from goes
         // back into its own.
         .onChange(of: request.index) { lift() }
@@ -233,11 +241,13 @@ private struct MediaViewerChrome: View {
     var stage: MediaStageController
     var playback: VideoPlayback
     var actions: MediaActions
+    var clipState: ClipPlayerState
     var page: (Int) -> Void
     var jump: (Int) -> Void
     var close: () -> Void
 
     @Environment(\.motion) private var motion
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         // One container, so the pieces render as one pass of material while
@@ -260,14 +270,26 @@ private struct MediaViewerChrome: View {
         stage.presence >= 0.9 && !stage.isClosing && stage.dismissProgress < 0.02
     }
 
+
     private var content: some View {
         ZStack {
             MediaStatusOverlay(stage: stage, playback: playback)
 
             if let item = request.current {
+                let clip = item.clip.map { ClipInViewer(item: item, clip: $0, request: request, model: model) }
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: Spacing.base) {
                         MediaGlassButton(systemImage: "xmark", label: "Close", action: close)
+                        if let clip {
+                            VStack(alignment: .leading, spacing: Spacing.base) {
+                                ClipHeaderCard(clip: clip.clip, faces: clip.faces)
+                                ClipPointsOfViewRow(item: item, channelID: request.channelID)
+                                if clip.clip.hasSpeaking, clipState.showsSpeaking {
+                                    ClipSpeakingLayer(clip: clip.clip, faces: clip.faces, playback: playback)
+                                }
+                            }
+                            .task(id: item.id) { model.loadTimelineComments(on: item.id, of: clip.clip) }
+                        }
                         Spacer(minLength: Spacing.snug)
                         MediaActionCluster(
                             item: item,
@@ -280,10 +302,19 @@ private struct MediaViewerChrome: View {
                     }
                     Spacer(minLength: 0)
                     VStack(spacing: Spacing.base) {
+                        if let clip {
+                            if clipState.showsComments, !clip.comments.isEmpty {
+                                ClipCommentCaptionLayer(comments: clip.comments, playback: playback)
+                            }
+                            if let send = clip.send {
+                                ClipCommentBar(state: clipState, playback: playback, send: send)
+                                    .frame(maxWidth: 520)
+                            }
+                        }
                         if request.hasSiblings {
                             MediaGalleryStrip(request: request, select: jump)
                         }
-                        bottomBar(for: item)
+                        bottomBar(for: item, clip: clip)
                     }
                 }
                 .padding(Spacing.margin)
@@ -296,11 +327,24 @@ private struct MediaViewerChrome: View {
     }
 
     @ViewBuilder
-    private func bottomBar(for item: MediaItem) -> some View {
+    private func bottomBar(for item: MediaItem, clip: ClipInViewer?) -> some View {
         let bar = Group {
             if item.isVideo {
-                MediaVideoControls(playback: playback)
-                    .frame(maxWidth: 720)
+                MediaVideoControls(
+                    playback: playback,
+                    clip: clip.map { clip in
+                        ClipBarExtras(
+                            marks: clip.moments(duration: playback.duration)
+                                + (clipState.showsComments ? ClipMark.comments(clip.comments, duration: playback.duration) : []),
+                            hasSpeaking: clip.clip.hasSpeaking,
+                            hasComments: clip.clip.hasTimelineComments || !clip.comments.isEmpty,
+                            state: clipState
+                        )
+                    }
+                )
+                // A clip's bar carries two switches more, and its scrubber
+                // carries marks: the room is given back to the track.
+                .frame(maxWidth: item.clip == nil ? 720 : 880)
             } else if stage.frameCount > 1 {
                 MediaFilmControls(stage: stage)
                     .frame(maxWidth: 560)
@@ -359,5 +403,38 @@ private struct MediaStatusOverlay: View {
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+/// The other views of a moment several people clipped (Phase 7.3) — its own
+/// view, so the library is looked through once per clip rather than on every
+/// pass of the chrome.
+private struct ClipPointsOfViewRow: View {
+    var item: MediaItem
+    var channelID: ChannelID?
+
+    @Environment(AppModel.self) private var model
+    @State private var mine: ClipLibraryItem?
+
+    var body: some View {
+        let views = model.clipPointsOfView(of: item, in: channelID)
+        Group {
+            if views.count > 1 || mine != nil, let channelID {
+                ClipPOVSwitcher(
+                    views: views,
+                    current: item.id,
+                    name: { model.users[$0]?.preferredName ?? "Somebody" },
+                    canAddMine: mine != nil,
+                    switchTo: { model.switchClipView(to: $0) },
+                    addMine: {
+                        if let mine { model.addPointOfView(mine, to: views.first, in: channelID) }
+                        mine = nil
+                    }
+                )
+            }
+        }
+        .task(id: item.id) {
+            mine = item.clip?.remoteID == nil ? nil : model.unsharedPointOfView(for: views, of: item)
+        }
     }
 }

@@ -80,6 +80,16 @@ final class AppModel {
     /// being read. Unobserved: readers observe the two revisions below, so a
     /// keystroke in a server never rebuilds the direct-message list.
     @ObservationIgnored var typingTable: [ChannelID: [UserID: Date]] = [:]
+    /// Each typer's custom indicator, while they type anywhere — Discord's
+    /// TypingStore keeps the same table (`741961`'s `I`). Read through
+    /// `typingStyle(of:)`, which observes `typingRevision`.
+    @ObservationIgnored var typingStyles: [UserID: TypingIndicatorStyle] = [:]
+    /// The reader's own custom typing indicator, as the account holds it — what
+    /// the profile editor starts from. Nil for the plain one.
+    var ownTypingIndicatorStyle: TypingIndicatorStyle?
+    /// What READY said the account and its servers are in — Settings ›
+    /// Experiments, and the one surface that follows an experiment.
+    var experiments = ExperimentSnapshot()
     /// Moves whenever anybody starts or stops typing anywhere.
     var typingRevision: UInt64 = 0
     /// Moves only when somebody starts or stops typing in a direct message —
@@ -403,7 +413,10 @@ final class AppModel {
     /// channels are flat: a person is in exactly one voice channel anywhere, so
     /// the guild is a property of the row and "am I in a call" is one lookup
     /// instead of a sweep.
-    var voiceStates: [UserID: VoiceState] = [:]
+    var voiceStates: [UserID: VoiceState] = [:] {
+        // A voice invite on screen draws who is in its room.
+        didSet { refreshVoiceInviteRosters() }
+    }
     /// What each voice channel says about itself: its status line, and when the
     /// session in it started.
     ///
@@ -1212,6 +1225,10 @@ final class AppModel {
 
     var connections: [AccountConnection]?
     var authorizedApps: [AuthorizedApp]?
+    /// The account's own custom themes — `GET /users/@me/custom-themes`, asked
+    /// when Settings › Appearance opens. Absent means "not asked yet", as for
+    /// the two above. See `SessionController.loadAccountCustomThemes`.
+    var accountCustomThemes: [SharedClientTheme]?
     /// Which connection ids have a toggle or an unlink in flight, so a second
     /// click on the same row while the first is still out cannot race it.
     var connectionMutationsInFlight: Set<String> = []
@@ -1403,11 +1420,48 @@ final class AppModel {
     /// Whose Spotify the reader is listening along to, while they are.
     var listeningAlong: ListeningAlong?
 
+    /// Each person's badge directory — owned and earnable, with levels and
+    /// progress (docs/CLIPS-PRESENCE.md, Phase 8). See `AppModel+Badges`.
+    var badgeCatalogs: [UserID: [CatalogBadge]] = [:]
+    @ObservationIgnored var badgeCatalogRequests: Set<UserID> = []
+    /// Every cosmetic the reader owns, once asked — the four flyouts of the
+    /// profile editor filter this one answer. Nil until the first flyout.
+    @ObservationIgnored var ownedCollectiblesCache: [OwnedCollectible]?
+    /// Recent avatars, likewise asked once per session.
+    @ObservationIgnored var recentAvatarsCache: [RecentAvatar]?
+    /// Four trending GIFs for Choose GIF's mosaic, once a flyout has asked.
+    var gifMosaic: [URL] = []
+    @ObservationIgnored var gifMosaicRequested = false
+
     /// The in-game overlay: its window, its lock and its widgets.
     let overlay = OverlayController()
 
+    /// Discord's soundboard wheel, at the pointer — its two keys reach it from
+    /// anywhere. See `SoundboardWheelController`.
+    let soundboardWheel = SoundboardWheelController()
+
     /// The rolling clip buffer. Armed only while a detected game is in front.
     let clipRecorder = ClipRecorder()
+    /// Auto Clips — listens while the buffer runs (Phase 7.2).
+    @ObservationIgnored lazy var autoClips = AutoClips(model: self)
+    /// What games say happened, for clips' timelines — see `GameEventHub`.
+    let gameEvents = GameEventHub()
+    /// The capture bar: recordings and screenshots of the screen, a window or
+    /// an area — see `CaptureController`.
+    let capture = CaptureController()
+    /// What each person's client in the reader's call says about clips —
+    /// voice op 18. See `AppModel+Clips`.
+    var voiceClientFlags: [UserID: VoiceStateFlags] = [:]
+    /// The channel the clips call warning was last shown for — Discord's
+    /// `CLIPS_SHOW_CALL_WARNING`, once per channel.
+    @ObservationIgnored var clipsWarningChannelID: ChannelID?
+    /// A clip's timeline comments as its media thread holds them — the channel
+    /// whose id is the attachment's (Discord's `MEDIA_THREAD`), fetched when
+    /// the clip opens in the viewer. See `AppModel+ClipPlayer`.
+    var clipCommentThreads: [AttachmentID: [Message]] = [:]
+    /// The media threads already asked for, so reopening a clip does not ask
+    /// again.
+    @ObservationIgnored var clipCommentFetches: Set<AttachmentID> = []
 
     /// Bumped whenever a clip is written or deleted, so the library redraws.
     ///
@@ -1454,11 +1508,21 @@ final class AppModel {
     /// on the model rather than read from the detector at the point of use so
     /// that the roster, the profile card and the presence write all see the
     /// same value in the same frame.
-    var detectedGame: DetectedGame?
+    var detectedGame: DetectedGame? {
+        // Game Mode follows the game the session publishes — one whose
+        // detection is switched off never gets here.
+        didSet { GameMode.shared.gameChanged(detectedGame) }
+    }
     /// What the apps connected to the local RPC server are doing, in the order
     /// they first said — Discord's LocalActivityStore's `G`. See
     /// `AppModel+LocalRPC`.
     var localRPCActivities: [LocalRPCActivity] = []
+    /// What macOS says is playing, as the presence publishes it — written by
+    /// `NowPlayingPresence` through the session.
+    var nowPlayingActivity: RichPresenceActivity?
+    /// A macOS Focus, worn as a status — see `FocusSync`. Made once, at launch,
+    /// by `WingcordApp.init`; observed through itself.
+    @ObservationIgnored var focusSync: FocusSync?
     /// The Rich Presence builder's pictures as their application resolved them
     /// — `mp:` ids for links, asset ids for keys — by "application key".
     @ObservationIgnored var customPresenceAssets: [String: String] = [:]
@@ -1479,25 +1543,59 @@ final class AppModel {
     /// gate belongs here — at the one point every publish goes through — rather
     /// than at the detector, which still has to know what is running so the
     /// Registered Games pane can show it.
-    var publishedActivities: [RichPresenceActivity] {
-        var list: [RichPresenceActivity] = []
-        if AppSettings.shared.sharesGameActivity {
+    var publishedActivities: [RichPresenceActivity] { publishedEntries.map(\.activity) }
+
+    /// Where one published activity comes from — what the Activity pane's
+    /// preview names, and offers to hide.
+    enum PublishedSource: Equatable {
+        /// An app on the local RPC socket — Music Presence, a game's SDK.
+        case connectedApp(ApplicationID?)
+        case customPresence
+        case game
+        case embedded
+        case nowPlaying
+        case spotify
+    }
+
+    struct PublishedEntry: Equatable {
+        var activity: RichPresenceActivity
+        var source: PublishedSource
+    }
+
+    /// `publishedActivities`, each with where it came from.
+    var publishedEntries: [PublishedEntry] {
+        var list: [PublishedEntry] = []
+        var nowPlaying: RichPresenceActivity?
+        let settings = AppSettings.shared
+        if settings.sharesGameActivity {
             // Every connected app's own activity first, as Discord's
-            // LocalActivityStore lists them (`480595`).
-            let local = localRPCActivities.map(\.activity)
-            list += local
+            // LocalActivityStore lists them (`480595`) — but none the reader
+            // blocked in Settings › Activity.
+            let local = localRPCActivities.map(\.activity).filter { activity in
+                activity.applicationID.map { settings.blockedRPCApplications[String($0.rawValue)] == nil } ?? true
+            }
+            list += local.map { PublishedEntry(activity: $0, source: .connectedApp($0.applicationID)) }
             // A presence the reader made **replaces** the detected game while
             // it is on (DESIGN-NOTES §11), and rides the same sharing switch:
             // Discord's own local activities do. A game whose own app already
             // says what it is doing is not said twice.
             if let custom = customPresenceActivity {
-                list.append(custom)
+                list.append(PublishedEntry(activity: custom, source: .customPresence))
             } else if let detectedGame, !Self.isAnnounced(detectedGame.activity, by: local) {
-                list.append(detectedGame.activity)
+                list.append(PublishedEntry(activity: detectedGame.activity, source: .game))
+            }
+            // What is playing rides the same switch — and the account's own
+            // "Share my activity" — after what the reader is doing: a game
+            // stays the line a member list shows. An app that already says
+            // it — Music Presence, Cider — is not said twice.
+            if let nowPlayingActivity, activityPrivacy.sharesCurrentGame,
+               !Self.isAnnounced(nowPlayingActivity, by: local) {
+                nowPlaying = nowPlayingActivity
             }
         }
-        if let publishedActivity { list.append(publishedActivity) }
-        if let spotifyActivity { list.append(spotifyActivity) }
+        if let publishedActivity { list.append(PublishedEntry(activity: publishedActivity, source: .embedded)) }
+        if let nowPlaying { list.append(PublishedEntry(activity: nowPlaying, source: .nowPlaying)) }
+        if let spotifyActivity { list.append(PublishedEntry(activity: spotifyActivity, source: .spotify)) }
         return list
     }
 
@@ -1660,6 +1758,13 @@ final class AppModel {
     /// by `SessionController.resolveInvites`; a card landing moves
     /// `cardRevision`, which is what tells the canvas to lay the row out again.
     @ObservationIgnored var inviteLookups: [String: InviteLookup] = [:]
+    /// Who is in each room a resolved voice invite leads to, by id —
+    /// kept beside the lookups so a voice state change moves `cardRevision`
+    /// only when it changes a room a card draws. See `AppModel+InviteCards`.
+    @ObservationIgnored var voiceInviteRoster: [ChannelID: [UserID]] = [:]
+    /// Who in those rooms is streaming — the channel-row card's LIVE, kept
+    /// for the roster's reason.
+    @ObservationIgnored var voiceInviteStreamers: Set<UserID> = []
     /// The profile invite cards the reader has opened past Discord's fold.
     /// Read by the transcript's layout; moved together with `cardRevision`,
     /// which is what tells the transcript to read it again.
@@ -2075,6 +2180,8 @@ struct ActionNotice: Hashable, Sendable, Identifiable {
         /// An act Discord confirms with its own success toast — a timeout set
         /// or lifted. Most moderation answers itself on screen and says nothing.
         case success
+        /// Somebody in the call keeps clips — Discord's call warning.
+        case clips
     }
 
     var text: String

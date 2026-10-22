@@ -13,8 +13,11 @@ import WingcordCore
 // headphones, leave. Who is in the call lives on the call's own surface; at
 // the sidebar's width a row of faces only crowds the controls.
 //
-// **Opaque, below the list.** It was clear glass floating over the channel
-// list, so channel names read through it; see `SidebarCardBackground`.
+// **`.regular` glass, the now bar's own** (Alex, 2026-10-22). It was clear
+// glass once, and channel names read straight through it; then an opaque
+// card. The frosted variant is what the now bar settled on for the same
+// problem — rows still move behind it, and their words never collide with
+// the card's.
 struct VoiceHUD: View {
     var presentation: VoicePresentation
     /// Discord's silent-mic warning, under the controls.
@@ -35,17 +38,21 @@ struct VoiceHUD: View {
             }
             .buttonStyle(.plain)
 
-            HStack(spacing: 0) {
-                CallButton(kind: .camera, isActive: presentation.isCameraOn, action: toggleCamera)
-                    .frame(maxWidth: .infinity)
-                CallButton(kind: .screenShare, isActive: presentation.isScreenSharing, action: toggleScreenShare)
-                    .frame(maxWidth: .infinity)
-                CallButton(kind: .microphone, isActive: presentation.isMuted, action: toggleMute)
-                    .frame(maxWidth: .infinity)
-                CallButton(kind: .headphones, isActive: presentation.isDeafened, action: toggleDeafen)
-                    .frame(maxWidth: .infinity)
-                CallButton(kind: .leave, isActive: false, action: leave)
-                    .frame(maxWidth: .infinity)
+            // One container for the five, so their glass is drawn together
+            // over the card's own — and never merged (see `CallControlRow`).
+            GlassEffectContainer(spacing: 0) {
+                HStack(spacing: 0) {
+                    CallButton(kind: .camera, isActive: presentation.isCameraOn, action: toggleCamera)
+                        .frame(maxWidth: .infinity)
+                    CallButton(kind: .screenShare, isActive: presentation.isScreenSharing, action: toggleScreenShare)
+                        .frame(maxWidth: .infinity)
+                    CallButton(kind: .microphone, isActive: presentation.isMuted, action: toggleMute)
+                        .frame(maxWidth: .infinity)
+                    CallButton(kind: .headphones, isActive: presentation.isDeafened, action: toggleDeafen)
+                        .frame(maxWidth: .infinity)
+                    CallButton(kind: .leave, isActive: false, action: leave)
+                        .frame(maxWidth: .infinity)
+                }
             }
 
             if isMicSilent {
@@ -62,7 +69,7 @@ struct VoiceHUD: View {
         }
         .padding(Spacing.snug)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sidebarCard(cornerRadius: Radius.glass)
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
         .padding(.horizontal, Spacing.base)
     }
 }

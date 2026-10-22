@@ -253,7 +253,8 @@ enum DemoFixtures {
                 decoration: UserDecoration(
                     nameplate: Nameplate(
                         asset: nameplateAsset, palette: .cobalt,
-                        label: "Blue roses with a butterfly."
+                        label: "Blue roses with a butterfly.",
+                        skuID: DemoCollectibles.rosesNameplateSKU
                     ),
                     // The reader's own name is the one seen most often, so it
                     // wears the effect with the most moving parts.
@@ -771,6 +772,19 @@ enum DemoFixtures {
             model, index: index, guildID: voiceGuildID ?? first, me: me, others: userIDs
         )
         populateConversations(model, me: me, users: users, userIDs: userIDs)
+        populateBundleFeatures(model, me: me, sharer: chosenID)
+        populateClipsCall(model, me: me)
+        populateSharedClip(model, me: me, others: userIDs.filter { $0 != me })
+        DemoClipLibrary.populateIfNeeded(model, people: [me] + userIDs.filter { $0 != me }.prefix(4))
+        DemoOverlayFixtures.populate()
+        DemoBadges.populate(model, me: me)
+        // **Nitro, as its own badges say** ("Nitro · Gold"), so every part of
+        // the profile editor can be tried. `--demo-free` shows the account
+        // without it — the locks, the notes, a server profile that is only a
+        // nickname and pronouns.
+        model.entitlements = AccountEntitlements(
+            premiumTier: ProcessInfo.processInfo.arguments.contains("--demo-free") ? .none : .nitro
+        )
 
         // A session measures a text file's preview as its message arrives
         // (`resolveHostedCards`); the fixtures arrive all at once, so their two

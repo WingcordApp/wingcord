@@ -278,7 +278,11 @@ private struct MotionResolutionModifier: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        content.environment(\.motion, MotionResolver(reduceMotion: reduceMotion))
+        // Game Mode reduces motion as the system setting does, while it
+        // throttles — Discord's own Game Mode lever.
+        content.environment(
+            \.motion, MotionResolver(reduceMotion: reduceMotion || GameMode.shared.isThrottling)
+        )
     }
 }
 

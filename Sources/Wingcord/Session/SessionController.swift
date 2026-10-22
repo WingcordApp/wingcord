@@ -81,6 +81,8 @@ final class SessionController {
     /// one signs out, and its whole output is a presence write. The model holds
     /// the *result* so views can read it.
     let games = GameDetector()
+    /// What macOS says is playing, as a presence — see `SessionController+NowPlaying`.
+    let nowPlaying = NowPlayingPresence()
 
     /// Presence updates arriving between flushes.
     ///
@@ -230,6 +232,8 @@ final class SessionController {
     var connectedAppsFetches: Set<ConnectedAppsFetch> = []
     /// Not `private`: read from `SessionController+Account`.
     var accountStandingFetchInFlight = false
+    /// Not `private`: read from `SessionController+Actions`.
+    var accountCustomThemesFetchInFlight = false
     /// Rules agreements in flight. Two presses on one button must send once —
     /// this route creates a join request, and a second one is a second request.
     var rulesSubmissions: Set<GuildID> = []
@@ -451,6 +455,7 @@ final class SessionController {
     /// somebody else, and a merge would lend them the previous account's tier.
     /// READY then merges over it.
     private func adoptEntitlements(of account: CurrentAccount) {
+        model.ownTypingIndicatorStyle = account.typingIndicatorStyle
         model.entitlements = AccountEntitlements().updated(
             premiumType: account.premiumType,
             ageVerificationStatus: account.ageVerificationStatus
@@ -463,6 +468,7 @@ final class SessionController {
         isTornDown = false
         startGameDetection()
         startLocalRPC()
+        startNowPlaying()
         let socket = GatewaySocket(metadata: metadata)
         self.socket = socket
         voice.attach(socket: socket)
@@ -567,6 +573,10 @@ final class SessionController {
         model.notesInFlight = []
         model.relationshipsInFlight = []
         model.suppressedAckChannelID = nil
+        // What READY and the account's own lists said about it.
+        model.experiments = ExperimentSnapshot()
+        model.ownTypingIndicatorStyle = nil
+        model.accountCustomThemes = nil
         // Applications are the account's, and so is everything drawn of them.
         model.ownJoinRequests = [:]
         model.joinRequestGuilds = []
@@ -616,6 +626,7 @@ final class SessionController {
         requestedPreviewChannels.removeAll()
         cancelFolderSave()
         stopGameDetection()
+        stopNowPlaying()
         eventTask?.cancel()
         eventTask = nil
         presenceFlushTask?.cancel()
@@ -770,6 +781,10 @@ final class SessionController {
             soundboards: snapshot.soundboardsByGuild
         )
         model.currentUserID = snapshot.currentUser.id
+        model.ownTypingIndicatorStyle = snapshot.typingIndicatorStyle
+        model.experiments = snapshot.experiments
+        // A voice invite's look can follow a server experiment.
+        model.inviteSettlementChanged()
         model.restoreDrafts(for: snapshot.currentUser.id)
         // **Whether the composer may schedule** is whether this list answers
         // — see `AppModel.canScheduleMessages`. Asked once a session.
@@ -843,6 +858,16 @@ final class SessionController {
         model.presenceRevision &+= 1
         model.identityRevision &+= 1
         model.connectionState = .ready
+        // **What this client published before READY, mirrored now.** A game
+        // already running at launch, or what is playing, goes out with the
+        // first presence — before there is a reader to mirror it onto — and
+        // READY then files the account's presence without it. Seen 2026-10-20:
+        // Now Playing published at 3.6 s, READY at 4.9 s, the reader's own
+        // card empty until the next song.
+        model.reflectOwnPresenceNow()
+        // READY has just put the account's stored status back; a Focus that is
+        // on puts its own back on top of it.
+        model.focusSync?.sessionDidBecomeReady()
         // **READY carries the reader's applications** — `guild_join_requests`,
         // which Discord's `CONNECTION_OPEN` files whole. The servers they are
         // to are asked for when the folder that draws them opens, as Discord's
@@ -1054,6 +1079,8 @@ final class SessionController {
         case .voiceServerChanged(let server):
             voice.apply(server: server)
 
+        case .clipsRemoteTrigger(let trigger):
+            model.receiveRemoteClipTrigger(trigger)
         case .voiceEffect(let effect):
             voice.apply(effect: effect)
 
@@ -1279,12 +1306,12 @@ final class SessionController {
         case .presenceUpdated(let presence):
             enqueue(presence)
 
-        case .typingStarted(let channelID, let userID, let at):
+        case .typingStarted(let channelID, let userID, let at, let style):
             // Discord's own indicator expires after ten seconds with no further
             // signal, and matching that is what stops a "typing…" from a closed
             // tab hanging on the composer forever.
             let expiry = at.addingTimeInterval(10)
-            model.noteTyping(userID, in: channelID, until: expiry)
+            model.noteTyping(userID, in: channelID, until: expiry, style: style)
             armTypingExpiry(at: expiry)
 
         case .membersChunk(let guildID, let members, let users, let presences):
@@ -1497,8 +1524,12 @@ final class SessionController {
                 messageID: notice.messageID
             )
         ) { return }
+        // Streamer Mode's "Disable notifications" — and its sounds, which a
+        // banner would otherwise carry onto the stream.
+        let streamer = StreamerMode.shared
+        guard !streamer.disablesNotifications else { return }
         let notifier = model.notifier
-        let playsSound = AppSettings.shared.playsNotificationSound
+        let playsSound = AppSettings.shared.playsNotificationSound && !streamer.disablesSounds
         Task {
             await notifier.requestAuthorizationIfNeeded()
             notifier.post(
@@ -2492,7 +2523,8 @@ final class SessionController {
         stickerIDs: [UInt64] = [],
         attachments: [PendingAttachment] = [],
         poll: PollDraft? = nil,
-        listenAlong: ListenAlongInvite? = nil
+        listenAlong: ListenAlongInvite? = nil,
+        mediaMention: MediaMention? = nil
     ) -> MessageID? {
         guard Self.isSendable(
             content, stickerIDs: stickerIDs, attachments: attachments, poll: poll, listenAlong: listenAlong
@@ -2505,7 +2537,8 @@ final class SessionController {
             pingsRepliedAuthor: pingsRepliedAuthor,
             stickerIDs: stickerIDs,
             poll: poll,
-            listenAlong: listenAlong
+            listenAlong: listenAlong,
+            mediaMention: mediaMention
         )
         // **Sending from older messages brings the reader back** — first, so
         // the echo lands in the window the reader is going to. Somebody who has
@@ -2545,7 +2578,8 @@ final class SessionController {
             stickerIDs: entry.request.stickerIDs,
             attachments: entry.files,
             poll: entry.request.poll,
-            listenAlong: entry.request.listenAlong
+            listenAlong: entry.request.listenAlong,
+            mediaMention: entry.request.mediaMention
         )
     }
 
@@ -2634,7 +2668,8 @@ final class SessionController {
                     stickerIDs: entry.request.stickerIDs,
                     attachments: uploaded,
                     poll: entry.request.poll,
-                    listenAlong: listenAlong
+                    listenAlong: listenAlong,
+                    mediaMention: entry.request.mediaMention
                 )
             }
             // Discord's copy is newer than the echo the cursor was moved to.
@@ -2772,7 +2807,8 @@ final class SessionController {
                 filename: slot.filename,
                 uploadedFilename: slot.uploadedFilename,
                 altText: file.altText,
-                originalContentType: originalTypes[index]
+                originalContentType: originalTypes[index],
+                clip: file.clip
             ))
         }
         return uploaded
@@ -2894,9 +2930,22 @@ extension SessionController {
         }
     }
 
-    func gifLanding() async throws -> GIFLanding { try await rest.gifLanding() }
-    func trendingGIFs() async throws -> [GIF] { try await rest.trendingGIFs() }
-    func searchGIFs(_ query: String) async throws -> [GIF] { try await rest.searchGIFs(query) }
+    // `--demo` answers from its own loops — the routes are requests, and it
+    // makes none (`DemoGIFs`).
+    func gifLanding() async throws -> GIFLanding {
+        if LaunchOptions.current.usesDemoFixtures { return DemoGIFs.landing }
+        return try await rest.gifLanding()
+    }
+
+    func trendingGIFs() async throws -> [GIF] {
+        if LaunchOptions.current.usesDemoFixtures { return DemoGIFs.all }
+        return try await rest.trendingGIFs()
+    }
+
+    func searchGIFs(_ query: String) async throws -> [GIF] {
+        if LaunchOptions.current.usesDemoFixtures { return DemoGIFs.search(query) }
+        return try await rest.searchGIFs(query)
+    }
 }
 
 // MARK: - The server's own pages

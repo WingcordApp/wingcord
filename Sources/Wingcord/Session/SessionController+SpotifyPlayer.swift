@@ -125,7 +125,10 @@ extension SessionController {
         guard model.spotifyNowPlaying != current else { return }
         let before = model.spotifyActivity
         model.spotifyNowPlaying = current
-        if model.spotifyActivity != before { publishPresence() }
+        if model.spotifyActivity != before {
+            nowPlaying.reconsider()
+            publishPresence()
+        }
     }
 
     /// Discord asks for the devices and the player again (`655116`'s

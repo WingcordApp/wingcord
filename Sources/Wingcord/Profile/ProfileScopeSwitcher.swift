@@ -28,24 +28,19 @@ struct ProfileScopeSwitcher: View {
     private static let width: CGFloat = 280
 
     var body: some View {
+        // **Not `.fixedSize()`.** That asked the pill for its ideal width —
+        // the whole server name — and the rail's header, which has a collapse
+        // button beside it, centred the overflow and cut the pill's leading
+        // edge off (Alex's screenshot 17, "REA: Reverse Engin… ⌄"). Sized by
+        // the row instead, the name truncates inside the pill.
         Button { isOpen.toggle() } label: { trigger }
             .buttonStyle(.plain)
-            .fixedSize()
             .accessibilityLabel(Text("Profile"))
             .accessibilityValue(Text(current.title))
             // The system popover's own glass, untouched — see
             // `ServerTagChooser` for why clearing it and painting a SwiftUI
             // glass on the content renders an opaque slab instead.
             .popover(isPresented: $isOpen, arrowEdge: .bottom) { list }
-    }
-
-    /// The widest the name may draw inside the rail's own width.
-    ///
-    /// The rail, less the icon, the chevron, the gaps and the pill's own
-    /// padding — stated rather than measured, because every one of those is a
-    /// constant in this file or in `ProfileEditRail`.
-    private static var labelCap: CGFloat {
-        ProfileEditRail.width - (20 + Spacing.tight * 2 + 10 + 6 + 12 + Spacing.margin)
     }
 
     // MARK: The trigger
@@ -58,13 +53,8 @@ struct ProfileScopeSwitcher: View {
                 .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                // **A cap, because `.lineLimit(1)` alone does not truncate —
-                // it stops a second line and lets the first one run.** The pill
-                // is inside a 210-point rail and reported whatever the name
-                // measured, so a server called "Counter-Strike Discord | CSGO &
-                // CS2" drew a capsule wider than the rail, clipped at both ends,
-                // with the name running off each side.
-                .frame(maxWidth: Self.labelCap, alignment: .leading)
+                // Gives way first, so the icon and the chevron always show.
+                .layoutPriority(-1)
             Image(systemName: "chevron.down")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(InkColor.secondary)
@@ -74,6 +64,7 @@ struct ProfileScopeSwitcher: View {
         .padding(.leading, 6)
         .padding(.trailing, 12)
         .frame(height: 32)
+        .fixedSize(horizontal: false, vertical: true)
         // Layout first, glass last; `.clear` because it sits on the rail over
         // the card's own colours rather than over neutral chrome.
         .glassEffect(.clear.interactive(), in: .capsule)

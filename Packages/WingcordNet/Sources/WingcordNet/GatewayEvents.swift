@@ -145,6 +145,8 @@ struct GatewayFrame: Decodable, Sendable {
         case voiceServerUpdate(VoiceServerUpdateDTO)
         /// A soundboard press, or a reaction thrown into a voice channel.
         case voiceChannelEffect(VoiceChannelEffectDTO)
+        /// Somebody in the reader's call clipped a moment (Phase 7.3).
+        case clipsRemoteTrigger(ClipsRemoteTriggerDTO)
         /// The room's own label changed — set by anybody sitting in it.
         case voiceChannelStatusUpdate(VoiceChannelStatusDTO)
         /// The room's current session started, or ended.
@@ -346,6 +348,8 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .voiceServerUpdate(try decode(VoiceServerUpdateDTO.self))
         case "VOICE_CHANNEL_EFFECT_SEND":
             payload = .voiceChannelEffect(try decode(VoiceChannelEffectDTO.self))
+        case "CLIPS_REMOTE_TRIGGER":
+            payload = .clipsRemoteTrigger(try decode(ClipsRemoteTriggerDTO.self))
         case "VOICE_CHANNEL_STATUS_UPDATE":
             payload = .voiceChannelStatusUpdate(try decode(VoiceChannelStatusDTO.self))
         case "VOICE_CHANNEL_START_TIME_UPDATE":
@@ -378,6 +382,12 @@ struct NotificationSettingsDTO: Decodable, Sendable {
 struct ReadyPayload: Decodable, Sendable {
     var v: Int?
     var user: UserDTO
+    /// The account's experiments, its servers' rollouts and the apex system's
+    /// assignments — positional arrays, read by `ExperimentWire`. As
+    /// `JSONTree`, which decodes any shape, so none of them can cost READY.
+    var experiments: JSONTree?
+    var guild_experiments: JSONTree?
+    var apex_experiments: JSONTree?
     var session_id: String
     var resume_gateway_url: String?
     var guilds: [GuildDTO]?
@@ -658,6 +668,8 @@ struct TypingPayload: Decodable, Sendable {
     var guild_id: GuildID?
     var timestamp: Double?
     var member: MemberDTO?
+    /// The typer's custom indicator — on every one, null or absent for none.
+    var typing_indicator_style: TypingIndicatorStyleDTO?
 }
 
 /// `GUILD_MEMBER_ADD` and `GUILD_MEMBER_UPDATE`: a member object with the

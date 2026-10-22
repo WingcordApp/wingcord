@@ -558,9 +558,12 @@ struct ServerOptionsMenu: View {
     @ViewBuilder
     private func inviteLink(channelID: ChannelID) -> some View {
         let link = model.inviteLinks[channelID]
+        let hidden = StreamerMode.shared.hidesInviteLinks
         FlyoutRow(
-            title: link ?? "Making a link…",
-            subtitle: link == nil ? nil : "Expires in 30 days",
+            // Copying still copies the real link — the code is withheld from
+            // the screen, not from the reader.
+            title: link.map(StreamerMode.shared.inviteText) ?? "Making a link…",
+            subtitle: link == nil ? nil : (hidden ? StreamerMode.inviteNotice : "Expires in 30 days"),
             symbolName: "link",
             accessory: link == nil ? .busy : .none,
             isEnabled: link != nil

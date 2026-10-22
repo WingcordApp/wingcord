@@ -1,4 +1,5 @@
 import SwiftUI
+import WingcordCore
 
 // MARK: - Plumage
 //
@@ -43,7 +44,10 @@ import SwiftUI
 //     `PlumageShuffle`.
 
 struct PlumageCard: View {
+    @Environment(AppModel.self) private var model
     @State private var theme = ThemeStore.shared
+    /// The blend as it was when Share was pressed, on its way to the sheet.
+    @State private var shareRequest: ThemeShareRequest?
     @Environment(\.motion) private var motion
     /// True for as long as a pointer is on one of the continuous controls.
     /// Suppresses the settle animation so a bead cannot lag the pointer.
@@ -112,6 +116,13 @@ struct PlumageCard: View {
                             help: "A blend chosen from the combinations that work.",
                             turns: shuffles
                         ) { shuffle() }
+                        PlumageRoundButton(
+                            systemName: "square.and.arrow.up",
+                            label: "Share",
+                            help: "Sends this blend to conversations as Discord\u{2019}s theme card, "
+                                + "which anyone can preview — on Discord or here."
+                        ) { shareRequest = ThemeShareRequest(theme: SharedClientTheme(sharing: seed)) }
+                        .disabled(model.connectionState != .ready)
                     }
                 }
             }
@@ -130,6 +141,9 @@ struct PlumageCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(SettingsSurface.card)
         .clipShape(.settingsRect(SettingsMetrics.cardRadius))
+        .sheet(item: $shareRequest) { request in
+            ThemeShareSheet(theme: request.theme) { shareRequest = nil }
+        }
     }
 
     // MARK: Acting

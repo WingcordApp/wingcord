@@ -15,30 +15,74 @@ extension SessionController {
     /// `AppModel.publishedActivities`. Watching costs two `NSWorkspace`
     /// notifications and nothing at rest.
     func startGameDetection() {
+        registerManualGames()
         games.onChange = { [weak self] in
-            guard let self else { return }
-            let detected = games.runningGame
-            guard model.detectedGame != detected else { return }
-            model.detectedGame = detected
-            if let detected {
-                Self.trace(
-                    "game: \(detected.name)"
-                        + (detected.isTranslated ? " (translated)" : "")
-                        + (detected.isLauncher ? " (launcher)" : "")
-                )
-            } else {
-                Self.trace("game: none")
-            }
-            // Mirrored locally for the same reason an embedded activity is: the
-            // presence this client publishes never comes back, so a reader
-            // looking at their own card would see nothing.
-            model.reflectOwnPresenceNow()
-            publishPresence()
-            // The overlay comes up with the game, and the clip buffer arms with
-            // it. Both are idempotent.
-            model.refreshOverlay()
+            self?.applyRunningGame()
         }
         games.start()
+    }
+
+    /// Hands the detector the games added by hand.
+    ///
+    /// **It was never done.** They were saved, and only registered with the
+    /// detector at the moment they were added — so after a relaunch a game
+    /// added by hand was not detected at all. Ids from builds that derived
+    /// them from `hashValue` (seeded afresh each launch) are re-keyed to the
+    /// stable one on the way.
+    private func registerManualGames() {
+        let settings = AppSettings.shared
+        for entry in settings.manualGames
+        where entry.id != RegisteredGamesStore.manualID(forExecutableAt: entry.path) {
+            settings.addManualGame(
+                name: entry.name, path: entry.path,
+                id: ApplicationID(rawValue: RegisteredGamesStore.manualID(forExecutableAt: entry.path))
+            )
+        }
+        for entry in settings.manualGames {
+            games.addManualGame(
+                GameDetector.DetectedGameOverride(id: ApplicationID(rawValue: entry.id), name: entry.name),
+                forExecutableAt: entry.path
+            )
+        }
+        RegisteredGamesStore.shared.adopt(settings.manualGames)
+    }
+
+    /// Publishes what is running — unless the reader switched its detection
+    /// off in Registered Games, in which case nothing is.
+    ///
+    /// Called by the detector when the running game changes and by
+    /// Registered Games when a switch on it does.
+    func applyRunningGame() {
+        let running = games.runningGame
+        let store = RegisteredGamesStore.shared
+        // "Last played" moves when a game starts and again when it stops.
+        if let running { store.noteRunning(running) }
+        if let previous = model.detectedGame, previous.id != running?.id { store.noteRunning(previous) }
+        let detected = running.flatMap { store.games.isDetected($0.id.rawValue) ? $0 : nil }
+        guard model.detectedGame != detected else {
+            // A switch on the game that is up — the overlay or clips — still
+            // has to reach the overlay and the buffer.
+            model.refreshOverlay()
+            return
+        }
+        model.detectedGame = detected
+        if let detected {
+            Self.trace(
+                "game: \(detected.name)"
+                    + (detected.isTranslated ? " (translated)" : "")
+                    + (detected.isLauncher ? " (launcher)" : "")
+            )
+        } else {
+            Self.trace(running == nil ? "game: none" : "game: \(running!.name) (detection off)")
+        }
+        // Mirrored locally for the same reason an embedded activity is: the
+        // presence this client publishes never comes back, so a reader
+        // looking at their own card would see nothing.
+        model.reflectOwnPresenceNow()
+        publishPresence()
+        // The overlay comes up with the game, and the clip buffer arms with
+        // it. Both are idempotent.
+        model.refreshOverlay()
     }
 
     /// Stops watching, and retires the presence.
@@ -83,6 +127,8 @@ extension SessionController {
     }
 
     func writeSharesCurrentGame(_ shares: Bool, restoring previous: ActivityPrivacy) {
+        // Now Playing rides this switch: its reader stops with it at once.
+        nowPlaying.refresh()
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -98,6 +144,7 @@ extension SessionController {
             } catch {
                 Self.trace("share-activity write failed: \(Self.describe(error))")
                 model.activityPrivacy = previous
+                nowPlaying.refresh()
             }
         }
     }
@@ -143,6 +190,8 @@ extension SessionController {
     /// hide, and that is the worst shape a privacy setting can fail in.
     func gameSharingPreferenceChanged() {
         guard model.currentUserID != nil else { return }
+        // Now Playing rides the same switch, and its reader stops with it.
+        nowPlaying.refresh()
         model.reflectOwnPresenceNow()
         publishPresence()
     }

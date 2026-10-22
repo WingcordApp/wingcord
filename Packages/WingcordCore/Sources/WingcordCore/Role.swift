@@ -178,6 +178,9 @@ public struct Member: Hashable, Sendable, Codable {
     /// When Discord last flagged them for unusual DMs. Only a moderator is
     /// told; nil for everybody else.
     public var unusualDMActivityUntil: Date?
+    /// What they wear **in this server only** — a decoration, a nameplate, a
+    /// name style set on their per-server profile. Nil for nearly everyone.
+    public var cosmetics: MemberCosmetics?
 
     public init(
         userID: UserID,
@@ -189,7 +192,8 @@ public struct Member: Hashable, Sendable, Codable {
         communicationDisabledUntil: Date? = nil,
         isPending: Bool = false,
         flags: MemberFlags = [],
-        unusualDMActivityUntil: Date? = nil
+        unusualDMActivityUntil: Date? = nil,
+        cosmetics: MemberCosmetics? = nil
     ) {
         self.userID = userID
         self.nickname = nickname
@@ -201,6 +205,7 @@ public struct Member: Hashable, Sendable, Codable {
         self.isPending = isPending
         self.flags = flags
         self.unusualDMActivityUntil = unusualDMActivityUntil
+        self.cosmetics = cosmetics
     }
 
     public func isTimedOut(now: Date = .now) -> Bool {
@@ -286,5 +291,32 @@ public enum RoleResolver {
         in roles: [RoleID: Role]
     ) -> Role? {
         topRole(of: memberRoleIDs, in: roles) { $0.isHoisted }
+    }
+}
+
+/// What a member wears in one server, set on their per-server profile — the
+/// guild member object's `avatar_decoration_data`, `collectibles.nameplate`
+/// and `display_name_styles`. Each is nil where the account's own shows
+/// through.
+public struct MemberCosmetics: Hashable, Sendable, Codable {
+    public var avatarDecorationHash: String?
+    public var avatarDecorationSKU: String?
+    public var nameplate: Nameplate?
+    public var displayNameStyle: DisplayNameStyle?
+
+    public init(
+        avatarDecorationHash: String? = nil,
+        avatarDecorationSKU: String? = nil,
+        nameplate: Nameplate? = nil,
+        displayNameStyle: DisplayNameStyle? = nil
+    ) {
+        self.avatarDecorationHash = avatarDecorationHash
+        self.avatarDecorationSKU = avatarDecorationSKU
+        self.nameplate = nameplate
+        self.displayNameStyle = displayNameStyle
+    }
+
+    public var isEmpty: Bool {
+        avatarDecorationHash == nil && nameplate == nil && displayNameStyle == nil
     }
 }

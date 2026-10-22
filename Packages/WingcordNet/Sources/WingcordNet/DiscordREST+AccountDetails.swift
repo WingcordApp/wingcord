@@ -14,6 +14,8 @@ public struct CurrentAccount: Sendable {
     public var ageVerificationStatus: Int?
     /// Nil where the answer was not the reader's private object.
     public var verification: AccountVerification?
+    /// The custom typing indicator the account wears; nil for the plain one.
+    public var typingIndicatorStyle: TypingIndicatorStyle?
 }
 
 extension DiscordREST {

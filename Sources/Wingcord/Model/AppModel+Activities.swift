@@ -380,31 +380,7 @@ extension AppModel {
             // client's to know: nobody fetches the reader's own metadata.
             let session = activity.buttonURLs.isEmpty ? nil : "own-\(index)"
             if let session { activityButtonURLs[session] = activity.buttonURLs }
-            list.append(Activity(
-                kind: Activity.Kind(rawValue: activity.type),
-                name: activity.name,
-                state: activity.state,
-                details: activity.details,
-                applicationID: activity.applicationID,
-                largeImageKey: activity.assets?.largeImage,
-                smallImageKey: activity.assets?.smallImage,
-                largeText: activity.assets?.largeText,
-                smallText: activity.assets?.smallText,
-                largeImageURL: activity.assets?.largeURL,
-                smallImageURL: activity.assets?.smallURL,
-                startedAt: activity.timestamps?.start.map {
-                    Date(timeIntervalSince1970: Double($0) / 1000)
-                },
-                endsAt: activity.timestamps?.end.map {
-                    Date(timeIntervalSince1970: Double($0) / 1000)
-                },
-                partySize: activity.party?.size,
-                sessionID: session,
-                buttons: activity.buttons,
-                detailsURL: activity.detailsURL,
-                stateURL: activity.stateURL,
-                url: activity.url
-            ))
+            list.append(Activity(published: activity, sessionID: session))
         }
         presences[userID] = Presence(
             userID: userID,
@@ -604,5 +580,41 @@ extension AppModel {
         guard !unknown.isEmpty else { return }
         applicationsResolving.formUnion(unknown)
         sessionController.resolveApplications(Array(unknown))
+    }
+}
+
+// MARK: - A published activity, as the read side draws it
+
+extension Activity {
+    /// What this client publishes, as a card or a member list reads it — the
+    /// reader's own mirror and the Activity pane's preview both draw this.
+    init(published activity: RichPresenceActivity, sessionID: String?) {
+        self.init(
+            kind: Activity.Kind(rawValue: activity.type),
+            name: activity.name,
+            state: activity.state,
+            details: activity.details,
+            applicationID: activity.applicationID,
+            largeImageKey: activity.assets?.largeImage,
+            smallImageKey: activity.assets?.smallImage,
+            largeText: activity.assets?.largeText,
+            smallText: activity.assets?.smallText,
+            largeImageURL: activity.assets?.largeURL,
+            smallImageURL: activity.assets?.smallURL,
+            startedAt: activity.timestamps?.start.map {
+                Date(timeIntervalSince1970: Double($0) / 1000)
+            },
+            endsAt: activity.timestamps?.end.map {
+                Date(timeIntervalSince1970: Double($0) / 1000)
+            },
+            partySize: activity.party?.size,
+            sessionID: sessionID,
+            buttons: activity.buttons,
+            // The line a member list names it by — YouTube Music's song.
+            statusDisplay: activity.statusDisplayType.flatMap(Activity.StatusDisplay.init(rawValue:)),
+            detailsURL: activity.detailsURL,
+            stateURL: activity.stateURL,
+            url: activity.url
+        )
     }
 }

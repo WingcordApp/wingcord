@@ -33,9 +33,13 @@ struct ProfileEditCapability: Equatable {
     /// banner, bio and cosmetics. A perk of its own in Discord's table; the two
     /// happen to share a tier today.
     var customizesServerProfile: Bool
-    /// Whether this server grants `CHANGE_NICKNAME`. Meaningless in the account
-    /// scope, where there is no nickname.
+    /// Whether this server lets the reader rename themselves — `CHANGE_NICKNAME`
+    /// or `MANAGE_NICKNAMES`, either one. Meaningless in the account scope,
+    /// where there is no nickname.
     var canChangeNickname: Bool
+    /// Whether the profile being edited is a server's rather than the
+    /// account's.
+    var isServerScope = false
 
     // MARK: Account — `PATCH /users/@me/profile`
 
@@ -69,13 +73,31 @@ struct ProfileEditCapability: Equatable {
     var canEditGuildAvatar: Bool { customizesServerProfile }
     var canEditGuildCosmetics: Bool { customizesServerProfile }
 
-    /// What the rail's colour section is called, which is the reader-visible
-    /// half of `canEditThemeColors`.
-    var colourSectionTitle: String {
-        customizesProfile ? "Theme & Banner" : "Banner Colour"
-    }
+    // MARK: Whichever scope is open
+
+    /// **A server's profile without Nitro is a nickname and pronouns**, and
+    /// nothing else — Discord locks every other control there. This is the one
+    /// question the rail asks of each cosmetic in a server.
+    var cosmeticsLocked: Bool { isServerScope && !customizesServerProfile }
+
+    /// The bio, in whichever profile is open.
+    var canEditCurrentBio: Bool { isServerScope ? canEditGuildBio : canEditBio }
+    /// The banner picture — Nitro in either scope.
+    var canEditCurrentBanner: Bool { isServerScope ? customizesServerProfile : canEditBanner }
+    /// The two-colour theme — Nitro in either scope; the one free colour is
+    /// `canEditAccentColor`.
+    var canEditCurrentTheme: Bool { isServerScope ? customizesServerProfile : canEditThemeColors }
+    /// Effect and frame — Nitro in either scope.
+    var canEditCurrentEffect: Bool { isServerScope ? customizesServerProfile : canEditProfileEffect }
+    /// A moving avatar or banner — "If you wanna upload a fun animated avatar,
+    /// you should subscribe to Nitro" (Discord's own line).
+    var canUseAnimatedPictures: Bool { isServerScope ? customizesServerProfile : customizesProfile }
 
     /// The line shown against a control the account cannot use.
     static let nitroNote = "Nitro only."
+    /// Under a locked server profile.
+    static let serverProfileNote = "Without Nitro, a server profile is your nickname and pronouns."
+    /// Against a moving picture the account cannot wear.
+    static let animatedNote = "Moving pictures need Nitro. This one will be saved still."
     static let nicknameNote = "This server doesn't let you change your nickname."
 }

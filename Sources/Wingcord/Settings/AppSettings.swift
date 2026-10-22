@@ -185,6 +185,161 @@ final class AppSettings {
         }
     }
 
+    // MARK: Focus
+
+    /// What the status becomes while a macOS Focus asks for "Wingcord's Focus
+    /// status" — the value a Focus filter set to that choice applies. Local to
+    /// this Mac, as the Focus that drives it is.
+    var focusStatus: PresenceStatus = .doNotDisturb {
+        didSet {
+            guard focusStatus != oldValue else { return }
+            defaults.set(focusStatus.rawValue, forKey: Key.focusStatus)
+        }
+    }
+
+    /// The custom status worn alongside it, if any.
+    var focusCustomStatus: CustomStatus? {
+        didSet {
+            guard focusCustomStatus != oldValue else { return }
+            defaults.set(try? JSONEncoder().encode(focusCustomStatus), forKey: Key.focusCustomStatus)
+        }
+    }
+
+    /// Whether the end of a Focus puts back what it changed.
+    var focusRestores = true {
+        didSet {
+            guard focusRestores != oldValue else { return }
+            defaults.set(focusRestores, forKey: Key.focusRestores)
+        }
+    }
+
+    // MARK: Now Playing
+
+    /// Whether what macOS says is playing is shared — "Listening to Apple
+    /// Music", "Watching YouTube" (docs/CLIPS-PRESENCE.md, D4–D7). It rides
+    /// "Share my activity" as well.
+    ///
+    /// **Off until the reader turns it on**: an update must not start telling
+    /// everyone what they watch.
+    var sharesNowPlaying = false {
+        didSet {
+            guard sharesNowPlaying != oldValue else { return }
+            defaults.set(sharesNowPlaying, forKey: Key.sharesNowPlaying)
+        }
+    }
+
+    /// Each player's own switch, by `MediaPlayer.id`, where the reader set one;
+    /// a player missing here takes its catalogue default.
+    var nowPlayingPlayers: [String: Bool] = [:] {
+        didSet {
+            guard nowPlayingPlayers != oldValue else { return }
+            defaults.set(nowPlayingPlayers, forKey: Key.nowPlayingPlayers)
+        }
+    }
+
+    var nowPlayingShowsWhilePaused = false {
+        didSet {
+            guard nowPlayingShowsWhilePaused != oldValue else { return }
+            defaults.set(nowPlayingShowsWhilePaused, forKey: Key.nowPlayingShowsWhilePaused)
+        }
+    }
+
+    /// A YouTube video's own thumbnail as the picture, rather than YouTube's logo.
+    var nowPlayingShowsThumbnails = true {
+        didSet {
+            guard nowPlayingShowsThumbnails != oldValue else { return }
+            defaults.set(nowPlayingShowsThumbnails, forKey: Key.nowPlayingShowsThumbnails)
+        }
+    }
+
+    /// Watch Video, View Channel, Listen Along.
+    var nowPlayingShowsButtons = true {
+        didSet {
+            guard nowPlayingShowsButtons != oldValue else { return }
+            defaults.set(nowPlayingShowsButtons, forKey: Key.nowPlayingShowsButtons)
+        }
+    }
+
+    /// "by <artist>" rather than the bare name.
+    var nowPlayingPrefixesBy = true {
+        didSet {
+            guard nowPlayingPrefixesBy != oldValue else { return }
+            defaults.set(nowPlayingPrefixesBy, forKey: Key.nowPlayingPrefixesBy)
+        }
+    }
+
+    /// Which line a member list shows.
+    var nowPlayingMemberListLine: MediaPresenceLine = .automatic {
+        didSet {
+            guard nowPlayingMemberListLine != oldValue else { return }
+            defaults.set(nowPlayingMemberListLine.rawValue, forKey: Key.nowPlayingMemberListLine)
+        }
+    }
+
+    /// Words that keep a title, channel or artist off the presence.
+    var nowPlayingExcludedWords: [String] = [] {
+        didSet {
+            guard nowPlayingExcludedWords != oldValue else { return }
+            defaults.set(nowPlayingExcludedWords, forKey: Key.nowPlayingExcludedWords)
+        }
+    }
+
+    /// Whether a song's cover is looked up — iTunes Search is asked for the
+    /// artist and the title.
+    var nowPlayingFindsCovers = true {
+        didSet {
+            guard nowPlayingFindsCovers != oldValue else { return }
+            defaults.set(nowPlayingFindsCovers, forKey: Key.nowPlayingFindsCovers)
+        }
+    }
+
+    /// Apps on the local RPC socket whose activity is never shared, by
+    /// application id — with the name each went by, so the pane can list one
+    /// that is not running.
+    var blockedRPCApplications: [String: String] = [:] {
+        didSet {
+            guard blockedRPCApplications != oldValue else { return }
+            defaults.set(blockedRPCApplications, forKey: Key.blockedRPCApplications)
+        }
+    }
+
+    // MARK: Previews
+
+    /// Others' custom typing indicators — their emoji and their word — drawn,
+    /// as Discord's phone apps draw them and its desktop app does not yet.
+    var drawsCustomTypingIndicators = true {
+        didSet {
+            guard drawsCustomTypingIndicators != oldValue else { return }
+            defaults.set(drawsCustomTypingIndicators, forKey: Key.drawsCustomTypingIndicators)
+        }
+    }
+
+    /// Which card a voice invite gets: Discord's, or its channel-row variant —
+    /// as Discord's experiment puts each server, or always one of them.
+    var voiceInviteCardStyle: VoiceInviteCardStyle = .asDiscordDecides {
+        didSet {
+            guard voiceInviteCardStyle != oldValue else { return }
+            defaults.set(voiceInviteCardStyle.rawValue, forKey: Key.voiceInviteCardStyle)
+        }
+    }
+
+    /// Whether one player's media is shared.
+    func sharesNowPlaying(from player: MediaPlayer) -> Bool {
+        nowPlayingPlayers[player.id] ?? player.isOnByDefault
+    }
+
+    /// The presence's options, as the settings stand.
+    var nowPlayingOptions: MediaPresenceOptions {
+        MediaPresenceOptions(
+            showsWhilePaused: nowPlayingShowsWhilePaused,
+            showsYouTubeThumbnails: nowPlayingShowsThumbnails,
+            showsButtons: nowPlayingShowsButtons,
+            prefixesBy: nowPlayingPrefixesBy,
+            memberListLine: nowPlayingMemberListLine,
+            excludedWords: nowPlayingExcludedWords
+        )
+    }
+
     // MARK: The Rich Presence builder
 
     /// The presences the reader made in the full profile's Activity tab
@@ -313,7 +468,7 @@ final class AppSettings {
         didSet { defaults.set(clipsEnabled, forKey: Key.clipsEnabled) }
     }
 
-    var clipLength: ClipLength = .fifteenSeconds {
+    var clipLength: ClipLength = .thirtySeconds {
         didSet { defaults.set(clipLength.rawValue, forKey: Key.clipLength) }
     }
 
@@ -334,6 +489,26 @@ final class AppSettings {
     /// Whether the overlay says so after a clip is taken.
     var clipsShowsFeedback = true {
         didSet { defaults.set(clipsShowsFeedback, forKey: Key.clipsFeedback) }
+    }
+
+    /// Discord's Auto Clips: moments kept without the key, waiting in the
+    /// library to be kept or thrown away (docs/CLIPS-PRESENCE.md, Phase 7.2).
+    ///
+    /// **Off by default.** It listens to the call — on this Mac, through
+    /// Apple's own classifier, and only to what a clip may keep — and that is
+    /// not something to start on somebody's behalf.
+    var autoClipsEnabled = false {
+        didSet { defaults.set(autoClipsEnabled, forKey: Key.autoClips) }
+    }
+
+    /// Whether laughter and shouting count — Discord's emotion signal.
+    var autoClipsHearsReactions = true {
+        didSet { defaults.set(autoClipsHearsReactions, forKey: Key.autoClipsReactions) }
+    }
+
+    /// Whether the game's own events count.
+    var autoClipsHearsGameEvents = true {
+        didSet { defaults.set(autoClipsHearsGameEvents, forKey: Key.autoClipsGameEvents) }
     }
 
     /// The shortcut that brings Wingcord forward from anywhere on the machine.
@@ -1320,13 +1495,16 @@ final class AppSettings {
             min(max(defaults.object(forKey: Key.overlayVoiceLimit) as? Int ?? 8, 1), 20)
         clipsEnabled = defaults.object(forKey: Key.clipsEnabled) as? Bool ?? false
         clipLength = (defaults.string(forKey: Key.clipLength))
-            .flatMap(ClipLength.init(rawValue:)) ?? .fifteenSeconds
+            .flatMap(ClipLength.init(rawValue:)) ?? .thirtySeconds
         clipResolution = (defaults.string(forKey: Key.clipResolution))
             .flatMap(ClipResolution.init(rawValue:)) ?? .p1080
         clipFrameRate = (defaults.string(forKey: Key.clipFrameRate))
             .flatMap(ClipFrameRate.init(rawValue:)) ?? .fps60
         clipsFolder = (defaults.string(forKey: Key.clipsFolder)).map { URL(fileURLWithPath: $0) }
         clipsShowsFeedback = defaults.object(forKey: Key.clipsFeedback) as? Bool ?? true
+        autoClipsEnabled = defaults.object(forKey: Key.autoClips) as? Bool ?? false
+        autoClipsHearsReactions = defaults.object(forKey: Key.autoClipsReactions) as? Bool ?? true
+        autoClipsHearsGameEvents = defaults.object(forKey: Key.autoClipsGameEvents) as? Bool ?? true
         manualGames = (defaults.data(forKey: Key.manualGames))
             .flatMap { try? JSONDecoder().decode([ManualGame].self, from: $0) } ?? []
         var table: [GlobalAction: Hotkey?] = [:]
@@ -1461,6 +1639,25 @@ final class AppSettings {
         silentTypingShowsIcon = defaults.object(forKey: Key.silentTypingShowsIcon) as? Bool ?? false
         silentTypingInContextMenu = defaults.object(forKey: Key.silentTypingInContextMenu) as? Bool ?? true
         silentTypingIsOn = defaults.object(forKey: Key.silentTypingIsOn) as? Bool ?? true
+        focusStatus = defaults.string(forKey: Key.focusStatus)
+            .flatMap(PresenceStatus.init(rawValue:)) ?? .doNotDisturb
+        focusCustomStatus = defaults.data(forKey: Key.focusCustomStatus)
+            .flatMap { try? JSONDecoder().decode(CustomStatus.self, from: $0) }
+        focusRestores = defaults.object(forKey: Key.focusRestores) as? Bool ?? true
+        sharesNowPlaying = defaults.object(forKey: Key.sharesNowPlaying) as? Bool ?? false
+        nowPlayingPlayers = defaults.dictionary(forKey: Key.nowPlayingPlayers) as? [String: Bool] ?? [:]
+        nowPlayingShowsWhilePaused = defaults.object(forKey: Key.nowPlayingShowsWhilePaused) as? Bool ?? false
+        nowPlayingShowsThumbnails = defaults.object(forKey: Key.nowPlayingShowsThumbnails) as? Bool ?? true
+        nowPlayingShowsButtons = defaults.object(forKey: Key.nowPlayingShowsButtons) as? Bool ?? true
+        nowPlayingPrefixesBy = defaults.object(forKey: Key.nowPlayingPrefixesBy) as? Bool ?? true
+        nowPlayingMemberListLine = defaults.string(forKey: Key.nowPlayingMemberListLine)
+            .flatMap(MediaPresenceLine.init(rawValue:)) ?? .automatic
+        nowPlayingExcludedWords = defaults.stringArray(forKey: Key.nowPlayingExcludedWords) ?? []
+        nowPlayingFindsCovers = defaults.object(forKey: Key.nowPlayingFindsCovers) as? Bool ?? true
+        blockedRPCApplications = defaults.dictionary(forKey: Key.blockedRPCApplications) as? [String: String] ?? [:]
+        drawsCustomTypingIndicators = defaults.object(forKey: Key.drawsCustomTypingIndicators) as? Bool ?? true
+        voiceInviteCardStyle = defaults.string(forKey: Key.voiceInviteCardStyle)
+            .flatMap(VoiceInviteCardStyle.init(rawValue:)) ?? .asDiscordDecides
         customPresences = defaults.data(forKey: Key.customPresences)
             .flatMap { try? JSONDecoder().decode([CustomPresence].self, from: $0) } ?? []
         lastCustomPresenceID = defaults.string(forKey: Key.lastCustomPresence).flatMap(UUID.init(uuidString:))
@@ -1544,6 +1741,9 @@ final class AppSettings {
         static let clipFrameRate = "clips.frameRate"
         static let clipsFolder = "clips.folder"
         static let clipsFeedback = "clips.feedback"
+        static let autoClips = "clips.auto"
+        static let autoClipsReactions = "clips.autoReactions"
+        static let autoClipsGameEvents = "clips.autoGameEvents"
         static let manualGames = "activity.manualGames"
         /// Where the window's binding lived before the table. Read once, for
         /// migration, and never written again.
@@ -1636,6 +1836,21 @@ final class AppSettings {
         static let anonymisingMethod = "anonymiseFileNames.method"
         static let randomisedLength = "anonymiseFileNames.randomisedLength"
         static let consistentFileName = "anonymiseFileNames.consistent"
+        static let focusStatus = "focus.status"
+        static let focusCustomStatus = "focus.customStatus"
+        static let focusRestores = "focus.restores"
+        static let sharesNowPlaying = "nowPlaying.enabled"
+        static let nowPlayingPlayers = "nowPlaying.players"
+        static let nowPlayingShowsWhilePaused = "nowPlaying.showsWhilePaused"
+        static let nowPlayingShowsThumbnails = "nowPlaying.showsThumbnails"
+        static let nowPlayingShowsButtons = "nowPlaying.showsButtons"
+        static let nowPlayingPrefixesBy = "nowPlaying.prefixesBy"
+        static let nowPlayingMemberListLine = "nowPlaying.memberListLine"
+        static let nowPlayingExcludedWords = "nowPlaying.excludedWords"
+        static let nowPlayingFindsCovers = "nowPlaying.findsCovers"
+        static let blockedRPCApplications = "activity.blockedRPCApplications"
+        static let drawsCustomTypingIndicators = "previews.customTypingIndicators"
+        static let voiceInviteCardStyle = "previews.voiceInviteCardStyle"
         static let silentTyping = "silentTyping.enabled"
         static let silentTypingShowsIcon = "silentTyping.showIcon"
         static let silentTypingInContextMenu = "silentTyping.contextMenu"

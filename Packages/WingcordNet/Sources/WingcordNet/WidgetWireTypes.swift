@@ -22,6 +22,39 @@ struct ProfileWidgetDTO: Decodable, Sendable {
         /// field list — see `PersonalWidget`.
         var header: String?
         var sections: [SectionDTO]?
+        /// A clips gallery's clips. See `ProfileClip`.
+        var clips: [ClipDTO]?
+    }
+
+    /// One clip of a clips gallery, as the profile route returns it.
+    struct ClipDTO: Decodable, Sendable {
+        var id: String?
+        var file_id: String?
+        var game_id: ApplicationID?
+        var title: String?
+        var tags: [String]?
+        var local_clip_id: String?
+        var video_url: URL?
+        var thumbnail_url: URL?
+        var spritesheet_image_url: URL?
+        var spritesheet_vtt_url: URL?
+
+        /// Dropped without an id and a file — Discord's store drops it too: a
+        /// clip with neither has nothing to play.
+        var domain: ProfileClip? {
+            guard let id, let file_id else { return nil }
+            return ProfileClip(
+                storage: .saved(id: id, fileID: file_id),
+                gameID: game_id,
+                title: title,
+                tags: tags ?? [],
+                localClipID: local_clip_id,
+                videoURL: video_url,
+                thumbnailURL: thumbnail_url,
+                spritesheetImageURL: spritesheet_image_url,
+                spritesheetVTTURL: spritesheet_vtt_url
+            )
+        }
     }
 
     /// One section of a personal widget.
@@ -118,6 +151,8 @@ struct ProfileWidgetDTO: Decodable, Sendable {
                     }
                 )
             )
+        case .clipsGallery:
+            content = .clipsGallery((data?.clips ?? []).compactMap(\.domain))
         case nil:
             content = .unknown(type)
         }
@@ -162,6 +197,20 @@ public struct ProfileWidgetWrite: Encodable, Sendable {
         var application_id: String?
         var header: String?
         var sections: [Section]?
+        var clips: [Clip]? = nil
+    }
+
+    /// One clip of a gallery on the way out — Discord's `l` in `646976`: a kept
+    /// clip names its `id` and `file_id`, a new one the `upload_filename` the
+    /// clip route answered with.
+    public struct Clip: Encodable, Sendable {
+        var id: String?
+        var file_id: String?
+        var upload_filename: String?
+        var game_id: String?
+        var title: String?
+        var tags: [String]?
+        var local_clip_id: String?
     }
 
     /// **Rebuilt on the way out, never carried.** The domain keeps a cover and a
@@ -261,6 +310,38 @@ public struct ProfileWidgetWrite: Encodable, Sendable {
             application_id: nil,
             header: personal.header,
             sections: sections
+        )
+    }
+
+    /// A clips gallery: at most four, each kept or newly uploaded.
+    public init(id: String? = nil, clips: [ProfileClip]) {
+        self.id = id
+        data = Payload(
+            type: ProfileWidgetKind.clipsGallery.rawValue,
+            games: nil,
+            application_id: nil,
+            header: nil,
+            sections: nil,
+            // A clip still on this Mac has nothing to name yet — the editor
+            // uploads it first (`ProfileClip.Storage.local`).
+            clips: clips.filter { $0.localFile == nil }.prefix(ProfileClip.limit).map { clip in
+                var write = Clip(
+                    game_id: clip.gameID.map { String($0.rawValue) },
+                    title: clip.title,
+                    tags: clip.tags.isEmpty ? nil : clip.tags,
+                    local_clip_id: clip.localClipID
+                )
+                switch clip.storage {
+                case .saved(let id, let fileID):
+                    write.id = id
+                    write.file_id = fileID
+                case .staged(let filename):
+                    write.upload_filename = filename
+                case .local:
+                    break
+                }
+                return write
+            }
         )
     }
 

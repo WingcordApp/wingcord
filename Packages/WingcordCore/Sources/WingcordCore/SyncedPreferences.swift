@@ -21,19 +21,26 @@ public struct SyncedPreferences: Hashable, Sendable {
     /// The account's theme — what "Sync theme across my devices" keeps in
     /// step. Nil until the account's settings have said.
     public var accountTheme: AccountTheme?
+    /// "Allow my voice to be recorded in Clips" — `clips.allow_voice_recording`.
+    /// What other people's clients read before keeping this account's voice
+    /// in their clips (it travels as the voice state's `ALLOW_VOICE_RECORDING`
+    /// flag). Discord's `?.value ?? true`: on until switched off.
+    public var allowsVoiceRecordingInClips: Bool
 
     public init(
         opensThreadsInSplitView: Bool = true,
         skipsIgnoredProfileWarning: Bool = false,
         soundboardVolume: Float = 100,
         alwaysPreviewsVideo: Bool = false,
-        accountTheme: AccountTheme? = nil
+        accountTheme: AccountTheme? = nil,
+        allowsVoiceRecordingInClips: Bool = true
     ) {
         self.opensThreadsInSplitView = opensThreadsInSplitView
         self.skipsIgnoredProfileWarning = skipsIgnoredProfileWarning
         self.soundboardVolume = soundboardVolume
         self.alwaysPreviewsVideo = alwaysPreviewsVideo
         self.accountTheme = accountTheme
+        self.allowsVoiceRecordingInClips = allowsVoiceRecordingInClips
     }
 
     /// What one settings blob says about them. **Nil where the blob does not
@@ -46,19 +53,22 @@ public struct SyncedPreferences: Hashable, Sendable {
         public var soundboardVolume: Float?
         public var alwaysPreviewsVideo: Bool?
         public var accountTheme: AccountTheme?
+        public var allowsVoiceRecordingInClips: Bool?
 
         public init(
             opensThreadsInSplitView: Bool? = nil,
             skipsIgnoredProfileWarning: Bool? = nil,
             soundboardVolume: Float? = nil,
             alwaysPreviewsVideo: Bool? = nil,
-            accountTheme: AccountTheme? = nil
+            accountTheme: AccountTheme? = nil,
+            allowsVoiceRecordingInClips: Bool? = nil
         ) {
             self.opensThreadsInSplitView = opensThreadsInSplitView
             self.skipsIgnoredProfileWarning = skipsIgnoredProfileWarning
             self.soundboardVolume = soundboardVolume
             self.alwaysPreviewsVideo = alwaysPreviewsVideo
             self.accountTheme = accountTheme
+            self.allowsVoiceRecordingInClips = allowsVoiceRecordingInClips
         }
     }
 
@@ -68,6 +78,7 @@ public struct SyncedPreferences: Hashable, Sendable {
         if let value = delta.soundboardVolume { soundboardVolume = value }
         if let value = delta.alwaysPreviewsVideo { alwaysPreviewsVideo = value }
         if let value = delta.accountTheme { accountTheme = value }
+        if let value = delta.allowsVoiceRecordingInClips { allowsVoiceRecordingInClips = value }
     }
 }
 

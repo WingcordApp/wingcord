@@ -37,6 +37,8 @@ struct UserDTO: Decodable, Sendable {
     var avatar_decoration_data: AvatarDecorationDTO?
     var collectibles: CollectiblesDTO?
     var display_name_styles: DisplayNameStylesDTO?
+    /// The account's custom typing indicator — on its own user object.
+    var typing_indicator_style: TypingIndicatorStyleDTO?
     var primary_guild: PrimaryGuildDTO?
     /// Which Nitro the account carries. On the reader's own object — READY's
     /// `user`, `/users/@me`, `USER_UPDATE` — and read from there into
@@ -59,7 +61,8 @@ struct UserDTO: Decodable, Sendable {
             user: domain,
             premiumType: premium_type,
             ageVerificationStatus: age_verification_status,
-            verification: accountVerification
+            verification: accountVerification,
+            typingIndicatorStyle: typing_indicator_style.map(\.domain).flatMap { $0.isPlain ? nil : $0 }
         )
     }
 
@@ -266,9 +269,20 @@ struct MemberDTO: Decodable, Sendable {
     /// `GuildMemberFlags` — see `MemberFlags`.
     var flags: Int?
     var unusual_dm_activity_until: Date?
+    /// The per-server profile's own cosmetics, on the member object as on a
+    /// user — see `MemberCosmetics`.
+    var avatar_decoration_data: AvatarDecorationDTO?
+    var collectibles: CollectiblesDTO?
+    var display_name_styles: DisplayNameStylesDTO?
 
     func domain(userID: UserID) -> Member {
-        Member(
+        let cosmetics = MemberCosmetics(
+            avatarDecorationHash: avatar_decoration_data?.asset,
+            avatarDecorationSKU: avatar_decoration_data?.sku_id,
+            nameplate: collectibles?.nameplate?.domain,
+            displayNameStyle: display_name_styles?.domain
+        )
+        return Member(
             userID: userID,
             nickname: nick,
             avatarHash: avatar,
@@ -278,7 +292,8 @@ struct MemberDTO: Decodable, Sendable {
             communicationDisabledUntil: communication_disabled_until,
             isPending: pending ?? false,
             flags: MemberFlags(rawValue: flags ?? 0),
-            unusualDMActivityUntil: unusual_dm_activity_until
+            unusualDMActivityUntil: unusual_dm_activity_until,
+            cosmetics: cosmetics.isEmpty ? nil : cosmetics
         )
     }
 }
@@ -939,10 +954,71 @@ struct AttachmentDTO: Decodable, Sendable {
     var flags: Int?
     var placeholder: String?
     var placeholder_version: Int?
+    // A clip's fields (docs/CLIPS-PRESENCE.md, Phase 4.1) — what Discord's
+    // player reads off a shared clip.
+    var is_clip: Bool?
+    var title: String?
+    var application: ClipApplicationDTO?
+    var application_id: ApplicationID?
+    /// A string, read here: a shape this cannot read costs the date, never
+    /// the message.
+    var clip_created_at: String?
+    var clip_participants: [LenientUser]?
+    var clip_events_timeline: [LenientTimelineEvent]?
+    var clip_remote_id: String?
+
+    /// One participant, or nothing for an object that will not read.
+    struct LenientUser: Decodable, Sendable {
+        var user: UserDTO?
+
+        init(from decoder: any Decoder) throws {
+            user = try? UserDTO(from: decoder)
+        }
+    }
+
+    struct ClipApplicationDTO: Decodable, Sendable {
+        var id: ApplicationID?
+        var name: String?
+    }
+
+    /// One timeline entry, or nothing for a kind this build does not know —
+    /// a new kind costs that entry, never the clip.
+    struct LenientTimelineEvent: Decodable, Sendable {
+        var event: ClipTimelineEvent?
+
+        init(from decoder: any Decoder) throws {
+            event = try? ClipTimelineEvent(from: decoder)
+        }
+    }
 
     /// `IS_ANIMATED` in an attachment's `flags` — web `d4c7976eccf337f1`'s
     /// attachment flag enum; captured on both GIF attachments in the HARs.
     static let isAnimatedFlag = 1 << 5
+    /// `HAS_TIMELINE_COMMENTS` — somebody has replied at a moment of the clip
+    /// (web build 641803).
+    static let hasTimelineCommentsFlag = 1 << 8
+    /// `IS_CLIP` — what Discord's own client reads a clip by (module 650019's
+    /// `isClip`); `is_clip` is only what a send writes.
+    static let isClipFlag = 1 << 0
+
+    /// The clip half, when this attachment is one.
+    var clip: AttachmentClip? {
+        let isClip = is_clip == true || (flags ?? 0) & Self.isClipFlag != 0
+            || clip_created_at != nil || clip_participants != nil || clip_events_timeline != nil
+        guard isClip else { return nil }
+        return AttachmentClip(
+            title: title,
+            applicationID: (application?.id ?? application_id)?.rawValue,
+            applicationName: application?.name,
+            createdAt: clip_created_at.flatMap {
+                ISO8601DateFormatter.withFraction.date(from: $0) ?? ISO8601DateFormatter.plain.date(from: $0)
+            },
+            participants: clip_participants?.compactMap { $0.user?.domain } ?? [],
+            timeline: clip_events_timeline?.compactMap(\.event) ?? [],
+            remoteID: clip_remote_id,
+            hasTimelineComments: (flags ?? 0) & Self.hasTimelineCommentsFlag != 0
+        )
+    }
 
     var domain: Attachment {
         Attachment(
@@ -958,7 +1034,8 @@ struct AttachmentDTO: Decodable, Sendable {
             waveform: waveform,
             durationSeconds: duration_secs,
             isMarkedAnimated: (flags ?? 0) & Self.isAnimatedFlag != 0,
-            placeholder: MediaPlaceholder.accepted(placeholder, version: placeholder_version)
+            placeholder: MediaPlaceholder.accepted(placeholder, version: placeholder_version),
+            clip: clip
         )
     }
 }
@@ -1196,6 +1273,11 @@ struct MessageDTO: Decodable, Sendable {
     var sticker_items: [StickerDTO]?
     var components: [ComponentDTO]?
     var poll: PollDTO?
+    /// A custom theme shared into the conversation — Discord's theme card.
+    var shared_client_theme: SharedClientThemeDTO?
+    /// A timeline comment's moment — `{attachment_id, timestamp}`, plus the
+    /// `message_id` Discord's own list adds.
+    var media_mention: MediaMentionDTO?
     var mentions: [UserDTO]?
     var mention_roles: [RoleID]?
     var mention_everyone: Bool?
@@ -1368,7 +1450,9 @@ struct MessageDTO: Decodable, Sendable {
             listenAlong: activity?.listenAlong,
             interaction: messageInteraction,
             applicationID: application_id,
-            thread: thread.map(\.threadSummary)
+            thread: thread.map(\.threadSummary),
+            sharedTheme: shared_client_theme?.domain,
+            mediaMention: media_mention?.domain
         )
         return Message(
             id: id,
@@ -1877,9 +1961,10 @@ struct UserProfileDTO: Decodable, Sendable {
     /// One worn collectible: which product, and which kind it is.
     ///
     /// Discord's type enum: `0` avatar decoration, `1` profile effect, `2`
-    /// nameplate, `3` profile frame. Only the frame is read from here — the
+    /// nameplate, `3` profile frame. Only the frame is *drawn* from here — the
     /// other three arrive by routes this client already has, and taking the
-    /// effect from both places would be two answers that can disagree.
+    /// effect from both places would be two answers that can disagree. The
+    /// whole list is kept as well, for the save (`wornCollectibles`).
     struct CollectibleRef: Decodable, Sendable {
         var sku_id: String?
         var type: Int?
@@ -1966,6 +2051,14 @@ struct UserProfileDTO: Decodable, Sendable {
                 .first { $0.type == CollectibleRef.profileFrame }?
                 .sku_id
         }
+        // **This layer's own list, with no fallback** — a server's save sends
+        // the server's list back, never the account's. See
+        // `UserDecoration.wornCollectibles`.
+        let ownLayer = withGuildLayer ? guild_member_profile : user_profile
+        let worn: [WornCollectible]? = ownLayer?.collectibles?.compactMap { entry in
+            guard let sku = entry.sku_id, let type = entry.type else { return nil }
+            return WornCollectible(skuID: sku, type: type)
+        }
 
         let decoration = UserDecoration(
             avatarDecorationHash: base.decoration?.avatarDecorationHash,
@@ -1983,6 +2076,7 @@ struct UserProfileDTO: Decodable, Sendable {
             badges: badges?.compactMap(\.domain) ?? [],
             profileEffectSKU: effectSKU,
             profileFrameSKU: frameSKU,
+            wornCollectibles: worn,
             pronouns: pick(\.pronouns).flatMap { $0.isEmpty ? nil : $0 },
             connectedAccounts: connected_accounts?.compactMap(\.domain) ?? [],
             premiumTier: premium_type.flatMap { PremiumTier(rawValue: $0) } ?? .none,
@@ -2852,5 +2946,25 @@ struct MessageActivityDTO: Decodable, Sendable {
     var listenAlong: ListenAlongInvite? {
         guard type == 3, let party_id, SpotifyListening.isSpotifyParty(party_id) else { return nil }
         return ListenAlongInvite(partyID: party_id, name: name_override ?? "Spotify", iconKey: icon_override)
+    }
+}
+
+/// `media_mention` as a message carries it and a send writes it.
+///
+/// A received one also names `message_id`: the reply's own id, which is the id
+/// its copy in the clip's media thread is filed under (Discord's store, web
+/// build 641803) — never written by a send.
+struct MediaMentionDTO: Codable, Sendable {
+    var attachment_id: String
+    var timestamp: Int?
+    var message_id: String?
+
+    init(_ mention: MediaMention) {
+        attachment_id = String(mention.attachmentID.rawValue)
+        timestamp = mention.timestampMS
+    }
+
+    var domain: MediaMention? {
+        UInt64(attachment_id).map { MediaMention(attachmentID: AttachmentID(rawValue: $0), timestampMS: timestamp ?? 0) }
     }
 }

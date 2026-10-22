@@ -13,6 +13,11 @@ import WingcordVoice
 // deafened. Leave is red at all times. That is Alex's design (references 09 and
 // 10 in `docs/references/2026-10-05`), and it shows at a glance which of the
 // switches are thrown.
+//
+// **Every control is Liquid Glass** (Alex, 2026-10-22): `.regular` and
+// interactive at rest, the same material as the bar or card it sits on; tinted
+// light when switched on, so the state's colour still reads; Leave is red
+// glass, as the capture bar's Record is.
 
 /// One of the call's controls.
 struct CallButton: View {
@@ -134,30 +139,17 @@ private enum CallButtonLook {
         return isActive ? stateColor(kind) : InkColor.primary
     }
 
-    static func fill(_ kind: CallButton.Kind, isActive: Bool, isHovering: Bool) -> Color {
-        if kind == .leave { return isHovering ? Palette.destructive.opacity(0.85) : Palette.destructive }
-        if isActive { return activeFill }
-        return isHovering ? hoveredFill : Palette.edge
+    /// The control's glass. Interactive throughout, so the pointer and a press
+    /// are answered by the material itself rather than by a fill that changes.
+    static func glass(_ kind: CallButton.Kind, isActive: Bool) -> Glass {
+        if kind == .leave { return .regular.tint(Palette.destructive).interactive() }
+        if isActive { return .regular.tint(activeTint).interactive() }
+        return .regular.interactive()
     }
 
-    /// A switched-on control: near-white in a dark room, white with its
-    /// hairline in a light one, so the state's colour reads on it either way.
-    static let activeFill = Color.adaptive(dark: NSColor(white: 0.9, alpha: 1), light: .white)
-    /// A control at rest under the pointer: a step lighter than at rest.
-    static let hoveredFill = Color.relative(dark: 0.15, light: 0.16)
-}
-
-/// The fill and its hairline. Leave's red is its own edge.
-private struct CallButtonPlate<S: InsettableShape>: View {
-    var shape: S
-    var kind: CallButton.Kind
-    var fill: Color
-
-    var body: some View {
-        shape.fill(fill).overlay {
-            if kind != .leave { shape.strokeBorder(Palette.edge) }
-        }
-    }
+    /// A switched-on control: near-white glass in a dark room, white in a
+    /// light one, so the state's colour reads on it either way.
+    static let activeTint = Color.adaptive(dark: NSColor(white: 0.92, alpha: 1), light: .white)
 }
 
 // MARK: - The plain control
@@ -170,7 +162,6 @@ private struct CallButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         CallButtonBody(
             label: configuration.label,
-            isPressed: configuration.isPressed,
             kind: kind,
             isActive: isActive,
             form: form
@@ -180,34 +171,23 @@ private struct CallButtonStyle: ButtonStyle {
 
 private struct CallButtonBody<Content: View>: View {
     var label: Content
-    var isPressed: Bool
     var kind: CallButton.Kind
     var isActive: Bool
     var form: CallButton.Form
 
-    @Environment(\.motion) private var motion
-    @State private var isHovering = false
 
     var body: some View {
-        let fill = CallButtonLook.fill(kind, isActive: isActive, isHovering: isHovering)
+        let shape = form == .round ? AnyShape(Circle()) : AnyShape(Capsule())
+        // **No animation of its own, and no press shrink.** The interactive
+        // glass answers the press itself; a scale on top of it fought it, and
+        // an animated swap of the glass's tint made every mute and deafen land
+        // late (Alex, 2026-10-22: "they lag"). The state changes at once.
         label
             .foregroundStyle(CallButtonLook.ink(kind, isActive: isActive))
             .modifier(CallButtonFrame(form: form))
-            .background {
-                switch form {
-                case .round: CallButtonPlate(shape: Circle(), kind: kind, fill: fill)
-                case .labeled: CallButtonPlate(shape: Capsule(), kind: kind, fill: fill)
-                }
-            }
-            .contentShape(form == .round ? AnyShape(Circle()) : AnyShape(Capsule()))
-            .scaleEffect(isPressed ? Motion.pressScale : 1)
-            .onHover { hovering in
-                guard isHovering != hovering else { return }
-                isHovering = hovering
-            }
-            .animation(motion.hover, value: isHovering)
-            .animation(motion.hover, value: isPressed)
-            .animation(motion.standard, value: isActive)
+            // Layout first, glass last.
+            .glassEffect(CallButtonLook.glass(kind, isActive: isActive), in: shape)
+            .contentShape(shape)
     }
 }
 
@@ -239,8 +219,6 @@ private struct CallSplitButton: View {
     var flyout: CallFlyout
     var action: () -> Void
 
-    @Environment(\.motion) private var motion
-    @State private var isHovering = false
     /// On the button, which is the only place a popover can point at the
     /// control that opened it.
     @State private var isFlyoutOpen = false
@@ -287,19 +265,9 @@ private struct CallSplitButton: View {
             }
         }
         .foregroundStyle(ink)
-        .background {
-            CallButtonPlate(
-                shape: Capsule(),
-                kind: kind,
-                fill: CallButtonLook.fill(kind, isActive: isActive, isHovering: isHovering)
-            )
-        }
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-        .animation(motion.hover, value: isHovering)
-        .animation(motion.standard, value: isActive)
+        // One capsule of glass under both halves — the split is drawn by the
+        // hairline, not by two plates. Not animated: see `CallButtonBody`.
+        .glassEffect(CallButtonLook.glass(kind, isActive: isActive), in: .capsule)
     }
 
     /// The ▾'s name for VoiceOver, in Discord's words.

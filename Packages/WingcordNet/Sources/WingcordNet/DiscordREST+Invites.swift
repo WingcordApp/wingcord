@@ -235,6 +235,9 @@ struct InviteDTO: Decodable, Sendable {
     struct ChannelHalfDTO: Decodable, Sendable {
         var id: ChannelID?
         var name: String?
+        /// The channel's type — 2 is a server's voice channel, whose invite is
+        /// Discord's voice card.
+        var type: Int?
         /// A group conversation's own icon.
         var icon: String?
         /// A group conversation's members, which name an unnamed group and are
@@ -282,6 +285,7 @@ struct InviteDTO: Decodable, Sendable {
                 boostCount: guild?.premium_subscription_count ?? 0,
                 memberCount: approximate_member_count, onlineCount: approximate_presence_count,
                 channelName: channel?.name.nonEmpty,
+                isVoiceChannel: channel?.type == 2,
                 profile: profile?.domain,
                 inviterID: inviter?.id, inviterName: inviterName, inviterUsername: inviter?.username,
                 inviterAvatarHash: inviter?.avatar, expiresAt: expiresAt,

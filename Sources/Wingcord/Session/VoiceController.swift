@@ -245,6 +245,8 @@ final class VoiceController {
         joiningGuildID = guildID
 
         model.connectedVoiceChannelID = channelID
+        // A new room: nobody's clip flags are known yet, and its own notice.
+        model.forgetVoiceClientFlags()
         model.voiceQuality = .idle
         model.spotlightUserID = nil
         model.isVoiceChatShown = guildID != nil
@@ -282,7 +284,8 @@ final class VoiceController {
                 channelID: channelID,
                 selfMute: self.model.isSelfMuted,
                 selfDeaf: self.model.isSelfDeafened,
-                selfVideo: false
+                selfVideo: false,
+                flags: self.model.announcedVoiceFlags
             )
         }
         loadSoundboard(forGuild: guildID)
@@ -318,6 +321,7 @@ final class VoiceController {
         teardownEngine()
         if let userID = model.currentUserID { model.voiceStates[userID] = nil }
         model.connectedVoiceChannelID = nil
+        model.forgetVoiceClientFlags()
         model.speakingUserIDs = []
         model.liveVideoUserIDs = []
         model.voicePlatforms = [:]
@@ -330,13 +334,15 @@ final class VoiceController {
         model.incomingCallChannelID = nil
         model.voiceRevision &+= 1
 
+        let flags = model.announcedVoiceFlags
         Task { [socket, rest] in
             // A null channel is the leave: there is no leave op.
             await socket?.updateVoiceState(
                 guildID: guildID,
                 channelID: nil,
                 selfMute: false,
-                selfDeaf: false
+                selfDeaf: false,
+                flags: flags
             )
             if guildID == nil { try? await rest.stopRinging(channelID) }
         }
@@ -400,7 +406,8 @@ final class VoiceController {
         pendingServer = nil
         Task { [socket, model] in
             await socket?.updateVoiceState(
-                guildID: guildID, channelID: nil, selfMute: false, selfDeaf: false
+                guildID: guildID, channelID: nil, selfMute: false, selfDeaf: false,
+                flags: model.announcedVoiceFlags
             )
             // A beat between them: the two frames are processed in order, but
             // the server has to actually drop the old voice state before the
@@ -411,7 +418,8 @@ final class VoiceController {
                 channelID: channelID,
                 selfMute: model.isSelfMuted,
                 selfDeaf: model.isSelfDeafened,
-                selfVideo: model.isCameraOn
+                selfVideo: model.isCameraOn,
+                flags: model.announcedVoiceFlags
             )
         }
     }
@@ -721,6 +729,9 @@ final class VoiceController {
             )
         )
         self.engine = engine
+        // The call's side of clips, while clips are on — the plan says whose.
+        engine.setClipTap(AppSettings.shared.clipsEnabled ? model.clipRecorder.callTap : nil)
+        model.refreshClipCallPlan()
         // What the call asks to receive — VOICE-VIDEO-NOTES §5.5b.
         engine.setIsStage(channel?.kind == .stage)
         engine.setFocusedVideoUser(model.focusedCameraUserID?.rawValue)
@@ -875,6 +886,9 @@ final class VoiceController {
             guard model.isMicSilent != isSilent else { return }
             model.isMicSilent = isSilent
 
+        case .clientFlags(let userID, let flags):
+            model.noteVoiceClientFlags(VoiceStateFlags(rawValue: flags), for: UserID(rawValue: userID))
+
         case .platform(let userID, let raw):
             let id = UserID(rawValue: userID)
             guard let platform = VoicePlatform(rawValue: raw), model.voicePlatforms[id] != platform else { return }
@@ -896,6 +910,7 @@ final class VoiceController {
         teardownEngine()
         if let userID = model.currentUserID { model.voiceStates[userID] = nil }
         model.connectedVoiceChannelID = nil
+        model.forgetVoiceClientFlags()
         model.speakingUserIDs = []
         model.liveVideoUserIDs = []
         model.voicePlatforms = [:]
@@ -967,6 +982,15 @@ final class VoiceController {
         Task { [engine] in await engine?.setPriorityHeld(held) }
     }
 
+    /// Clips was switched on or off, or the account's allow setting moved:
+    /// the call's sound goes to the clip tap or not, and everybody in the call
+    /// is told the new flags.
+    func clipsSettingsChanged() {
+        engine?.setClipTap(AppSettings.shared.clipsEnabled ? model.clipRecorder.callTap : nil)
+        stream?.setStreamClipSink(model.clipRecorder.streamClipSink())
+        publishSwitches()
+    }
+
     /// Republishes the switches so everybody else's roster shows them.
     ///
     /// **Both halves, every time.** The op replaces the whole state, so sending
@@ -981,7 +1005,8 @@ final class VoiceController {
                 channelID: channelID,
                 selfMute: model.isSelfMuted,
                 selfDeaf: model.isSelfDeafened,
-                selfVideo: model.isCameraOn
+                selfVideo: model.isCameraOn,
+                flags: model.announcedVoiceFlags
             )
         }
         // Our own tile reads the store, and the store is what just changed.
@@ -1230,6 +1255,8 @@ final class VoiceController {
         streamTask?.cancel(); streamTask = nil
         guard let session = stream else { return }
         stream = nil
+        model.clipRecorder.streamDidStop()
+        model.refreshOverlay()
         // Told to the server: a stream torn down without opcode 19 stays in the
         // channel's state until it times out, and the far end keeps being
         // offered something to watch that no longer exists.
@@ -1421,6 +1448,11 @@ final class VoiceController {
         )
         stream = session
         session.setVideoSink(streamPreviewSink, for: userID.rawValue)
+        // Clips come off this stream while it runs — Discord's STREAMER
+        // source — and the game's own capture stands down.
+        model.clipRecorder.streamDidStart()
+        session.setStreamClipSink(model.clipRecorder.streamClipSink())
+        model.refreshOverlay()
 
         streamTask = Task { [weak self] in
             await session.start()
@@ -1730,7 +1762,7 @@ final class VoiceController {
 
     private func playClip(id: String, volume: Float) async {
         if let cached = clipCache[id] {
-            await engine?.playLocalClip(cached, volume: volume)
+            await engine?.playLocalClip(cached, volume: volume, isSoundboard: true)
             return
         }
         guard !clipFetches.contains(id) else { return }
@@ -1743,6 +1775,6 @@ final class VoiceController {
         // megabyte — and there are a few dozen of them at most. Kept for the
         // session, because the alternative is a download every press.
         clipCache[id] = samples
-        await engine?.playLocalClip(samples, volume: volume)
+        await engine?.playLocalClip(samples, volume: volume, isSoundboard: true)
     }
 }

@@ -13,7 +13,8 @@ struct EditableDisplayName: View {
     @Binding var text: String
     var placeholder: String
     var style: DisplayNameStyle?
-    var editStyle: () -> Void
+    /// Nil where the style cannot be changed — a server profile without Nitro.
+    var editStyle: (() -> Void)?
 
     @Environment(\.motion) private var motion
     @FocusState private var isFocused: Bool
@@ -45,25 +46,35 @@ struct EditableDisplayName: View {
                         )
                 }
 
-            Button(action: editStyle) {
-                Image(systemName: "paintbrush.fill")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(InkColor.primary)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.rect)
+            if let editStyle {
+                Button(action: editStyle) {
+                    Image(systemName: "paintbrush.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(InkColor.primary)
+                        .frame(width: Metrics.control, height: Metrics.control)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .interactiveChromeOverMedia(in: .rect(cornerRadius: 8, style: .continuous))
+                .help("Edit Style")
+                .accessibilityLabel(Text("Edit display name style"))
             }
-            .buttonStyle(.plain)
-            .interactiveChromeOverMedia(in: .rect(cornerRadius: 8, style: .continuous))
-            .help("Edit Style")
-            .accessibilityLabel(Text("Edit display name style"))
         }
         .onHover { hovering in
             guard isHovering != hovering else { return }
             isHovering = hovering
         }
+        // **32, as the routes take** — a display name and a nickname alike.
+        // Found out at Save, a longer one cost every other edit in the sheet.
+        .onChange(of: text) { _, edited in
+            if edited.count > Self.limit { text = String(edited.prefix(Self.limit)) }
+        }
         .animation(motion.hover, value: isFocused)
         .animation(motion.hover, value: isHovering)
     }
+
+    /// `global_name` and `nick` both stop at 32.
+    static let limit = 32
 }
 
 /// A short line — a pronoun — edited where it is read.
@@ -383,6 +394,7 @@ struct EditableBioField: View {
 
     @Environment(\.motion) private var motion
     @State private var isFocused = false
+    @State private var isPickingEmoji = false
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
@@ -409,14 +421,45 @@ struct EditableBioField: View {
                         )
                 }
 
-            Text("\(text.count) / \(Self.limit)")
-                .font(.system(size: 10))
-                .monospacedDigit()
-                // Turns as it fills, so the ceiling is felt before it is hit.
-                .foregroundStyle(
-                    text.count >= Self.limit ? Palette.destructive : InkColor.tertiary
-                )
+            HStack(spacing: Spacing.base) {
+                // **Discord's bio box has an emoji button, and so does this
+                // one** — the composer's own picker, so a custom emoji goes in
+                // as the same markup a message would carry.
+                Button("Add Emoji", systemImage: "face.smiling", action: { isPickingEmoji = true })
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 14))
+                    .foregroundStyle(InkColor.secondary)
+                    .help("Add an emoji")
+                    .popover(isPresented: $isPickingEmoji, arrowEdge: .bottom) {
+                        ExpressionPicker(mode: .emoji, onPick: insert, onPickGIF: { _ in })
+                            .presentationBackground(.clear)
+                    }
+                Spacer(minLength: 0)
+                Text("\(text.count) / \(Self.limit)")
+                    .font(.system(size: 10))
+                    .monospacedDigit()
+                    // Turns as it fills, so the ceiling is felt before it is hit.
+                    .foregroundStyle(
+                        text.count >= Self.limit ? Palette.destructive : InkColor.secondary
+                    )
+            }
         }
         .animation(motion.hover, value: isFocused)
+    }
+
+    /// Puts a picked emoji at the end of the bio — or nowhere, with a bump,
+    /// when it would run past the route's ceiling.
+    private func insert(_ item: ExpressionItem) {
+        guard case .insert(let insertion) = item.pick else { return }
+        // Appended, not run through the shortcode completer — that replaces
+        // from the last colon, and a bio's colons are prose.
+        let next = text + insertion
+        guard next.count <= Self.limit else {
+            Haptics.bump()
+            return
+        }
+        text = next
+        isPickingEmoji = false
     }
 }

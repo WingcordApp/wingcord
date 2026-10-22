@@ -331,7 +331,7 @@ private struct ChannelInvitesTab: View {
     private func row(_ invite: GuildInvite) -> some View {
         let inviter = invite.inviterID.flatMap { model.users[$0] }
         return ObjectRow(
-            title: invite.id,
+            title: StreamerMode.shared.inviteCode(invite.id),
             subtitle: inviter.map { $0.preferredName },
             badge: invite.isUnlimitedUses ? "\(invite.uses)" : "\(invite.uses)/\(invite.maxUses)"
         ) {

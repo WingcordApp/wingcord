@@ -34,6 +34,9 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
     /// The tile's own answer to AnonymiseFileNames once it has been toggled —
     /// the plugin's mark on an upload; nil follows "Anonymise by default".
     var anonymise: Bool?
+    /// What makes it a Discord clip — shared from the clips library, never
+    /// set on a file dropped in the composer.
+    var clip: ClipUpload?
 
     init(url: URL, id: UUID = UUID()) {
         self.id = id
@@ -58,6 +61,7 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
         copy.altText = altText
         copy.isSpoiler = isSpoiler
         copy.anonymise = anonymise
+        copy.clip = clip
         return copy
     }
 
@@ -68,7 +72,8 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
             filename: filename,
             size: size,
             altText: altText,
-            isSpoiler: isSpoiler
+            isSpoiler: isSpoiler,
+            clip: clip
         )
     }
 
@@ -79,6 +84,7 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
             && lhs.altText == rhs.altText
             && lhs.isSpoiler == rhs.isSpoiler
             && lhs.anonymise == rhs.anonymise
+            && lhs.clip == rhs.clip
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }

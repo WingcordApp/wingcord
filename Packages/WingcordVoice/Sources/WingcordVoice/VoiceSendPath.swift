@@ -199,6 +199,9 @@ final class AudioSendPath: Sendable {
         /// stream stopped rather than left to conceal indefinitely. Opus's own
         /// three-byte silence frame, five times, is what every client sends.
         var silenceFramesRemaining = 0
+        /// Where this path's frames go for clips, when clips are on — the
+        /// microphone's into the call's tap, a stream's sound into its clip.
+        var clipSink: (@Sendable (TimedAudioFrame) -> Void)?
 
         init(signal: OpusEncoder.Signal) {
             self.signal = signal
@@ -237,6 +240,11 @@ final class AudioSendPath: Sendable {
             state.transportSequenceExtensionID = transportSequenceExtensionID
             state.transportSequence = transportSequence
         }
+    }
+
+    /// Where this path's frames go for clips, or nil for nowhere.
+    func setClipSink(_ sink: (@Sendable (TimedAudioFrame) -> Void)?) {
+        state.withLock { $0.clipSink = sink }
     }
 
     /// Installs the call's end-to-end transform, or clears it for a session
@@ -407,7 +415,15 @@ final class AudioSendPath: Sendable {
               let length = try? encoder.encode(samples, into: &state.scratch),
               length > 0
         else { return }
-        transmit(Array(state.scratch[0..<length]), at: timestamp, level: level, marker: marker, in: &state)
+        let encoded = Array(state.scratch[0..<length])
+        if let sink = state.clipSink {
+            // Stamped with when it was said: the frame that just finished is
+            // 20 ms old at its start, and a lead-in frame is older by how far
+            // the RTP clock has moved past it.
+            let behind = Double(state.clock &- OpusFormat.clockAdvance &- timestamp) / Double(OpusFormat.sampleRate)
+            sink(TimedAudioFrame(time: CACurrentMediaTime() - OpusFrame.duration - behind, payload: .opus(encoded)))
+        }
+        transmit(encoded, at: timestamp, level: level, marker: marker, in: &state)
     }
 
     /// Seals and sends one encoded frame at its own place on the clock.

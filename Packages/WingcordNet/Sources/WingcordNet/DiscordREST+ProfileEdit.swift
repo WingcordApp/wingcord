@@ -36,22 +36,26 @@ extension DiscordREST {
     public func modifyCurrentUser(
         displayName: FieldEdit<String> = .unchanged,
         avatar: FieldEdit<ImageData> = .unchanged,
+        avatarDescription: FieldEdit<String> = .unchanged,
         recentAvatarID: FieldEdit<String> = .unchanged,
         banner: FieldEdit<ImageData> = .unchanged,
         accentColor: FieldEdit<Int> = .unchanged,
         nameplateSKU: FieldEdit<String> = .unchanged,
         avatarDecorationSKU: FieldEdit<String> = .unchanged,
-        displayNameStyle: FieldEdit<DisplayNameStyleWrite> = .unchanged
+        displayNameStyle: FieldEdit<DisplayNameStyleWrite> = .unchanged,
+        typingIndicatorStyle: FieldEdit<TypingIndicatorStyle> = .unchanged
     ) async throws -> User {
         let body = CurrentUserPatch(
             global_name: displayName,
             avatar: avatar.map(\.dataURI),
+            avatar_description: avatarDescription,
             avatar_id: recentAvatarID,
             banner: banner.map(\.dataURI),
             accent_color: accentColor,
             nameplate_sku_id: nameplateSKU,
             avatar_decoration_sku_id: avatarDecorationSKU,
-            style: displayNameStyle
+            style: displayNameStyle,
+            typing_indicator_style: typingIndicatorStyle
         )
         return try await request(
             method: "PATCH",
@@ -76,7 +80,7 @@ extension DiscordREST {
         accentColor: FieldEdit<Int> = .unchanged,
         themeColors: FieldEdit<[Int]> = .unchanged,
         banner: FieldEdit<ImageData> = .unchanged,
-        profileEffectSKU: FieldEdit<String> = .unchanged
+        collectibleSKUs: [String]? = nil
     ) async throws {
         let body = ProfilePatch(
             bio: bio,
@@ -84,7 +88,7 @@ extension DiscordREST {
             accent_color: accentColor,
             theme_colors: themeColors,
             banner: banner.map(\.dataURI),
-            profile_effect_sku_id: profileEffectSKU
+            collectibles_sku_ids: collectibleSKUs
         )
         // **`%40me`, not `@me`.** The captured request escapes it on this route
         // and only on this route. The two are equivalent to any correct server
@@ -158,6 +162,52 @@ extension DiscordREST {
         return member.domain(userID: userID)
     }
 
+    /// Changes what the reader wears **as a member of one server** — the
+    /// per-server avatar, decoration, nameplate, name style and nickname.
+    ///
+    /// **`PATCH /guilds/{id}/members/@me`, not the server's profile route.**
+    /// Discord's own save splits a per-server edit in two (build 643186,
+    /// `56348`): banner, bio, pronouns, colours and collectibles go to
+    /// `/guilds/{id}/profile/@me`, and these go here, under the keys of its
+    /// `SET_GUILD_MEMBER` body (`159001`): `avatar` or `avatar_id`,
+    /// `avatar_decoration_sku_id`, `collectibles.nameplate`, the three
+    /// `display_name_*` and `nick`. Sending these to the profile route instead
+    /// was taken without complaint and changed nothing.
+    ///
+    /// Every parameter is a `FieldEdit`, so a caller that names one field
+    /// sends one key — and the reply is the member afterwards.
+    @discardableResult
+    public func modifyCurrentMember(
+        in guildID: GuildID,
+        nick: FieldEdit<String> = .unchanged,
+        avatar: FieldEdit<ImageData> = .unchanged,
+        avatarDescription: FieldEdit<String> = .unchanged,
+        recentAvatarID: FieldEdit<String> = .unchanged,
+        avatarDecorationSKU: FieldEdit<String> = .unchanged,
+        nameplateSKU: FieldEdit<String> = .unchanged,
+        displayNameStyle: FieldEdit<DisplayNameStyleWrite> = .unchanged
+    ) async throws -> Member {
+        let member = try await request(
+            method: "PATCH",
+            path: "/guilds/\(guildID.rawValue)/members/@me",
+            route: "guilds/{id}/members/@me",
+            body: CurrentMemberPatch(
+                nick: nick,
+                avatar: avatar.map(\.dataURI),
+                avatar_description: avatarDescription,
+                avatar_id: recentAvatarID,
+                avatar_decoration_sku_id: avatarDecorationSKU,
+                nameplate: nameplateSKU,
+                style: displayNameStyle
+            ),
+            as: MemberDTO.self
+        )
+        guard let userID = member.user?.id else {
+            throw Failure.decoding("member reply carried no user")
+        }
+        return member.domain(userID: userID)
+    }
+
     /// Changes the reader's profile **inside one server**.
     ///
     /// The guild-scoped twin of `modifyProfile`, and the same shape: captured,
@@ -175,7 +225,7 @@ extension DiscordREST {
         accentColor: FieldEdit<Int> = .unchanged,
         themeColors: FieldEdit<[Int]> = .unchanged,
         banner: FieldEdit<ImageData> = .unchanged,
-        profileEffectSKU: FieldEdit<String> = .unchanged
+        collectibleSKUs: [String]? = nil
     ) async throws {
         let body = ProfilePatch(
             bio: bio,
@@ -183,7 +233,7 @@ extension DiscordREST {
             accent_color: accentColor,
             theme_colors: themeColors,
             banner: banner.map(\.dataURI),
-            profile_effect_sku_id: profileEffectSKU
+            collectibles_sku_ids: collectibleSKUs
         )
         _ = try await requestData(
             method: "PATCH",
@@ -278,28 +328,107 @@ public struct DisplayNameStyleWrite: Hashable, Sendable {
 struct CurrentUserPatch: Encodable, Sendable {
     var global_name: FieldEdit<String> = .unchanged
     var avatar: FieldEdit<String> = .unchanged
+    /// The new avatar's alt text — sent beside the bytes, as Discord's own
+    /// upload does (`avatar_description`).
+    var avatar_description: FieldEdit<String> = .unchanged
     var avatar_id: FieldEdit<String> = .unchanged
     var banner: FieldEdit<String> = .unchanged
     var accent_color: FieldEdit<Int> = .unchanged
     var nameplate_sku_id: FieldEdit<String> = .unchanged
     var avatar_decoration_sku_id: FieldEdit<String> = .unchanged
     var style: FieldEdit<DisplayNameStyleWrite> = .unchanged
+    /// Sent beside the display name's style, as Discord's own profile save
+    /// does; `null` puts the plain indicator back.
+    var typing_indicator_style: FieldEdit<TypingIndicatorStyle> = .unchanged
 
     enum CodingKeys: String, CodingKey {
-        case global_name, avatar, avatar_id, banner, accent_color
+        case global_name, avatar, avatar_description, avatar_id, banner, accent_color
         case nameplate_sku_id, avatar_decoration_sku_id
         case display_name_font_id, display_name_effect_id, display_name_colors
+        case typing_indicator_style
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(global_name, forKey: .global_name)
         try c.encode(avatar, forKey: .avatar)
+        try c.encode(avatar_description, forKey: .avatar_description)
         try c.encode(avatar_id, forKey: .avatar_id)
         try c.encode(banner, forKey: .banner)
         try c.encode(accent_color, forKey: .accent_color)
         try c.encode(nameplate_sku_id, forKey: .nameplate_sku_id)
         try c.encode(avatar_decoration_sku_id, forKey: .avatar_decoration_sku_id)
+        switch style {
+        case .unchanged:
+            break
+        case .cleared:
+            try c.encodeNil(forKey: .display_name_font_id)
+            try c.encodeNil(forKey: .display_name_effect_id)
+            try c.encodeNil(forKey: .display_name_colors)
+        case .set(let style):
+            try c.encode(style.fontID, forKey: .display_name_font_id)
+            try c.encode(style.effectID, forKey: .display_name_effect_id)
+            try c.encode(style.colors, forKey: .display_name_colors)
+        }
+        switch typing_indicator_style {
+        case .unchanged: break
+        case .cleared: try c.encodeNil(forKey: .typing_indicator_style)
+        case .set(let style): try c.encode(TypingIndicatorStyleDTO(style), forKey: .typing_indicator_style)
+        }
+    }
+}
+
+/// `PATCH /guilds/{id}/members/@me`, as Discord's own per-server save writes
+/// it.
+struct CurrentMemberPatch: Encodable, Sendable {
+    var nick: FieldEdit<String> = .unchanged
+    var avatar: FieldEdit<String> = .unchanged
+    var avatar_description: FieldEdit<String> = .unchanged
+    var avatar_id: FieldEdit<String> = .unchanged
+    var avatar_decoration_sku_id: FieldEdit<String> = .unchanged
+    /// Written nested — `"collectibles":{"nameplate":{"sku_id":…}}`, or
+    /// `{"nameplate":null}` to take it off — unlike the account's flat
+    /// `nameplate_sku_id`.
+    var nameplate: FieldEdit<String> = .unchanged
+    var style: FieldEdit<DisplayNameStyleWrite> = .unchanged
+
+    enum CodingKeys: String, CodingKey {
+        case nick, avatar, avatar_description, avatar_id, avatar_decoration_sku_id, collectibles
+        case display_name_font_id, display_name_effect_id, display_name_colors
+    }
+
+    private struct Collectibles: Encodable {
+        var nameplate: Plate?
+        struct Plate: Encodable { var sku_id: String }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            // `null` is the instruction here, so it is written, not skipped.
+            try c.encode(nameplate, forKey: .nameplate)
+        }
+
+        enum CodingKeys: String, CodingKey { case nameplate }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        // **Empty is null.** A cleared nickname falls back to the account's
+        // name; see `setNickname`.
+        switch nick {
+        case .unchanged: break
+        case .cleared: try c.encodeNil(forKey: .nick)
+        case .set(let value):
+            if value.isEmpty { try c.encodeNil(forKey: .nick) } else { try c.encode(value, forKey: .nick) }
+        }
+        try c.encode(avatar, forKey: .avatar)
+        try c.encode(avatar_description, forKey: .avatar_description)
+        try c.encode(avatar_id, forKey: .avatar_id)
+        try c.encode(avatar_decoration_sku_id, forKey: .avatar_decoration_sku_id)
+        switch nameplate {
+        case .unchanged: break
+        case .cleared: try c.encode(Collectibles(nameplate: nil), forKey: .collectibles)
+        case .set(let sku): try c.encode(Collectibles(nameplate: .init(sku_id: sku)), forKey: .collectibles)
+        }
         switch style {
         case .unchanged:
             break
@@ -322,10 +451,15 @@ struct ProfilePatch: Encodable, Sendable {
     var accent_color: FieldEdit<Int> = .unchanged
     var theme_colors: FieldEdit<[Int]> = .unchanged
     var banner: FieldEdit<String> = .unchanged
-    var profile_effect_sku_id: FieldEdit<String> = .unchanged
+    /// **The profile's collectibles, whole** — an effect and a frame are
+    /// written as the list of every collectible's sku with the changed one
+    /// swapped, as Discord's own save does (build 643186). The old
+    /// `profile_effect_sku_id` key is not what its client sends, and an edit
+    /// sent under it was not taken. Nil leaves them as they are.
+    var collectibles_sku_ids: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case bio, pronouns, accent_color, theme_colors, banner, profile_effect_sku_id
+        case bio, pronouns, accent_color, theme_colors, banner, collectibles_sku_ids
     }
 
     func encode(to encoder: Encoder) throws {
@@ -335,7 +469,7 @@ struct ProfilePatch: Encodable, Sendable {
         try c.encode(accent_color, forKey: .accent_color)
         try c.encode(theme_colors, forKey: .theme_colors)
         try c.encode(banner, forKey: .banner)
-        try c.encode(profile_effect_sku_id, forKey: .profile_effect_sku_id)
+        try c.encodeIfPresent(collectibles_sku_ids, forKey: .collectibles_sku_ids)
     }
 }
 

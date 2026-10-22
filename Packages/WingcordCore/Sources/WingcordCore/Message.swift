@@ -252,6 +252,10 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     /// Who invoked the command this message answers. Nil for everything a
     /// person typed.
     public var interaction: MessageInteraction? { payload?.interaction }
+    /// The custom theme this message shares — Discord's theme card.
+    public var sharedTheme: SharedClientTheme? { payload?.sharedTheme }
+    /// The moment of a clip this reply is about — a timeline comment.
+    public var mediaMention: MediaMention? { payload?.mediaMention }
 
     /// Whether the message shows nothing at all without its components.
     ///
@@ -273,6 +277,7 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
         content.isEmpty && attachments.isEmpty && embeds.isEmpty
             && stickers.isEmpty && components.isEmpty && displayComponents.isEmpty
             && poll == nil && !isComponentsOnly && activityInvite == nil && listenAlong == nil
+            && sharedTheme == nil
     }
 
     /// Whether this row addresses an *object* rather than something someone
@@ -360,6 +365,12 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     /// The thread started from this message, when there is one. Nil for
     /// everything else, which is nearly every message.
     public let thread: MessageThread?
+    /// The custom theme the message shares — `shared_client_theme`. Nil for
+    /// everything else.
+    public let sharedTheme: SharedClientTheme?
+    /// A reply at a moment of a clip — `media_mention`, Discord's timeline
+    /// comment. Nil for everything else.
+    public let mediaMention: MediaMention?
 
     public init(
         attachments: [Attachment] = [],
@@ -380,7 +391,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         listenAlong: ListenAlongInvite? = nil,
         interaction: MessageInteraction? = nil,
         applicationID: ApplicationID? = nil,
-        thread: MessageThread? = nil
+        thread: MessageThread? = nil,
+        sharedTheme: SharedClientTheme? = nil,
+        mediaMention: MediaMention? = nil
     ) {
         self.activityInvite = activityInvite
         self.listenAlong = listenAlong
@@ -401,6 +414,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         self.webhookID = webhookID
         self.nonce = nonce
         self.thread = thread
+        self.sharedTheme = sharedTheme
+        self.mediaMention = mediaMention
     }
 
     /// The same box with one array replaced.
@@ -433,7 +448,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             listenAlong: listenAlong,
             interaction: interaction,
             applicationID: applicationID,
-            thread: thread
+            thread: thread,
+            sharedTheme: sharedTheme,
+            mediaMention: mediaMention
         )
     }
 
@@ -458,7 +475,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             listenAlong: listenAlong,
             interaction: interaction,
             applicationID: applicationID,
-            thread: thread
+            thread: thread,
+            sharedTheme: sharedTheme,
+            mediaMention: mediaMention
         )
     }
 
@@ -483,7 +502,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             listenAlong: listenAlong,
             interaction: interaction,
             applicationID: applicationID,
-            thread: thread
+            thread: thread,
+            sharedTheme: sharedTheme,
+            mediaMention: mediaMention
         )
     }
 
@@ -496,6 +517,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             && mentionedRoleIDs.isEmpty && !mentionsEveryone
             && reference == nil && forwarded == nil && webhookID == nil && nonce == nil
             && activityInvite == nil && listenAlong == nil && interaction == nil && thread == nil
+            && sharedTheme == nil && mediaMention == nil
     }
 
     public static func == (lhs: MessagePayload, rhs: MessagePayload) -> Bool {
@@ -519,7 +541,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
                 && lhs.activityInvite == rhs.activityInvite
                 && lhs.listenAlong == rhs.listenAlong
                 && lhs.interaction == rhs.interaction
-                && lhs.thread == rhs.thread)
+                && lhs.thread == rhs.thread
+                && lhs.sharedTheme == rhs.sharedTheme
+                && lhs.mediaMention == rhs.mediaMention)
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -645,6 +669,9 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
     /// Discord's blurred stand-in, drawn until the picture lands — see
     /// `MediaPlaceholder`.
     public var placeholder: String?
+    /// A Discord clip: who was in it, what happened in it — nil for any other
+    /// file. docs/CLIPS-PRESENCE.md, Phase 4.1.
+    public var clip: AttachmentClip?
 
     public init(
         id: AttachmentID,
@@ -659,7 +686,8 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
         waveform: String? = nil,
         durationSeconds: Double? = nil,
         isMarkedAnimated: Bool = false,
-        placeholder: String? = nil
+        placeholder: String? = nil,
+        clip: AttachmentClip? = nil
     ) {
         self.id = id
         self.filename = filename
@@ -674,6 +702,7 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
         self.durationSeconds = durationSeconds
         self.isMarkedAnimated = isMarkedAnimated
         self.placeholder = placeholder
+        self.clip = clip
     }
 
     public var isImage: Bool {

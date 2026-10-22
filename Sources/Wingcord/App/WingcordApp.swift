@@ -1,3 +1,4 @@
+import AppIntents
 import AppKit
 import SwiftUI
 import WingcordNet
@@ -73,9 +74,25 @@ struct WingcordApp: App {
             DemoFixtures.populateDetectedGame(model)
         }
         _model = State(initialValue: model)
+        model.capture.model = model
         PerformanceMonitor.shared.model = model
         WingcordAppDelegate.model = model
         MemoryPressureWatcher.shared.model = model
+        // **Here, before any intent can run.** The system launches the app for
+        // a Shortcut or a Focus filter and runs this initialiser even when no
+        // window ever opens — a view modifier would come too late, and the
+        // intent would find nothing registered.
+        let focusSync = FocusSync(model: model)
+        model.focusSync = focusSync
+        AppDependencyManager.shared.add(dependency: model)
+        AppDependencyManager.shared.add(dependency: focusSync)
+        focusSync.checkAtLaunch()
+        // `--demo` has no session to start it: what plays is read and built
+        // the same way, and shown on the reader's own card only.
+        if LaunchOptions.current.usesDemoFixtures {
+            model.sessionController.startNowPlayingLocally()
+            DemoCaptureSelfTest.runIfAsked(model)
+        }
     }
 
     var body: some Scene {
@@ -100,6 +117,7 @@ struct WingcordApp: App {
                 .installsGlobalHotkey()
                 .providesSettingsWindow()
                 .providesServerSettingsWindow()
+                .providesClipsWindow()
                 .showsPerformanceInspector()
                 // **Before every layer a tile or a control can raise**, so a
                 // profile or a flyout opened from the full-screen call comes up
@@ -174,6 +192,18 @@ struct WingcordApp: App {
         // and one settings window, and neither is a document.
         .commandsRemoved()
 
+        // The clips library — Discord's Clips Home, a window of its own
+        // (docs/CLIPS-PRESENCE.md, Phase 4.2).
+        Window("Clips", id: ClipsWindow.sceneID) {
+            ClipsLibraryView()
+                .resolvesMotion()
+                .environment(model)
+        }
+        .defaultSize(width: 1_100, height: 720)
+        .defaultPosition(.center)
+        .windowResizability(.contentMinSize)
+        .commandsRemoved()
+
         // A server's own settings.
         //
         // **A `WindowGroup` here, where the two above are single `Window`s**,
@@ -225,6 +255,17 @@ struct WingcordCommands: Commands {
                 .disabled(!isWorkspace)
             ShortcutMenuItem(shortcut: .addServer, model: model)
                 .disabled(!isWorkspace)
+            Divider()
+            // The capture bar's way in, beside its global key.
+            if model.capture.isRecording {
+                Button("Stop Recording") { Task { await model.capture.stopRecording() } }
+            } else {
+                Button("Record or Capture the Screen…") { model.capture.showBar() }
+            }
+            Button("Save Clip") { model.saveClip() }
+                .disabled(!AppSettings.shared.clipsEnabled)
+            Button("Clips Library") { ClipsWindow.open() }
+                .keyboardShortcut("l", modifiers: [.command, .option])
         }
         // Settings is a `Window` scene rather than a `Settings` scene, so the
         // item and its ⌘, are installed by hand. Same title and same shortcut
@@ -232,6 +273,13 @@ struct WingcordCommands: Commands {
         CommandGroup(replacing: .appSettings) {
             Button("Settings…") { SettingsWindow.open() }
                 .keyboardShortcut(",", modifiers: .command)
+            // Discord's Streamer Mode, where an app-wide state belongs: the
+            // app menu, checked while it is on. Its global key is in
+            // Shortcuts.
+            Toggle("Streamer Mode", isOn: Binding(
+                get: { StreamerMode.shared.isEnabled },
+                set: { StreamerMode.shared.setEnabled($0) }
+            ))
         }
 
         // **The menu bar is Alex's reference** (DESIGN-NOTES §10, images
@@ -570,7 +618,13 @@ struct LaunchOptions: Sendable {
     static let current: LaunchOptions = {
         let arguments = Set(ProcessInfo.processInfo.arguments)
         return LaunchOptions(
-            usesDemoFixtures: arguments.contains("--demo"),
+            // **The demo bundle is always the demo.** Opened from the Dock or
+            // Finder it gets no arguments, and it used to sign in to the
+            // reader's real account with the token in the Keychain — so a
+            // profile edit "in the demo" was a real one (2026-10-22). Its own
+            // identifier is the switch now, whatever it was launched with.
+            usesDemoFixtures: arguments.contains("--demo")
+                || Bundle.main.bundleIdentifier == "dev.wingcord.Wingcord.demo",
             pretendsAGameIsRunning: arguments.contains("--overlay")
         )
     }()

@@ -43,6 +43,9 @@ public struct ProfileWidget: Hashable, Sendable, Identifiable {
         /// A widget the reader made themselves: a heading, a cover, and up to
         /// four labelled slots. See `PersonalWidget`.
         case personal(PersonalWidget)
+        /// "Clips Gallery": up to four clips the person put on their board.
+        /// See `ProfileClip`.
+        case clipsGallery([ProfileClip])
         /// A kind added after this was written. Drawn as nothing rather than as
         /// a broken tile — `INVARIANTS.md` §5.5.
         case unknown(String)
@@ -57,6 +60,7 @@ public struct ProfileWidget: Hashable, Sendable, Identifiable {
         case .wantToPlayGames: ProfileWidgetKind.wantToPlayGames.rawValue
         case .application: ProfileWidgetKind.application.rawValue
         case .personal: ProfileWidgetKind.personal.rawValue
+        case .clipsGallery: ProfileWidgetKind.clipsGallery.rawValue
         case .unknown(let name): name
         }
     }
@@ -67,7 +71,7 @@ public struct ProfileWidget: Hashable, Sendable, Identifiable {
         case .favouriteGames(let games), .currentGames(let games),
              .playedGames(let games), .wantToPlayGames(let games):
             games
-        case .application, .personal, .unknown:
+        case .application, .personal, .clipsGallery, .unknown:
             []
         }
     }
@@ -100,8 +104,15 @@ public struct ProfileWidget: Hashable, Sendable, Identifiable {
         case .wantToPlayGames: "Want to Play"
         // The reader's own heading, and theirs to leave empty.
         case .personal(let widget): widget.header
+        case .clipsGallery: "Clips Gallery"
         case .application, .unknown: ""
         }
+    }
+
+    /// The clips a gallery holds, or empty for any other kind.
+    public var clips: [ProfileClip] {
+        if case .clipsGallery(let clips) = content { return clips }
+        return []
     }
 }
 
@@ -121,6 +132,9 @@ public enum ProfileWidgetKind: String, Hashable, Sendable, CaseIterable {
     /// `personal` on the wire and "Create your own" in the picker**, and it is
     /// the only widget whose pictures the client has to upload.
     case personal
+    /// "Clips Gallery" — up to four clips, uploaded through Discord's clip
+    /// route (`2026-07-clips-on-profile-setter`).
+    case clipsGallery = "clips_gallery"
 
     /// How many games Discord accepts in this kind. Nil for the application
     /// widget, which holds none.
@@ -133,7 +147,7 @@ public enum ProfileWidgetKind: String, Hashable, Sendable, CaseIterable {
         case .favouriteGames: 1
         case .currentGames: 5
         case .playedGames, .wantToPlayGames: 20
-        case .application, .personal: nil
+        case .application, .personal, .clipsGallery: nil
         }
     }
 
@@ -145,6 +159,7 @@ public enum ProfileWidgetKind: String, Hashable, Sendable, CaseIterable {
         case .wantToPlayGames: "Want to Play"
         case .application: "Game"
         case .personal: "Create Your Own"
+        case .clipsGallery: "Clips Gallery"
         }
     }
 }
@@ -412,5 +427,96 @@ extension PersonalWidget {
         public var fileID: String? {
             if case .stored(let id, _, _, _) = self { id } else { nil }
         }
+    }
+}
+
+// MARK: - Clips on a profile
+
+/// One clip on somebody's board.
+///
+/// docs/CLIPS-PRESENCE.md, Phase 7 (D18). Discord's shape, read out of build
+/// 643186 (`646976`, the profile store's `CLIPS_GALLERY` case):
+///
+/// ```
+/// read:  {id, file_id, game_id, title, tags, local_clip_id,
+///         video_url, thumbnail_url, spritesheet_image_url, spritesheet_vtt_url}
+/// write: {id, file_id, game_id, title, tags, local_clip_id}       — kept
+///        {upload_filename, game_id, title, tags, local_clip_id}  — new
+/// ```
+///
+/// A read without `id` and `file_id` is dropped, as Discord's store drops it.
+/// **At most four**, and twenty tags each — Discord's editor refuses past
+/// both.
+public struct ProfileClip: Hashable, Sendable, Identifiable {
+    /// Where the video is.
+    public enum Storage: Hashable, Sendable {
+        /// On Discord, as the profile route returns it.
+        case saved(id: String, fileID: String)
+        /// Uploaded through `POST /users/@me/widgets/clips/upload` and waiting
+        /// for the board save that names it.
+        case staged(uploadFilename: String)
+        /// Picked from this Mac's library and not sent yet — the editor uploads
+        /// it at Save, as it does a personal widget's pictures, so a clip
+        /// somebody changed their mind about never reaches Discord. **Never
+        /// written**: `ProfileWidgetWrite` leaves it out.
+        case local(fileURL: URL)
+    }
+
+    public var storage: Storage
+    /// The clip's game — its application id.
+    public var gameID: ApplicationID?
+    public var title: String?
+    public var tags: [String]
+    /// The clip's own id on the machine that made it — Discord's
+    /// `local_clip_id`, which is how its editor knows a clip is already up.
+    public var localClipID: String?
+    public var videoURL: URL?
+    public var thumbnailURL: URL?
+    /// The scrub preview: a sprite sheet and the WebVTT that maps time to it.
+    public var spritesheetImageURL: URL?
+    public var spritesheetVTTURL: URL?
+
+    public static let limit = 4
+    public static let tagLimit = 20
+
+    public init(
+        storage: Storage,
+        gameID: ApplicationID? = nil,
+        title: String? = nil,
+        tags: [String] = [],
+        localClipID: String? = nil,
+        videoURL: URL? = nil,
+        thumbnailURL: URL? = nil,
+        spritesheetImageURL: URL? = nil,
+        spritesheetVTTURL: URL? = nil
+    ) {
+        self.storage = storage
+        self.gameID = gameID
+        self.title = title.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        self.tags = Array(tags.prefix(Self.tagLimit))
+        self.localClipID = localClipID
+        self.videoURL = videoURL
+        self.thumbnailURL = thumbnailURL
+        self.spritesheetImageURL = spritesheetImageURL
+        self.spritesheetVTTURL = spritesheetVTTURL
+    }
+
+    public var id: String {
+        switch storage {
+        case .saved(let id, _): id
+        case .staged(let filename): "staged:" + filename
+        case .local(let url): "local:" + url.path(percentEncoded: false)
+        }
+    }
+
+    /// The file still to upload, for a clip picked on this Mac.
+    public var localFile: URL? {
+        if case .local(let url) = storage { return url }
+        return nil
+    }
+
+    public var isSaved: Bool {
+        if case .saved = storage { return true }
+        return false
     }
 }

@@ -426,6 +426,8 @@ final class TimelineCanvasView: NSView {
     var onListenAlong: ((MessageID) -> Void)?
     /// An invite card's button was pressed.
     var onInviteButton: ((InviteCard) -> Void)?
+    /// A voice invite card's "Server / channel" line.
+    var onOpenInviteChannel: ((ChannelID) -> Void)?
     /// A profile card was opened past its fold, or folded again.
     var onToggleInviteFold: ((InviteCardFold) -> Void)?
     /// A profile invite card's "+ N more" chip: the traits it stands for, and
@@ -435,6 +437,12 @@ final class TimelineCanvasView: NSView {
     /// Server, Add Friend or Send a Message — decided at paint time so joining
     /// is a repaint, not a relayout.
     var isInviteSettled: ((InviteCard) -> Bool)?
+    /// A shared theme card's two states — being previewed, and kept.
+    var isThemePreviewing: ((SharedClientTheme) -> Bool)?
+    var isThemeSaved: ((SharedClientTheme) -> Bool)?
+    /// A shared theme card's Preview and Save.
+    var onPreviewSharedTheme: ((SharedClientTheme) -> Void)?
+    var onSaveSharedTheme: ((SharedClientTheme, String) -> Void)?
     /// A poll answer was chosen.
     var onVote: ((MessageID, Int) -> Void)?
     /// A button an application attached, pressed. Carries the message it sits on
@@ -1515,6 +1523,10 @@ final class TimelineCanvasView: NSView {
                     state.canAddReaction = canAddReactions
                     state.revealedSpoilers = revealedSpoilers[messageID] ?? []
                     state.revealedAttachments = revealedAttachments[messageID] ?? []
+                    if case .message(let message) = row.kind, let card = message.sharedTheme {
+                        state.isPreviewingSharedTheme = isThemePreviewing?(card.theme) == true
+                        state.isSharedThemeSaved = isThemeSaved?(card.theme) == true
+                    }
                     if case .message(let message) = row.kind, !message.inviteCards.isEmpty {
                         state.settledInviteCodes = Set(message.inviteCards.compactMap { slot in
                             slot.card.flatMap { isInviteSettled?($0) == true ? slot.code : nil }
@@ -1853,6 +1865,12 @@ final class TimelineCanvasView: NSView {
             if origin != .zero { onListenAlong?(row.id) }
         case .inviteButton(let invite, _):
             onInviteButton?(invite)
+        case .inviteChannel(let channelID, _):
+            onOpenInviteChannel?(channelID)
+        case .sharedThemePreview(let theme, _):
+            onPreviewSharedTheme?(theme)
+        case .sharedThemeSave(let theme, let creator, _):
+            onSaveSharedTheme?(theme, creator)
         case .inviteFold(let fold, _):
             onToggleInviteFold?(fold)
         case .inviteMark:
@@ -2150,6 +2168,12 @@ final class TimelineCanvasView: NSView {
         /// An invite card's button. Carries its origin in row space so the
         /// painter can light it; the card's own body takes no click.
         case inviteButton(InviteCard, origin: CGPoint)
+        /// A voice invite card's way to its channel. Its origin, in row space.
+        case inviteChannel(ChannelID, origin: CGPoint)
+        /// A shared theme card's Preview — or Stop Preview. Its origin, in row space.
+        case sharedThemePreview(SharedClientTheme, origin: CGPoint)
+        /// A shared theme card's Save, with who shared it.
+        case sharedThemeSave(SharedClientTheme, creator: String, origin: CGPoint)
         /// A folded profile card, which opens where it is clicked, or its Hide
         /// Details. The origin is the control's, in row space.
         case inviteFold(InviteCardFold, origin: CGPoint)
@@ -2298,6 +2322,18 @@ final class TimelineCanvasView: NSView {
         // The whole card is a hit, not only the button: a click anywhere on it
         // must not fall through to the row beneath, and the button is the only
         // part of it that does anything.
+        if let theme = row.sharedTheme, theme.rect.contains(local) {
+            if theme.preview.rect.contains(local) {
+                return .sharedThemePreview(theme.theme, origin: theme.preview.rect.origin)
+            }
+            if theme.save.rect.contains(local) {
+                // Saved is a state, not a control: it swallows the click, offers no hand.
+                guard isThemeSaved?(theme.theme) != true else { return .component(url: nil, customID: nil, origin: .zero) }
+                return .sharedThemeSave(theme.theme, creator: theme.creatorName, origin: theme.save.rect.origin)
+            }
+            // The rest of the card swallows the click.
+            return .component(url: nil, customID: nil, origin: .zero)
+        }
         for card in row.inviteCards where card.rect.contains(local) {
             if let button = card.button, button.rect.contains(local), let invite = card.card {
                 // Your own friend link's button is drawn and is not a control:
@@ -2308,6 +2344,12 @@ final class TimelineCanvasView: NSView {
             }
             if let mark = card.mark, card.markRect.contains(local) {
                 return .inviteMark(mark, rect: card.markRect)
+            }
+            if case .voice(let voice) = card.body, voice.breadcrumbRect.contains(local) {
+                return .inviteChannel(voice.channelID, origin: voice.breadcrumbRect.origin)
+            }
+            if case .voiceRow(let row) = card.body, row.headerRect.contains(local) {
+                return .inviteChannel(row.channelID, origin: row.headerRect.origin)
             }
             // Not under a folded card's fade, where it is going or gone.
             if case .profile(let profile) = card.body, let more = profile.moreTraits, more.rect.contains(local) {
@@ -2554,7 +2596,8 @@ final class TimelineCanvasView: NSView {
             case .activityInvite(let origin), .listenAlong(let origin):
                 component = origin
                 cursor = origin == .zero ? nil : .pointingHand
-            case .inviteButton(_, let origin):
+            case .inviteButton(_, let origin), .inviteChannel(_, let origin),
+                 .sharedThemePreview(_, let origin), .sharedThemeSave(_, _, let origin):
                 component = origin
                 cursor = .pointingHand
             case .inviteFold(_, let origin):

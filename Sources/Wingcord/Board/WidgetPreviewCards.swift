@@ -29,6 +29,8 @@ struct ProfileWidgetStack: View {
                     )
                 case .personal(_, let widget):
                     PersonalWidgetPreview(widget: widget, ground: ground, open: openBoard)
+                case .clips(_, let clips):
+                    ClipsGalleryPreview(clips: clips, ground: ground, open: openBoard)
                 }
             }
             .accessibilityElement(children: .contain)

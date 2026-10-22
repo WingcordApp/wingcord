@@ -112,7 +112,10 @@ private struct ConnectionCard: View {
             HStack(spacing: SettingsMetrics.navigationIconGap) {
                 ConnectionMark(service: connection.type, side: SettingsMetrics.navigationIconSide)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(connection.name)
+                    // The account's name is Streamer Mode's personal
+                    // information; which service it is, is not.
+                    Text(StreamerMode.shared.hidesPersonalInformation
+                        ? String(repeating: "•", count: 10) : connection.name)
                         .font(SettingsType.rowTitle)
                         .foregroundStyle(Ink.primary)
                         .lineLimit(1)

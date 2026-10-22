@@ -88,6 +88,9 @@ struct RootView: View {
             }
             .task {
                 MemoryPressureWatcher.shared.start()
+                // Watches for streaming software and covers the windows; no
+                // network, so `--demo` runs it too.
+                StreamerMode.shared.start()
                 Breadcrumbs.record("root appeared")
                 await model.resumeStoredSessionIfAvailable()
             }
@@ -136,8 +139,11 @@ private struct ActionNoticeView: View {
     @Environment(\.motion) private var motion
 
     /// Long enough to read a sentence, short enough not to sit over the
-    /// transcript while somebody carries on.
-    private static let dwell = Duration.seconds(4)
+    /// transcript while somebody carries on — and the clips call warning's
+    /// six, Discord's own, for the one notice that is about the reader.
+    private static func dwell(for kind: ActionNotice.Kind) -> Duration {
+        kind == .clips ? .seconds(6) : .seconds(4)
+    }
 
     var body: some View {
         Group {
@@ -160,7 +166,7 @@ private struct ActionNoticeView: View {
                 // Keyed on the notice's own token, so a second one while the
                 // first is up restarts the clock rather than inheriting it.
                 .task(id: notice.id) {
-                    try? await Task.sleep(for: Self.dwell)
+                    try? await Task.sleep(for: Self.dwell(for: notice.kind))
                     guard !Task.isCancelled else { return }
                     dismiss()
                 }
@@ -175,6 +181,7 @@ private struct ActionNoticeView: View {
         case .failure: "exclamationmark.triangle.fill"
         case .scheduling: "clock.fill"
         case .success: "checkmark.circle.fill"
+        case .clips: "record.circle"
         }
     }
 
@@ -183,6 +190,7 @@ private struct ActionNoticeView: View {
         case .failure: AnyShapeStyle(Palette.destructive)
         case .scheduling: AnyShapeStyle(Ink.secondary)
         case .success: AnyShapeStyle(Palette.affirmative)
+        case .clips: AnyShapeStyle(Palette.destructive)
         }
     }
 }

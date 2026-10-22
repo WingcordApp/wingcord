@@ -58,41 +58,47 @@ struct CallControlRow: View {
     }
 
     private func controls(_ form: CallButton.Form) -> some View {
-        HStack(spacing: Spacing.base) {
-            CallButton(
-                kind: .camera, isActive: presentation.isCameraOn, form: form,
-                flyout: .devices(.camera), action: toggleCamera
-            )
-            CallButton(
-                kind: .screenShare, isActive: presentation.isScreenSharing, form: form,
-                flyout: presentation.isScreenSharing ? .stream : nil,
-                action: toggleScreenShare
-            )
-            CallButton(
-                kind: .microphone, isActive: presentation.isMuted, form: form,
-                flyout: .devices(.input), action: toggleMute
-            )
-            CallButton(
-                kind: .headphones, isActive: presentation.isDeafened, form: form,
-                flyout: .devices(.output), action: toggleDeafen
-            )
-            if presentation.canLaunchActivities {
-                CallButton(kind: .activities, isActive: isActivitiesOpen, form: form) {
-                    isActivitiesOpen.toggle()
-                }
-                .anchorPreference(key: CallPanelAnchors.self, value: .bounds) { [.activities: $0] }
-            }
-            if presentation.soundboard != .unavailable {
+        // The row's glass drawn together — each control its own capsule or
+        // disc of it. **Spacing 0: the controls never merge.** At the row's own
+        // gap they did, and a caption changing width ("Mute" → "Unmute")
+        // dragged its neighbours' glass along with it.
+        GlassEffectContainer(spacing: 0) {
+            HStack(spacing: Spacing.base) {
                 CallButton(
-                    kind: .soundboard, isActive: isSoundboardOpen, form: form,
-                    note: presentation.soundboard == .serverMuted ? "Soundboard disabled when server muted" : nil
-                ) {
-                    isSoundboardOpen.toggle()
+                    kind: .camera, isActive: presentation.isCameraOn, form: form,
+                    flyout: .devices(.camera), action: toggleCamera
+                )
+                CallButton(
+                    kind: .screenShare, isActive: presentation.isScreenSharing, form: form,
+                    flyout: presentation.isScreenSharing ? .stream : nil,
+                    action: toggleScreenShare
+                )
+                CallButton(
+                    kind: .microphone, isActive: presentation.isMuted, form: form,
+                    flyout: .devices(.input), action: toggleMute
+                )
+                CallButton(
+                    kind: .headphones, isActive: presentation.isDeafened, form: form,
+                    flyout: .devices(.output), action: toggleDeafen
+                )
+                if presentation.canLaunchActivities {
+                    CallButton(kind: .activities, isActive: isActivitiesOpen, form: form) {
+                        isActivitiesOpen.toggle()
+                    }
+                    .anchorPreference(key: CallPanelAnchors.self, value: .bounds) { [.activities: $0] }
                 }
-                .disabled(presentation.soundboard == .serverMuted)
-                .anchorPreference(key: CallPanelAnchors.self, value: .bounds) { [.soundboard: $0] }
+                if presentation.soundboard != .unavailable {
+                    CallButton(
+                        kind: .soundboard, isActive: isSoundboardOpen, form: form,
+                        note: presentation.soundboard == .serverMuted ? "Soundboard disabled when server muted" : nil
+                    ) {
+                        isSoundboardOpen.toggle()
+                    }
+                    .disabled(presentation.soundboard == .serverMuted)
+                    .anchorPreference(key: CallPanelAnchors.self, value: .bounds) { [.soundboard: $0] }
+                }
+                CallButton(kind: .leave, isActive: false, form: form, action: leave)
             }
-            CallButton(kind: .leave, isActive: false, form: form, action: leave)
         }
         .fixedSize()
     }

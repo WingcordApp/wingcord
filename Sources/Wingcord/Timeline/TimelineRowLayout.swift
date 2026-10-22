@@ -152,6 +152,8 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// An invitation to listen along on the author's Spotify — the whole
     /// message, as a poll is. See `ListenAlongSlot`.
     var listenAlong: ListenAlongSlot? = nil
+    /// A custom theme the message shares — Discord's theme card.
+    var sharedTheme: SharedThemeCardSlot? = nil
     /// The invites the text links to, drawn as Discord's invite cards.
     var inviteCards: [InviteCardSlot] = []
     /// The profiles the text links to — Discord's user profile embed. Hosted
@@ -617,6 +619,9 @@ nonisolated struct AttachmentSlot: Sendable {
     var favoriteRect: CGRect = .zero
     /// Discord's blurred stand-in, drawn until the picture lands.
     var placeholder: String?
+    /// What a Discord clip draws over its poster — its title, game and people.
+    /// Nil on every other attachment.
+    var clip: ClipTileHeader?
 
     enum Kind: Sendable, Equatable {
         /// A still or animated picture, drawn at its own size.
@@ -636,6 +641,75 @@ nonisolated struct AttachmentSlot: Sendable {
     /// Whether the slot draws a picture at all. What decides if the prefetch
     /// should ask for bytes.
     var carriesArtwork: Bool { kind == .image || kind == .video }
+}
+
+/// A Discord clip's header over its poster (docs/CLIPS-PRESENCE.md, Phase
+/// 4.5) — Discord's player's (module 478531): the title or "Untitled", the game
+/// and the day it was made, and up to four faces with the rest as a count.
+///
+/// **The words only where there is room for them**: Discord drops them under
+/// 250 points (`showTextContent`), and so does this.
+nonisolated struct ClipTileHeader: Sendable, Equatable {
+    struct Face: Sendable, Equatable {
+        var url: URL?
+        var monogram: String
+    }
+
+    var title: String?
+    var subtitle: String?
+    var faces: [Face]
+    /// Everyone past the fourth.
+    var overflow: Int
+
+    static let faceSide: CGFloat = 22
+    static let shownFaces = 4
+    static let minimumWidthForWords: CGFloat = 250
+    /// How far the shade under the header reaches down the poster.
+    static let shadeHeight: CGFloat = 64
+
+    init(_ clip: AttachmentClip, width: CGFloat) {
+        if width >= Self.minimumWidthForWords {
+            title = clip.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled"
+            let parts = [
+                clip.applicationName,
+                clip.createdAt.map { $0.formatted(.dateTime.month(.abbreviated).day()) },
+            ].compactMap(\.self)
+            subtitle = parts.isEmpty ? nil : parts.joined(separator: " · ")
+        } else {
+            title = nil
+            subtitle = nil
+        }
+        faces = clip.participants.prefix(Self.shownFaces).map { user in
+            Face(
+                url: user.avatarHash.flatMap { CDN.avatar(userID: user.id, hash: $0, side: Self.faceSide) }
+                    ?? CDN.defaultAvatar(index: user.defaultAvatarIndex),
+                monogram: user.monogram
+            )
+        }
+        overflow = max(0, clip.participants.count - Self.shownFaces)
+    }
+
+    /// Where the faces sit inside a poster `frame`, right to left from its
+    /// top-trailing corner, and the count's box before them.
+    func faceRects(in frame: CGRect) -> (faces: [CGRect], overflow: CGRect?) {
+        let inset: CGFloat = 10
+        let gap: CGFloat = 4
+        var x = frame.maxX - inset
+        var overflowRect: CGRect?
+        if overflow > 0 {
+            let width: CGFloat = overflow > 9 ? 30 : 24
+            x -= width
+            overflowRect = CGRect(x: x, y: frame.minY + inset, width: width, height: Self.faceSide)
+            x -= gap
+        }
+        var rects: [CGRect] = []
+        for _ in faces.indices {
+            x -= Self.faceSide
+            rects.append(CGRect(x: x, y: frame.minY + inset, width: Self.faceSide, height: Self.faceSide))
+            x -= gap
+        }
+        return (rects.reversed(), overflowRect)
+    }
 }
 
 /// A sticker's box.
@@ -915,6 +989,7 @@ private nonisolated struct MessageContent {
     var poll: PollSlot?
     var activityInvite: ActivityInviteSlot?
     var listenAlong: ListenAlongSlot?
+    var sharedTheme: SharedThemeCardSlot?
     var card: DrawnCard?
     var embeds: [EmbedSlot] = []
     var components: [ComponentSlot] = []
@@ -993,6 +1068,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// What each linked invite turned out to be, by code — see
         /// `AppModel.inviteLookups`. Empty for nearly every channel.
         var invites: [String: InviteLookup] = [:]
+        /// The rooms voice invites lead to, as the reader may see them — see
+        /// `AppModel.voiceInviteStates`. Empty unless one is linked.
+        var voiceInvites: [ChannelID: VoiceInviteState] = [:]
         /// The profile cards the reader has opened past Discord's fold.
         var expandedInvites: Set<InviteCardFold> = []
         /// The colours taken from pictures, by picture — a server card's banner
@@ -1482,6 +1560,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if let poll = row.poll { bottom = max(bottom, poll.rect.maxY) }
         if let invite = row.activityInvite { bottom = max(bottom, invite.rect.maxY) }
         if let listenAlong = row.listenAlong { bottom = max(bottom, listenAlong.rect.maxY) }
+        if let theme = row.sharedTheme { bottom = max(bottom, theme.rect.maxY) }
         for card in row.inviteCards { bottom = max(bottom, card.rect.maxY) }
         for card in row.hostedCards { bottom = max(bottom, card.rect.maxY) }
         for slot in row.reactions { bottom = max(bottom, slot.rect.maxY) }
@@ -1907,6 +1986,24 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 y = slot.rect.maxY
             }
 
+            // A custom theme somebody shared — Discord's theme card, under
+            // whatever they wrote with it.
+            if let theme = message.sharedTheme {
+                y += gap
+                let author = input.authors[message.authorID]
+                let slot = SharedThemeCardLayoutEngine.layout(
+                    theme,
+                    creatorName: author?.name ?? "Someone",
+                    creatorAvatarURL: author?.avatarURL,
+                    origin: CGPoint(x: cardX, y: y),
+                    availableWidth: cardWidth,
+                    style: input.style
+                )
+                content.sharedTheme = slot
+                holds(slot.rect)
+                y = slot.rect.maxY
+            }
+
             // A safety notice in Discord's system DM — the message's one embed,
             // drawn as Discord's own card rather than as an embed's.
             if let notice = SafetyNotice(message) {
@@ -2001,6 +2098,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     selfIDs: input.mentions.selfIDs,
                     isExpanded: input.expandedInvites.contains(InviteCardFold(message: message.id, code: code)),
                     palettes: input.palettes,
+                    voice: { if case .resolved(let card) = lookup, card.isVoiceChannel {
+                        card.channelID.flatMap { input.voiceInvites[$0] }
+                    } else { nil } }(),
+                    authorID: message.authorID,
                     origin: CGPoint(x: cardX, y: y),
                     availableWidth: cardWidth,
                     style: input.style
@@ -2337,6 +2438,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             poll: content.poll,
             activityInvite: content.activityInvite,
             listenAlong: content.listenAlong,
+            sharedTheme: content.sharedTheme,
             inviteCards: content.inviteCards,
             hostedCards: content.hostedCards,
             reactions: reactions,
@@ -3102,6 +3204,26 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         }
         if let invite = message.listenAlong {
             parts.append("Invite to Listen Along on \(invite.name).")
+        }
+        if message.sharedTheme != nil {
+            parts.append("A custom theme. Preview, or Save.")
+        }
+        // A clip's header and faces are drawn, so they are said: what it is
+        // called, its game, who is in it (docs/CLIPS-PRESENCE.md, 4.5).
+        for clip in message.attachments.compactMap(\.clip) {
+            var line = "Clip, " + (clip.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled")
+            if let game = clip.applicationName { line += ", \(game)" }
+            let names = clip.participants.map(\.preferredName)
+            if !names.isEmpty {
+                let shown = names.prefix(ClipTileHeader.shownFaces).joined(separator: ", ")
+                let rest = names.count - ClipTileHeader.shownFaces
+                line += rest > 0 ? ", with \(shown) and \(rest) more" : ", with \(shown)"
+            }
+            parts.append(line)
+        }
+        // A timeline comment's moment, which its reply header does not draw.
+        if let moment = message.mediaMention {
+            parts.append("At \(mediaTimeLabel(moment.timestampMS / 1_000)) in the clip")
         }
         switch SafetyNotice(message) {
         case .policy(_, let incident):
@@ -3873,7 +3995,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             isAnimated: isAnimated,
             favorite: isAnimated ? Self.favorite(for: attachment) : nil,
             favoriteRect: favoriteBadgeRect(in: rect),
-            placeholder: attachment.placeholder
+            placeholder: attachment.placeholder,
+            clip: isVideo ? attachment.clip.map { ClipTileHeader($0, width: rect.width) } : nil
         )
     }
 

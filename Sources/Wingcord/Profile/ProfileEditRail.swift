@@ -22,10 +22,15 @@ struct ProfileEditRail: View {
     var scopes: [ProfileEditScope]
     var selectScope: (ProfileEditScope) -> Void
     var collapse: () -> Void
-    var present: (ProfileEditPicker) -> Void
 
     @Environment(\.motion) private var motion
     @Environment(AppModel.self) private var model
+    @Environment(ProfileFlyouts.self) private var flyouts: ProfileFlyouts?
+
+    /// Raises a tile's flyout, hung off the tile.
+    private func present(_ picker: ProfileEditPicker) {
+        flyouts?.show(picker, from: .rail)
+    }
 
     /// Discord's 231-point rail, scaled by the ratio between their identity card
     /// and ours — 360 ÷ 400 — because the rail's job is to sit beside that card
@@ -39,8 +44,11 @@ struct ProfileEditRail: View {
             Divider().overlay(Palette.railHairline)
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.group) {
+                    if capability.cosmeticsLocked { serverLock }
                     ForEach(sections) { section in
                         railSection(section)
+                            .disabled(isLocked(section))
+                            .opacity(isLocked(section) ? 0.45 : 1)
                     }
                 }
                 .padding(.horizontal, Self.gutter)
@@ -63,6 +71,9 @@ struct ProfileEditRail: View {
     private var header: some View {
         HStack(spacing: Spacing.base) {
             scopeMenu
+                // First claim on the row: the name truncates inside the pill
+                // rather than the pill spilling past the rail.
+                .layoutPriority(1)
             Spacer(minLength: 0)
             Button(action: collapse) {
                 Image(systemName: "chevron.right.2")
@@ -107,19 +118,11 @@ struct ProfileEditRail: View {
 
     /// What the rail offers, which is **not the same list per scope**.
     ///
-    /// A server profile has no banner colour of its own on a free account and no
-    /// profile frame at all, so those rows are absent rather than drawn disabled
-    /// — a control that can never do anything is not a control.
-    /// **A row is here only when the whole path behind it works** — a picker to
-    /// choose in and a captured route to save with. Two are deliberately
-    /// missing:
+    /// **A row is here only when the whole path behind it works** — a flyout
+    /// to choose in and a route to save with. The frame joined the effect once
+    /// Discord's own save was read: both are the profile's collectibles,
+    /// `collectibles_sku_ids` (build 643186).
     ///
-    ///  - **The profile frame.** No capture and no documentation names the field
-    ///    that sets one; `PATCH /users/@me/profile` takes
-    ///    `profile_effect_sku_id` and there is no frame twin. A tile that opened
-    ///    a grid whose Apply could not be written is `INVARIANTS.md` §5.5.
-    ///  - **The display name style.** The write is captured — three flat keys on
-    ///    `PATCH /users/@me` — and the chooser is not built.
     /// What this account and this server actually permit — see
     /// `ProfileEditCapability`, where every gate is quoted from Discord's own
     /// parameter tables.
@@ -133,9 +136,35 @@ struct ProfileEditRail: View {
         // the card itself, where the thing it changes actually appears — a
         // control belongs next to what it affects, and a tag is worn on the
         // name rather than being a cosmetic in a grid. See `ServerTagChooser`.
-        case .account: [.nameplate, .avatar, .bannerColour, .effect, .displayNameStyle]
-        case .guild: [.nameplate, .avatar, .displayNameStyle]
+        case .account: [.nameplate, .avatar, .banner, .colours, .effectAndFrame, .displayNameStyle, .typingIndicator]
+        // **A server's profile carries its own of each**, on the two routes
+        // Discord splits it over — see `ProfileEditor.saveGuild`. There is no
+        // per-server typing indicator.
+        case .guild: [.nameplate, .avatar, .banner, .colours, .effectAndFrame, .displayNameStyle]
         }
+    }
+
+    /// Whether a section is dimmed and inert — **everything, in a server,
+    /// without Nitro** (Discord's own rule: a nickname and pronouns only), and
+    /// the banner on an account without it.
+    private func isLocked(_ section: RailSection) -> Bool {
+        if capability.cosmeticsLocked { return true }
+        switch section {
+        case .banner: return !capability.canEditCurrentBanner
+        case .effectAndFrame: return !capability.canEditCurrentEffect
+        default: return false
+        }
+    }
+
+    /// Said once, at the top, rather than under every tile.
+    private var serverLock: some View {
+        Label(ProfileEditCapability.serverProfileNote, systemImage: "lock.fill")
+            .font(.system(.caption, weight: .medium))
+            .foregroundStyle(InkColor.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(Spacing.snug)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassEffect(.regular, in: .rect(cornerRadius: Radius.chip, style: .continuous))
     }
 
     @ViewBuilder
@@ -151,7 +180,7 @@ struct ProfileEditRail: View {
                 if !permits(section) {
                     Text("NITRO")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(InkColor.tertiary)
+                        .foregroundStyle(InkColor.secondary)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(
@@ -162,13 +191,11 @@ struct ProfileEditRail: View {
             switch section {
             case .nameplate: nameplateTile
             case .avatar: avatarRow
-            case .bannerColour: bannerColourTile
-            case .effect:
-                effectTile
-                    .disabled(!capability.canEditProfileEffect)
-                    .opacity(capability.canEditProfileEffect ? 1 : 0.45)
-                    .help(capability.canEditProfileEffect ? "" : ProfileEditCapability.nitroNote)
+            case .banner: bannerTile
+            case .colours: coloursTile
+            case .effectAndFrame: effectAndFrameRow
             case .displayNameStyle: displayNameStyleTile
+            case .typingIndicator: typingIndicatorTile
             }
         }
     }
@@ -177,7 +204,8 @@ struct ProfileEditRail: View {
     /// "Banner Colour" free, "Theme & Banner" on Nitro. The single colour was
     /// always free — Nitro adds the second one and the banner image.
     private func title(for section: RailSection) -> String {
-        section == .bannerColour ? capability.colourSectionTitle : section.title
+        guard section == .colours else { return section.title }
+        return capability.canEditCurrentTheme ? "Profile Theme" : "Banner Colour"
     }
 
     /// Whether the account may use this section at all.
@@ -187,9 +215,16 @@ struct ProfileEditRail: View {
     /// `accent_color` does not, so the colour row itself is never locked — only
     /// its second well is.
     private func permits(_ section: RailSection) -> Bool {
+        // In a locked server profile the one note at the top says it; a chip
+        // on every row would say it six times.
+        guard !capability.cosmeticsLocked else { return true }
         switch section {
-        case .effect: capability.canEditProfileEffect
-        case .nameplate, .avatar, .bannerColour, .displayNameStyle: true
+        case .banner: return capability.canEditCurrentBanner
+        case .effectAndFrame: return capability.canEditCurrentEffect
+        // Marked for an account without Nitro, never locked: Discord says at
+        // Save whether this account may wear one (D23).
+        case .typingIndicator: return capability.customizesProfile
+        case .nameplate, .avatar, .colours, .displayNameStyle: return true
         }
     }
 
@@ -198,6 +233,9 @@ struct ProfileEditRail: View {
     private var pairSide: CGFloat { (contentWidth - Spacing.snug) / 2 }
 
     // MARK: The tiles
+    //
+    // Each tile raises its flyout and **carries the anchor itself**, so the
+    // flyout hangs off the thing that was clicked and points at it.
 
     private var nameplateTile: some View {
         NameplateEditTile(
@@ -207,6 +245,7 @@ struct ProfileEditRail: View {
             open: { present(.nameplate) },
             clear: { editor.nameplate = nil }
         )
+        .profileFlyout(.nameplate, at: .rail)
     }
 
     private var avatarRow: some View {
@@ -220,6 +259,7 @@ struct ProfileEditRail: View {
                 )
             }
             .accessibilityLabel(Text("Change avatar"))
+            .profileFlyout(.avatar, at: .rail)
 
             DecorationEditTile(
                 side: pairSide,
@@ -230,79 +270,75 @@ struct ProfileEditRail: View {
                     editor.decorationAsset = nil
                 }
             )
+            .profileFlyout(.decoration, at: .rail)
         }
     }
 
-    /// **The system's own colour picker, not a sheet of swatches.** A colour is
-    /// the one thing here that is not a grid of artwork somebody bought — macOS
-    /// already has the eyedropper, the palettes and the accessibility support,
-    /// and a hand-rolled grid would be a worse version of all three.
-    /// **The system's own colour picker, not a sheet of swatches.** A colour is
-    /// the one thing here that is not a grid of artwork somebody bought — macOS
-    /// already has the eyedropper, the palettes and the accessibility support,
-    /// and a hand-rolled grid would be a worse version of all three.
-    ///
-    /// **One well or two, and they are different FIELDS rather than one field
-    /// with more of it.** A free account writes `accent_color`, a single
-    /// integer. A Nitro account writes `theme_colors`, an array of exactly two —
-    /// documented, and captured as `{"theme_colors":[14853140,3026736]}`. So the
-    /// section is not "the same control, unlocked": it is the reason the heading
-    /// changes from "Banner Colour" to "Theme & Banner".
-    @ViewBuilder
-    private var bannerColourTile: some View {
-        if capability.canEditThemeColors {
-            HStack(spacing: Spacing.snug) {
-                themeWell(0)
-                themeWell(1)
-                Spacer(minLength: 0)
+    /// The banner picture — what is set, or the colour behind it.
+    private var bannerTile: some View {
+        EditTile(side: contentWidth, aspect: 2.6, action: { present(.banner) }) {
+            ZStack {
+                Rectangle().fill(Color(hex: editor.themeStop(0)))
+                if let url = profile.bannerURL {
+                    RemoteImage(url: url, side: contentWidth, bucket: .artwork) { Color.clear }
+                        .aspectRatio(contentMode: .fill)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            ColorPicker(
-                "Banner Colour",
-                selection: Binding(
-                    get: { editor.accentColor.map { Color(hex: $0) } ?? Palette.skeletonPlate },
-                    set: { editor.accentColor = $0.rgbValue }
-                ),
-                supportsOpacity: false
-            )
-            .labelsHidden()
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipShape(.rect(cornerRadius: Radius.chip - 4, style: .continuous))
         }
+        .overlay { PlusBadge(isVisible: profile.bannerURL == nil) }
+        .accessibilityLabel(Text("Change banner"))
+        .profileFlyout(.banner, at: .rail)
     }
 
-    private func themeWell(_ index: Int) -> some View {
-        ColorPicker(
-            index == 0 ? "Theme start" : "Theme end",
-            selection: Binding(
-                get: { themeStop(index) },
-                set: { setThemeStop(index, $0) }
-            ),
-            supportsOpacity: false
-        )
-        .labelsHidden()
-    }
-
-    /// One end of the theme, falling back to the banner colour so a profile with
-    /// no theme yet opens on something rather than on black.
-    private func themeStop(_ index: Int) -> Color {
-        if let colors = editor.themeColors, colors.count > index {
-            return Color(hex: colors[index])
+    /// The profile's colours as one swatch — the banner colour, or the theme's
+    /// two ends as the gradient the card is painted with. Opens Wingcord's own
+    /// picker (`ProfileColourFlyout`), not the system's.
+    private var coloursTile: some View {
+        Button { present(.colours) } label: {
+            HStack(spacing: Spacing.base) {
+                if capability.canEditCurrentTheme {
+                    swatchDot(editor.themeStop(0))
+                    swatchDot(editor.themeStop(1))
+                } else {
+                    swatchDot(editor.accentColor ?? editor.fallbackColour)
+                }
+                Text(capability.canEditCurrentTheme
+                    ? ColourText.name(editor.themeStop(0))
+                    : ColourText.name(editor.accentColor ?? editor.fallbackColour))
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(InkColor.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "paintpalette.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(InkColor.secondary)
+            }
+            .padding(.horizontal, Spacing.snug)
+            .frame(height: 44)
+            .background {
+                RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
+                    .fill(.linearGradient(
+                        colors: capability.canEditCurrentTheme
+                            ? [Color(hex: editor.themeStop(0)).opacity(0.55), Color(hex: editor.themeStop(1)).opacity(0.55)]
+                            : [Color(hex: editor.accentColor ?? editor.fallbackColour).opacity(0.45), Palette.skeletonPlate],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ))
+            }
+            .contentShape(.rect(cornerRadius: Radius.chip, style: .continuous))
         }
-        return editor.accentColor.map { Color(hex: $0) } ?? Palette.skeletonPlate
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(capability.canEditCurrentTheme ? "Change profile theme" : "Change banner colour"))
+        .profileFlyout(.colours, at: .rail)
     }
 
-    private func setThemeStop(_ index: Int, _ colour: Color) {
-        // **Always written as a pair.** The field takes two integers or null, so
-        // one well moving still sends both — and a profile that had no theme has
-        // to acquire a whole one rather than half of it.
-        var stops = editor.themeColors ?? [
-            editor.accentColor ?? 0,
-            editor.accentColor ?? 0,
-        ]
-        while stops.count < 2 { stops.append(editor.accentColor ?? 0) }
-        stops[index] = colour.rgbValue
-        editor.themeColors = Array(stops.prefix(2))
+    private func swatchDot(_ value: UInt32) -> some View {
+        Circle()
+            .fill(Color(hex: value))
+            .overlay { Circle().strokeBorder(.white.opacity(0.85), lineWidth: 2) }
+            .frame(width: 20, height: 20)
+            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
     }
 
     private var displayNameStyleTile: some View {
@@ -321,21 +357,77 @@ struct ProfileEditRail: View {
                 .padding(.horizontal, Spacing.group)
             }
             .frame(height: 56)
-            .overlay { PlusBadge(isVisible: editor.displayNameStyle == nil) }
+            .overlay(alignment: .trailing) {
+                PlusBadge(isVisible: editor.displayNameStyle == nil)
+                    .padding(.trailing, Spacing.snug)
+            }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text("Change display name style"))
+        .profileFlyout(.displayNameStyle, at: .rail)
     }
 
-    private var effectTile: some View {
-        HStack(spacing: Spacing.snug) {
-            EditTile(side: pairSide, aspect: 0.78, action: { present(.effect) }) {
-                MiniProfileSkeleton()
+    /// The indicator itself, with the reader's own name — what others will see
+    /// above their composer.
+    private var typingIndicatorTile: some View {
+        Button { present(.typingIndicator) } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
+                    .fill(Palette.skeletonPlate)
+                TypingIndicator(
+                    names: [profile.displayName],
+                    style: editor.typingIndicatorStyle
+                )
+                .padding(.top, Spacing.tight)
             }
-            .overlay { PlusBadge(isVisible: editor.profileEffectSKU == nil) }
-            .accessibilityLabel(Text("Change profile effect"))
-            Spacer(minLength: 0)
+            .frame(height: 56)
+            // At the end, not the middle: centred, it sat on the preview's
+            // own words.
+            .overlay(alignment: .trailing) {
+                PlusBadge(isVisible: editor.typingIndicatorStyle == nil)
+                    .padding(.trailing, Spacing.snug)
+            }
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Change typing indicator"))
+        .profileFlyout(.typingIndicator, at: .rail)
+    }
+
+    /// Effect and frame side by side — Discord's "Profile Effect & Frame".
+    /// Both are written together as the profile's collectibles.
+    private var effectAndFrameRow: some View {
+        HStack(spacing: Spacing.snug) {
+            VStack(spacing: Spacing.tight) {
+                EditTile(side: pairSide, aspect: 0.78, action: { present(.effect) }) {
+                    if let still = profile.effect?.reducedMotionURL {
+                        RemoteImage(url: still, side: pairSide, bucket: .artwork) { MiniProfileSkeleton() }
+                            .aspectRatio(contentMode: .fit)
+                    } else {
+                        MiniProfileSkeleton()
+                    }
+                }
+                .overlay { PlusBadge(isVisible: editor.profileEffectSKU == nil) }
+                .accessibilityLabel(Text("Change profile effect"))
+                .profileFlyout(.effect, at: .rail)
+                tileCaption("Effect")
+            }
+            VStack(spacing: Spacing.tight) {
+                EditTile(side: pairSide, aspect: 0.78, action: { present(.frame) }) {
+                    // The frame as worn, around the tile's own small card.
+                    FrameThumbnail(frame: profile.frame, cardWidth: pairSide * 0.5)
+                }
+                .overlay { PlusBadge(isVisible: editor.profileFrameSKU == nil) }
+                .accessibilityLabel(Text("Change profile frame"))
+                .profileFlyout(.frame, at: .rail)
+                tileCaption("Frame")
+            }
+        }
+    }
+
+    private func tileCaption(_ text: String) -> some View {
+        Text(text)
+            .font(.system(.caption, weight: .medium))
+            .foregroundStyle(InkColor.secondary)
     }
 
     // MARK: The upsell
@@ -349,10 +441,8 @@ struct ProfileEditRail: View {
     private var nitroFooter: some View {
         // Whatever this scope's perk is, not "pays for nothing": Basic and
         // Classic are paid and still have half this rail locked.
-        if editor.scope.guildID == nil
-            ? !capability.customizesProfile
-            : !capability.customizesServerProfile
-        {
+        // A locked server profile says so once, at the top of the rail.
+        if editor.scope.guildID == nil, !capability.customizesProfile {
             VStack(alignment: .leading, spacing: Spacing.base) {
                 Text("Some of these need Nitro.")
                     .font(Typeface.rowSubtitle)
@@ -373,9 +463,11 @@ struct ProfileEditRail: View {
 private enum RailSection: Hashable, Identifiable {
     case nameplate
     case avatar
-    case bannerColour
-    case effect
+    case banner
+    case colours
+    case effectAndFrame
     case displayNameStyle
+    case typingIndicator
 
     var id: Self { self }
 
@@ -383,35 +475,41 @@ private enum RailSection: Hashable, Identifiable {
         switch self {
         case .nameplate: "Nameplate"
         case .avatar: "Avatar & Decoration"
-        case .bannerColour: "Banner Colour"
-        case .effect: "Profile Effect"
+        case .banner: "Banner"
+        case .colours: "Banner Colour"
+        case .effectAndFrame: "Profile Effect & Frame"
         case .displayNameStyle: "Display Name Style"
+        case .typingIndicator: "Typing Indicator"
         }
     }
 }
 
-/// Which sheet a rail tile raises.
+/// Which flyout a rail tile — or a pencil on the card — raises.
 enum ProfileEditPicker: Hashable, Identifiable {
     case avatar
+    case banner
+    case colours
     case nameplate
     case decoration
     case effect
+    case frame
     case displayNameStyle
+    case typingIndicator
     /// Not a cosmetic and not in the rail — raised from the profile's own
-    /// Connections section, which is the only place it makes sense from.
+    /// Connections section, and still a sheet: it is a sign-in, not a choice.
     case connection
 
     var id: Self { self }
 
-    /// Which slice of `collectibles-purchases` this picker shows, for the three
-    /// that are a grid of owned artwork. **The avatar is not one of them** — it
-    /// is a file, a recents list and a removal, and none of those is a purchase.
+    /// Which slice of `collectibles-purchases` this flyout shows, for the four
+    /// that are a grid of owned artwork.
     var collectible: CollectibleKind? {
         switch self {
-        case .avatar, .displayNameStyle, .connection: nil
+        case .avatar, .banner, .colours, .displayNameStyle, .typingIndicator, .connection: nil
         case .nameplate: .nameplate
         case .decoration: .avatarDecoration
         case .effect: .profileEffect
+        case .frame: .profileFrame
         }
     }
 }

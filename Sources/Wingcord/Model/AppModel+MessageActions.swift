@@ -350,6 +350,16 @@ extension AppModel {
         sessionController.send(words.isEmpty ? request.link : "\(request.link)\n\n\(words)", to: permitted)
     }
 
+    /// Sends a custom theme to the conversations its share sheet picked —
+    /// only those the reader may still write in, as the two sheets above.
+    func shareTheme(_ theme: SharedClientTheme, to targets: [ChannelID], comment: String) {
+        let permitted = targets.filter { permissionGate.canSend(in: $0) }
+        guard !permitted.isEmpty else { return }
+        sessionController.shareTheme(
+            theme, to: permitted, comment: comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
     // MARK: The pasteboard
 
     func copyText(of messageID: MessageID, in channelID: ChannelID) {
@@ -630,6 +640,11 @@ extension AppModel {
     /// Says that an act landed, where Discord says so — see `ActionNotice.Kind.success`.
     func reportSuccess(_ text: String) {
         report(text, as: .success)
+    }
+
+    /// Says that somebody in the call keeps clips — see `AppModel+Clips`.
+    func reportClipsNotice(_ text: String) {
+        report(text, as: .clips)
     }
 
     private func report(_ text: String, as kind: ActionNotice.Kind) {

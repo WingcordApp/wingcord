@@ -14,10 +14,32 @@ import SwiftUI
 /// ten.
 struct MediaVideoControls: View {
     @Bindable var playback: VideoPlayback
+    /// A clip's marks and switches — docs/CLIPS-PRESENCE.md, Phase 4.5.
+    var clip: ClipBarExtras? = nil
 
     @State private var scrubValue: Double = 0
+    /// The scrubber's frame, which a clip's marks are laid along.
+    @State private var track: CGRect = .zero
+
+    private nonisolated static let space = "mediaVideoBar"
 
     var body: some View {
+        VStack(spacing: 0) {
+            if let clip, !clip.marks.isEmpty {
+                ClipMarkerRow(
+                    marks: clip.marks,
+                    track: track,
+                    duration: playback.duration,
+                    currentTime: playback.currentTime,
+                    seek: playback.seek(to:)
+                )
+            }
+            controls
+        }
+        .coordinateSpace(.named(Self.space))
+    }
+
+    private var controls: some View {
         HStack(spacing: Spacing.snug) {
             MediaBarControl(
                 systemImage: playback.isPlaying ? "pause.fill" : "play.fill",
@@ -39,6 +61,7 @@ struct MediaVideoControls: View {
             .disabled(playback.duration <= 0)
             .accessibilityLabel("Playback position")
             .accessibilityValue(mediaTimeLabel(playback.elapsedSeconds))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { track = $0 }
 
             Text("−" + mediaTimeLabel(playback.remainingSeconds))
                 .font(Typeface.metadata.monospacedDigit())
@@ -54,6 +77,25 @@ struct MediaVideoControls: View {
                 isActive: playback.isLooping,
                 action: { playback.isLooping.toggle() }
             )
+
+            // Discord's two switches, each only where there is something for
+            // it to show (module 682176).
+            if let clip, clip.hasSpeaking {
+                MediaBarControl(
+                    systemImage: "person.wave.2.fill",
+                    label: "Speaking indicators",
+                    isActive: clip.state.showsSpeaking,
+                    action: { clip.state.showsSpeaking.toggle() }
+                )
+            }
+            if let clip, clip.hasComments {
+                MediaBarControl(
+                    systemImage: "text.bubble",
+                    label: "Timeline comments",
+                    isActive: clip.state.showsComments,
+                    action: { clip.state.showsComments.toggle() }
+                )
+            }
         }
         // The clock drives the thumb whenever the reader is not holding it;
         // `isScrubbing` is what keeps the two from fighting for the same value

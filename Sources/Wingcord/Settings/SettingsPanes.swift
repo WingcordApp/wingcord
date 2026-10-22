@@ -39,6 +39,7 @@ struct SettingsPaneContent: View {
             case .activity: ActivityPane()
             case .overlay: OverlayPane()
             case .clips: ClipsPane()
+            case .streamerMode: StreamerModePane()
             case .account: AccountPane()
             case .connectedApps: ConnectedAppsPane()
             case .privacy: PrivacyPane()
@@ -48,6 +49,7 @@ struct SettingsPaneContent: View {
             case .shortcuts: ShortcutsPane()
             case .storage: StoragePane()
             case .diagnostics: DiagnosticsPane()
+            case .experiments: ExperimentsPane()
             case .about: AboutPane()
             }
         }
@@ -118,6 +120,15 @@ private struct GeneralPane: View {
                 "The items are absent rather than greyed out when this is off — a menu a third longer for nobody's benefit is worse than a shorter one.",
                 symbolName: "number"
             )
+
+            SettingsCard {
+                SettingsNavigationRow(
+                    title: "Experiments",
+                    subtitle: SettingsSection.experiments.summary,
+                    symbolName: SettingsSection.experiments.symbolName,
+                    tint: SettingsSection.experiments.tint
+                ) { navigate(.experiments) }
+            }
 
             // Vencord's Fake Nitro (decision 9). Discord has no words for it,
             // so its switches carry the plugin's own descriptions.
@@ -384,6 +395,16 @@ private struct AppearancePane: View {
                     + "ships and the veils it reads them through. The first eight are light, and "
                     + "turn the whole window light, as they do in Discord.",
                 symbolName: "swatchpalette"
+            )
+        }
+
+        SettingsGroup("Saved Themes") {
+            SavedThemeGallery(ring: themeRing)
+            SettingsFootnote(
+                "Custom themes from conversations, kept with Save on their card, and the ones your "
+                    + "account has. Each is drawn through Discord's own custom-theme recipe, in the "
+                    + "room it was made for. Right-click one to share it or delete it.",
+                symbolName: "bookmark"
             )
         }
 
@@ -838,6 +859,9 @@ private struct NotificationsPane: View {
                 symbolName: "gear"
             )
         }
+
+        // A macOS Focus, worn as a status — this Mac's, like the banners above.
+        FocusSettingsGroup()
 
         // **Everything below follows the ACCOUNT, not this Mac.** The three
         // cards above are what this client does with a notification; these are

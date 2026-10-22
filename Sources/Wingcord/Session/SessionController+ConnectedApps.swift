@@ -97,7 +97,10 @@ extension SessionController {
                 replaceConnection(connection.id) { $0 = updated }
                 // "Display Spotify as your status" decides the Listening
                 // activity, which is on the presence now or must leave it.
-                if connection.type == "spotify" { publishPresence() }
+                if connection.type == "spotify" {
+                    nowPlaying.reconsider()
+                    publishPresence()
+                }
             } catch {
                 replaceConnection(connection.id) { $0 = previous }
                 Self.trace("set shows activity \(connection.id) failed: \(Self.describe(error))")

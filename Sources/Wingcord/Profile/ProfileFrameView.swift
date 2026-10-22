@@ -279,19 +279,27 @@ extension View {
     /// The two passes are still two, and for the reason they always were: a
     /// `back` layer drawn in front covers the avatar it was authored to sit
     /// behind. Here that means one goes under the whole sheet and one over it.
+    ///
+    /// - Parameter leadingInset: how far into this surface the region starts —
+    ///   **the editor's rail**, which sits before the identity panel while the
+    ///   profile is being edited. Without it the frame wrapped the rail and
+    ///   half the card (Alex's screenshots, 2026-10-22).
     @ViewBuilder
     func profileFrame(
         _ frame: ProfileFrame?,
         over regionWidth: CGFloat,
+        leadingInset: CGFloat = 0,
         alignment: Alignment = .leading
     ) -> some View {
         if let frame, !frame.isEmpty {
             self
                 .background(alignment: alignment) {
                     region(frame, regionWidth, .back)
+                        .padding(.leading, leadingInset)
                 }
                 .overlay(alignment: alignment) {
                     region(frame, regionWidth, .front)
+                        .padding(.leading, leadingInset)
                 }
         } else {
             self

@@ -352,6 +352,9 @@ public actor DiscordREST {
     ///   content (`sendPollMessage`) — the third.
     /// - Parameter pingsRepliedAuthor: false sends Discord's quiet reply — see
     ///   `QuietReplyMentions`.
+    /// - Parameter sharedTheme: a custom theme to share — Discord's share
+    ///   modal posts it as `shared_client_theme`, with or without words: the
+    ///   fourth body that may be empty.
     public func sendMessage(
         in channelID: ChannelID,
         content: String,
@@ -362,7 +365,9 @@ public actor DiscordREST {
         attachments: [UploadedAttachment] = [],
         poll: PollDraft? = nil,
         listenAlong: (sessionID: String, partyID: String)? = nil,
-        inventoryEntry: Data? = nil
+        inventoryEntry: Data? = nil,
+        sharedTheme: SharedClientTheme? = nil,
+        mediaMention: MediaMention? = nil
     ) async throws -> Message {
         struct Body: Encodable {
             var content: String
@@ -385,6 +390,10 @@ public actor DiscordREST {
             /// A reply to somebody's activity carries the entry it answers —
             /// Discord's `{unverified_content: entry}` (`428249`).
             var content_inventory_entry: InventoryEntry?
+            var shared_client_theme: SharedClientThemeDTO?
+            /// A timeline comment's moment — a reply that carries it
+            /// (Discord's `getSendMessageOptionsForReply` → `mediaMention`).
+            var media_mention: MediaMentionDTO?
 
             struct InventoryEntry: Encodable {
                 var unverified_content: JSONTree
@@ -408,7 +417,9 @@ public actor DiscordREST {
             activity: listenAlong.map { Body.Invitation(session_id: $0.sessionID, party_id: $0.partyID) },
             content_inventory_entry: inventoryEntry
                 .flatMap { try? JSONDecoder().decode(JSONTree.self, from: $0) }
-                .map { Body.InventoryEntry(unverified_content: $0) }
+                .map { Body.InventoryEntry(unverified_content: $0) },
+            shared_client_theme: sharedTheme.map(SharedClientThemeDTO.init),
+            media_mention: mediaMention.map(MediaMentionDTO.init)
         )
         return try await request(
             method: "POST",

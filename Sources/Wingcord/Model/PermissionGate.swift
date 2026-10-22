@@ -167,10 +167,14 @@ final class PermissionGate {
     /// field is drawn rather than after `PATCH /guilds/{id}/members/@me` answers
     /// 403.
     ///
+    /// **Or `MANAGE_NICKNAMES`**, which covers everybody's nickname and so
+    /// the reader's own — Discord's own check takes either. A moderator whose
+    /// role grants only the second was shown a padlock over their own name.
+    ///
     /// Guild-level rather than channel-level: a nickname is not scoped to a
     /// channel, so a permission resolved against one would be right by accident.
     func canChangeNickname(in guildID: GuildID) -> Bool {
-        permissions(inGuild: guildID).contains(.changeNickname)
+        !permissions(inGuild: guildID).isDisjoint(with: [.changeNickname, .manageNicknames])
     }
 
     /// Whether a channel appears in the list at all.

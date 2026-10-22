@@ -18,17 +18,22 @@ struct IncomingCallCard: View {
     var decline: () -> Void
 
     @Environment(\.motion) private var motion
-    /// Drives the ring's pulse while it is ringing. Ambient, self-initiated
-    /// motion — the one class §3 exempts from the two-hundred-millisecond bar.
-    @State private var isRinging = false
 
     var body: some View {
         HStack(spacing: Spacing.snug) {
             AvatarView(url: avatarURL, monogram: monogram, side: 44)
                 .overlay {
-                    Circle()
-                        .strokeBorder(Palette.presenceOnline.opacity(isRinging ? 0.1 : 0.55), lineWidth: 2)
-                        .padding(isRinging ? -7 : -2.5)
+                    // The ring's pulse, ambient and self-initiated — the one
+                    // class §3 exempts from the two-hundred-millisecond bar.
+                    // **Off a timeline, not a `repeatForever` animation**, which
+                    // SwiftUI waits on before it removes a view — so an
+                    // answered call's card could never leave. See `VoiceTile`.
+                    SwiftUI.TimelineView(.animation(minimumInterval: 1.0 / 30, paused: motion.reduceMotion)) { timeline in
+                        let ring = Self.ring(at: timeline.date, still: motion.reduceMotion)
+                        Circle()
+                            .strokeBorder(Palette.presenceOnline.opacity(0.55 - 0.45 * ring), lineWidth: 2)
+                            .padding(-2.5 - 4.5 * ring)
+                    }
                 }
 
             VStack(alignment: .leading, spacing: 1) {
@@ -75,14 +80,15 @@ struct IncomingCallCard: View {
         .glassEffect(.regular, in: .rect(cornerRadius: Radius.card))
         .padding(.top, Spacing.base)
         .transition(.move(edge: .top).combined(with: .materialize(from: .top)))
-        .task {
-            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-                isRinging = true
-            }
-        }
-        .onDisappear { isRinging = false }
         .animation(motion.panel, value: callerName)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("Incoming call from \(callerName)"))
+    }
+
+    /// 0…1 and back over two seconds, eased at both ends.
+    private static func ring(at date: Date, still: Bool) -> CGFloat {
+        guard !still else { return 0 }
+        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2
+        return 0.5 - 0.5 * cos(phase * 2 * .pi)
     }
 }

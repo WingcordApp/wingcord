@@ -7,7 +7,7 @@ import Foundation
 /// half a status, and an expiry with no status to expire is a timer for
 /// nothing — Discord carries all three in one `CustomStatus` message and the
 /// write replaces the whole of it.
-public struct CustomStatus: Hashable, Sendable {
+public struct CustomStatus: Hashable, Sendable, Codable {
     public var text: String?
     public var emoji: EmojiRef?
     /// When it clears itself. Nil is "Don't clear".

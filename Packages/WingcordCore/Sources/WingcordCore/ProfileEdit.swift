@@ -127,3 +127,45 @@ public struct OwnedCollectible: Hashable, Sendable, Identifiable {
         self.isNitroExclusive = isNitroExclusive
     }
 }
+
+/// One collectible a profile lists as worn: which product, and which kind.
+///
+/// The profile route's `collectibles`, `{sku_id, type}` — the kinds are
+/// `CollectibleKind`'s numbering, kept raw here because the list is open and a
+/// kind this client does not know still has to survive a save.
+public struct WornCollectible: Hashable, Sendable, Codable {
+    public var skuID: String
+    public var type: Int
+
+    public init(skuID: String, type: Int) {
+        self.skuID = skuID
+        self.type = type
+    }
+
+    public init(skuID: String, kind: CollectibleKind) {
+        self.init(skuID: skuID, type: kind.rawValue)
+    }
+}
+
+extension Array where Element == WornCollectible {
+    /// `collectibles_sku_ids` as Discord's own save builds it: this list with
+    /// the effect and the frame each replaced where they were edited, every
+    /// other entry kept in place (build 643186, `f91e8396…`). Nil when neither
+    /// was edited, which leaves the key out.
+    public func skus(effect: FieldEdit<String>, frame: FieldEdit<String>) -> [String]? {
+        guard effect.isDirty || frame.isDirty else { return nil }
+        var worn = self
+        for (edit, kind) in [(effect, CollectibleKind.profileEffect), (frame, .profileFrame)] {
+            switch edit {
+            case .unchanged:
+                continue
+            case .cleared:
+                worn.removeAll { $0.type == kind.rawValue }
+            case .set(let sku):
+                worn.removeAll { $0.type == kind.rawValue }
+                worn.append(WornCollectible(skuID: sku, kind: kind))
+            }
+        }
+        return worn.map(\.skuID)
+    }
+}

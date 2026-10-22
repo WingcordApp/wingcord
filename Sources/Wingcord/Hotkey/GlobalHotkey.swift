@@ -29,10 +29,23 @@ enum GlobalAction: String, CaseIterable, Identifiable, Sendable {
     case toggleOverlay
     /// Hand the overlay the mouse, or give it back to the game.
     case toggleOverlayLock
-    /// Keep the last fifteen seconds.
+    /// Keep the last moments — Settings › Clips' length.
     case saveClip
     /// Keep the frame that is on screen.
     case saveScreenshot
+    /// Bring up the capture bar — record or take a picture of the screen, a
+    /// window or an area.
+    case showCaptureBar
+    /// Start a recording with the bar's choices, or stop the one running.
+    case toggleRecording
+    /// Discord's "Toggle Streamer Mode".
+    case toggleStreamerMode
+    /// Discord's "Open Soundboard": the wheel at the pointer, until a sound
+    /// is chosen or it is dismissed.
+    case openSoundboard
+    /// Discord's "Open Soundboard (Hold)": the wheel while the key is held;
+    /// letting go plays the sound the pointer points at.
+    case holdSoundboard
 
     var id: String { rawValue }
 
@@ -42,6 +55,11 @@ enum GlobalAction: String, CaseIterable, Identifiable, Sendable {
         case .toggleOverlayLock: "Lock or unlock the overlay"
         case .saveClip: "Save a clip"
         case .saveScreenshot: "Save a screenshot"
+        case .showCaptureBar: "Show the capture bar"
+        case .toggleRecording: "Start or stop recording"
+        case .toggleStreamerMode: "Toggle Streamer Mode"
+        case .openSoundboard: "Open the soundboard"
+        case .holdSoundboard: "Hold for the soundboard"
         }
     }
 
@@ -52,11 +70,25 @@ enum GlobalAction: String, CaseIterable, Identifiable, Sendable {
         case .toggleOverlayLock:
             "Gives the mouse back to the game without dismissing the overlay."
         case .saveClip:
-            "Writes the last fifteen seconds to a file. Nothing is recorded until you press it."
+            "Writes what just happened to a file — as long as Settings › Clips says. Nothing is saved until you press it."
         case .saveScreenshot:
             "Writes the frame that is on screen to a file."
+        case .showCaptureBar:
+            "Opens the bar for recording the screen, a window or an area, or taking a picture of one."
+        case .toggleRecording:
+            "Starts a recording with the capture bar's choices, or stops the one running."
+        case .toggleStreamerMode:
+            "Hides your personal details, invite links, sounds and notifications — or shows them again."
+        case .openSoundboard:
+            "Opens the soundboard at your pointer, anywhere. Point at a sound and click it."
+        case .holdSoundboard:
+            "Opens the soundboard at your pointer while you hold the key; let go to play the sound you point at."
         }
     }
+
+    /// Whether the action also wants the key's release — the hold-to-show
+    /// soundboard is the one.
+    var listensForRelease: Bool { self == .holdSoundboard }
 
     /// The binding a fresh install gets.
     ///
@@ -78,6 +110,17 @@ enum GlobalAction: String, CaseIterable, Identifiable, Sendable {
             Hotkey(keyCode: UInt16(kVK_ANSI_C), modifiers: [.control, .command, .shift])
         case .saveScreenshot:
             Hotkey(keyCode: UInt16(kVK_ANSI_S), modifiers: [.control, .command, .shift])
+        // ⌃⇧⌘R: macOS's own capture keys are ⇧⌘3–5 and their ⌃ forms copy
+        // to the clipboard; R is free there and says what it does.
+        case .showCaptureBar:
+            Hotkey(keyCode: UInt16(kVK_ANSI_R), modifiers: [.control, .command, .shift])
+        // Unbound until asked for: a key that starts recording the screen is
+        // not one to press by accident.
+        case .toggleRecording:
+            nil
+        // Discord ships these three unbound too.
+        case .toggleStreamerMode, .openSoundboard, .holdSoundboard:
+            nil
         }
     }
 }
@@ -89,6 +132,8 @@ final class GlobalHotkey {
 
     /// What each action does when its key fires. Set once, at launch.
     private var actions: [GlobalAction: () -> Void] = [:]
+    /// What an action does when its key is let go — only the ones that hold.
+    private var releaseActions: [GlobalAction: () -> Void] = [:]
 
     private var references: [GlobalAction: EventHotKeyRef] = [:]
     private var handler: EventHandlerRef?
@@ -112,6 +157,10 @@ final class GlobalHotkey {
 
     func setAction(_ body: @escaping () -> Void, for action: GlobalAction) {
         actions[action] = body
+    }
+
+    func setReleaseAction(_ body: @escaping () -> Void, for action: GlobalAction) {
+        releaseActions[action] = body
     }
 
     /// Install `hotkey` for `action`, replacing whatever was registered before.
@@ -163,16 +212,20 @@ final class GlobalHotkey {
 
     private func installHandlerIfNeeded() {
         guard handler == nil else { return }
-        var spec = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
+        // **Both edges.** A press is what every action but one wants; the
+        // release is the hold-to-show soundboard letting go, and Carbon
+        // delivers it only to a handler that asked for it.
+        var specs = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+        ]
         InstallEventHandler(
             GetApplicationEventTarget(),
             { _, event, _ in
                 // A C callback: no captures, no isolation. It reads the id off
                 // the event and hops to the main actor, which is where the app
                 // lives and where the action must run.
+                let released = GetEventKind(event) == UInt32(kEventHotKeyReleased)
                 var id = EventHotKeyID()
                 let status = GetEventParameter(
                     event,
@@ -186,11 +239,18 @@ final class GlobalHotkey {
                 guard status == noErr, id.signature == GlobalHotkey.signature,
                       let action = GlobalHotkey.action(for: id.id)
                 else { return OSStatus(eventNotHandledErr) }
-                MainActor.assumeIsolated { GlobalHotkey.shared.actions[action]?() }
+                MainActor.assumeIsolated {
+                    let hotkey = GlobalHotkey.shared
+                    if released {
+                        hotkey.releaseActions[action]?()
+                    } else {
+                        hotkey.actions[action]?()
+                    }
+                }
                 return noErr
             },
-            1,
-            &spec,
+            specs.count,
+            &specs,
             nil,
             &handler
         )
@@ -240,6 +300,13 @@ private struct GlobalHotkeyInstaller: ViewModifier {
                 GlobalHotkey.shared.setAction({ overlay.toggleInputLock() }, for: .toggleOverlayLock)
                 GlobalHotkey.shared.setAction({ model.saveClip() }, for: .saveClip)
                 GlobalHotkey.shared.setAction({ model.saveScreenshot() }, for: .saveScreenshot)
+                GlobalHotkey.shared.setAction({ model.capture.toggleBar() }, for: .showCaptureBar)
+                GlobalHotkey.shared.setAction({ model.capture.toggleRecording() }, for: .toggleRecording)
+                model.soundboardWheel.attach(model)
+                GlobalHotkey.shared.setAction({ StreamerMode.shared.toggle() }, for: .toggleStreamerMode)
+                GlobalHotkey.shared.setAction({ model.soundboardWheel.open(holding: false) }, for: .openSoundboard)
+                GlobalHotkey.shared.setAction({ model.soundboardWheel.open(holding: true) }, for: .holdSoundboard)
+                GlobalHotkey.shared.setReleaseAction({ model.soundboardWheel.release() }, for: .holdSoundboard)
                 // **`settings.hotkey(for:)`, never the table directly.** The
                 // table only holds what the reader has *changed*; a missing key
                 // means "use the default". Reading `table[action] ?? nil`

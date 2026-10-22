@@ -40,6 +40,22 @@ extension AppModel {
         return filtered
     }
 
+    /// What somebody wears **in one server**, with the reader's switches
+    /// applied the same way — a server's decoration, plate or name style is
+    /// the same kind of thing as the account's.
+    func cosmetics(ofMember member: Member?) -> MemberCosmetics? {
+        guard let member, let worn = member.cosmetics else { return nil }
+        let suppressed = suppression(for: member.userID)
+        guard !suppressed.isEmpty else { return worn }
+        let filtered = MemberCosmetics(
+            avatarDecorationHash: suppressed.contains(.avatarDecorations) ? nil : worn.avatarDecorationHash,
+            avatarDecorationSKU: suppressed.contains(.avatarDecorations) ? nil : worn.avatarDecorationSKU,
+            nameplate: suppressed.contains(.nameplates) ? nil : worn.nameplate,
+            displayNameStyle: suppressed.contains(.nameStyles) ? nil : worn.displayNameStyle
+        )
+        return filtered.isEmpty ? nil : filtered
+    }
+
     /// What applies to this person.
     ///
     /// **The reader's own cosmetics are exempt unless they said otherwise.**

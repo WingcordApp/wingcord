@@ -252,6 +252,9 @@ public struct InviteCard: Hashable, Sendable {
     /// The channel the invite opens onto, for a server with too few people to
     /// have counts worth showing.
     public var channelName: String?
+    /// Whether that channel is a voice channel — which, for a reader who can
+    /// see it, makes the card Discord's voice invite (`dF`, web 641803).
+    public var isVoiceChannel: Bool
     /// The server's profile — the whole of Discord's current server card. Nil
     /// for a group or a friend link, and for a server whose invite carried none.
     public var profile: GuildProfile?
@@ -280,6 +283,7 @@ public struct InviteCard: Hashable, Sendable {
         memberCount: Int? = nil,
         onlineCount: Int? = nil,
         channelName: String? = nil,
+        isVoiceChannel: Bool = false,
         profile: GuildProfile? = nil,
         inviterID: UserID? = nil,
         inviterName: String? = nil,
@@ -301,6 +305,7 @@ public struct InviteCard: Hashable, Sendable {
         self.memberCount = memberCount
         self.onlineCount = onlineCount
         self.channelName = channelName
+        self.isVoiceChannel = isVoiceChannel
         self.profile = profile
         self.inviterID = inviterID
         self.inviterName = inviterName

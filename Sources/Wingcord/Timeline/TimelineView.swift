@@ -524,6 +524,22 @@ final class TimelineCoordinator: NSObject {
         canvas.onInviteButton = { [weak self] card in
             self?.model.openInvite(card)
         }
+        canvas.onOpenInviteChannel = { [weak self] channelID in
+            self?.model.openInviteChannel(channelID)
+        }
+        // A shared theme card: Preview wears it until pressed again or a theme
+        // is chosen; Save keeps it in Settings › Appearance.
+        canvas.isThemePreviewing = { ThemeStore.shared.previewTheme == $0 }
+        canvas.isThemeSaved = { ThemeStore.shared.isSaved($0) }
+        canvas.onPreviewSharedTheme = { theme in
+            let store = ThemeStore.shared
+            store.setPreview(store.previewTheme == theme ? nil : theme)
+        }
+        canvas.onSaveSharedTheme = { [weak canvas] theme, creator in
+            // Saving changes no colour, so nothing relays the card out: it is
+            // asked to paint its Saved face.
+            if ThemeStore.shared.save(theme, creatorName: creator) { canvas?.needsDisplay = true }
+        }
         canvas.onToggleInviteFold = { [weak self] fold in
             self?.model.toggleInviteFold(fold)
         }
@@ -775,6 +791,9 @@ final class TimelineCoordinator: NSObject {
         canvas?.onHoverAutoModAction = nil
         canvas?.onCardAction = nil
         canvas?.onInviteButton = nil
+        canvas?.onOpenInviteChannel = nil
+        canvas?.onPreviewSharedTheme = nil
+        canvas?.onSaveSharedTheme = nil
         canvas?.onToggleInviteFold = nil
         canvas?.isInviteSettled = nil
         canvas?.onOpenTopicMarker = nil
@@ -1277,6 +1296,7 @@ final class TimelineCoordinator: NSObject {
             settings: settings,
             spotify: model.spotifyUnfurls,
             invites: model.inviteLookups,
+            voiceInvites: model.voiceInviteStates(),
             expandedInvites: model.expandedInviteCards,
             palettes: model.derivedPalettes,
             hostedCardSizes: model.hostedCardSizes,

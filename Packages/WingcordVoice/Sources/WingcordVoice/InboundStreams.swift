@@ -148,6 +148,9 @@ final class InboundStreams: Sendable {
         var deliveringVideo: Set<UInt64> = []
         var mixScratch = [Float](repeating: 0, count: OpusFormat.interleavedCount)
         var frameScratch = [Float](repeating: 0, count: OpusFormat.interleavedCount)
+        /// Where each kept speaker's frames go for clips, when clips are on
+        /// (docs/CLIPS-PRESENCE.md, Phase 3.2).
+        var clipTap: ClipAudioTap?
         var packetsReceived = 0
         /// Every datagram the socket handed over, before anything judged it.
         /// The difference between this and `packetsReceived` is the whole
@@ -978,10 +981,11 @@ final class InboundStreams: Sendable {
     ///     for; returns whether it added anything. Not asked while deafened.
     func mixNextFrame(
         at now: TimeInterval,
+        heardAt: TimeInterval? = nil,
         adding companion: (_ mix: inout [Float], _ isSpeech: Bool) -> Bool = { _, _ in false }
     ) -> MixedFrame {
         state.withLock { state in
-            var (contributors, changes) = Self.pullFrame(at: now, state: &state)
+            var (contributors, changes) = Self.pullFrame(at: now, heardAt: heardAt, state: &state)
 
             if !state.isDeafened {
                 let isSpeech = state.audioBySSRC.values.contains { $0.isSpeaking }
@@ -1057,8 +1061,11 @@ final class InboundStreams: Sendable {
 
     /// One 20 ms frame from every stream, summed into `mixScratch` with each
     /// person's gain, and who started or stopped speaking on it.
+    /// - Parameter heardAt: when this frame will come out of the speakers, on
+    ///   the host clock — the stamp a clip keeps it under. Nil for a watched
+    ///   stream's sound, which no clip keeps.
     private static func pullFrame(
-        at now: TimeInterval, state: inout State
+        at now: TimeInterval, heardAt: TimeInterval? = nil, state: inout State
     ) -> (contributors: Int, changes: [(userID: UInt64, isSpeaking: Bool)]) {
         var changes: [(userID: UInt64, isSpeaking: Bool)] = []
         var contributors = 0
@@ -1076,6 +1083,21 @@ final class InboundStreams: Sendable {
                     changes.append((userID, false))
                 }
                 continue
+            }
+            // **Kept as it arrived**, before the decode: a save decodes the
+            // same packets again and hears what was heard here. Only for
+            // somebody the tap's plan names — see `ClipAudioTap.Plan`.
+            if let tap = state.clipTap, let userID, let heardAt {
+                switch frame {
+                case .packet(let payload):
+                    tap.noteVoice(userID, TimedAudioFrame(time: heardAt, payload: .opus(payload)))
+                case .forwardCorrection(let successor):
+                    tap.noteVoice(userID, TimedAudioFrame(time: heardAt, payload: .recovered(successor: successor)))
+                case .conceal:
+                    tap.noteVoice(userID, TimedAudioFrame(time: heardAt, payload: .concealed))
+                case .idle:
+                    break
+                }
             }
             let decoded: Bool
             switch frame {
@@ -1145,6 +1167,11 @@ final class InboundStreams: Sendable {
     /// Bounded: past a handful of overlapping clips the result is noise rather
     /// than sounds, and a channel where everybody presses at once must not be
     /// able to make the mixer do unbounded work per frame.
+    /// Where kept voices go for clips, or nil to keep none.
+    func setClipTap(_ tap: ClipAudioTap?) {
+        state.withLock { $0.clipTap = tap }
+    }
+
     func playLocal(_ samples: [Float], volume: Float) {
         state.withLock { state in
             if state.localClips.count >= 6 { state.localClips.removeFirst() }

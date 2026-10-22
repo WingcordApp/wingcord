@@ -24,7 +24,11 @@ struct OverlayScene: View {
             ZStack(alignment: .topLeading) {
                 ground
                 if !controller.isPeeking {
-                    ForEach(controller.layout.visibleWidgets(locked: controller.isLocked)) { kind in
+                    ForEach(controller.layout.visibleWidgets(
+                        locked: controller.isLocked,
+                        // Streamer Mode's "Hide overlay widgets".
+                        hiding: StreamerMode.shared.hiddenOverlayWidgets
+                    )) { kind in
                         OverlayWidgetHost(
                             kind: kind,
                             controller: controller,

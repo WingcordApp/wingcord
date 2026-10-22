@@ -40,6 +40,18 @@ struct BadgeRow: View {
     /// so. Nil where the profile route has not answered, and on the two preview
     /// surfaces that draw a badge row without a live account behind it.
     var premiumSince: Date?
+    /// Whose badges — the directory and the levelled cards need it (Phase 8).
+    /// Nil on the preview surfaces, which draw the plain row.
+    var userID: UserID? = nil
+    /// The reader editing their own profile: the row ends in a pencil that
+    /// opens "Customize your badges".
+    var isEditing = false
+
+    /// Discord's six (`988341`'s `a`), then "+N".
+    private static let shownLimit = 6
+    @State private var directoryBadge: Int?
+    @State private var showsDirectory = false
+    @State private var showsCustomizer = false
 
     @Environment(AppModel.self) private var model
     /// Whose flyout is up.
@@ -60,7 +72,7 @@ struct BadgeRow: View {
         // a 320pt card has room for on one line, and a row that clips silently
         // drops badges the reader has no way to know existed.
         FlowLayout(spacing: Spacing.tight) {
-            ForEach(badges) { badge in
+            ForEach(badges.prefix(Self.shownLimit)) { badge in
                 let tenure = PremiumTenure.named(badge.id)
                 mark(badge)
                     .frame(width: Self.side, height: Self.side)
@@ -77,8 +89,11 @@ struct BadgeRow: View {
                     // this row is a label, and a mark that looks pressable and
                     // does nothing is the inert control `INVARIANTS.md` §5.5
                     // forbids.
-                    .onTapGesture { open(tenure) }
-                    .onHover { pointer(badge.id, onCard: false, inside: $0) }
+                    .onTapGesture { openDirectory(on: badge, tenure: tenure) }
+                    .onHover { inside in
+                        if inside, let userID { model.loadBadgeCatalog(of: userID) }
+                        pointer(badge.id, onCard: false, inside: inside)
+                    }
                     .popover(
                         isPresented: Binding(
                             get: { shown == badge.id },
@@ -94,13 +109,18 @@ struct BadgeRow: View {
                         // line.** That is Discord's own split rather than a
                         // preference: it is the only badge it says more than a
                         // sentence about, and the only one that opens a page.
-                        if let tenure {
+                        if let userID, let entry = model.catalogBadge(forProfileBadge: badge.id, of: userID) {
+                            BadgeCard(badge: entry, label: badge.label, iconURL: badge.iconURL)
+                                .onHover { pointer(badge.id, onCard: true, inside: $0) }
+                        } else if let tenure {
                             TenureBadgeFlyout(
                                 tenure: tenure,
                                 premiumSince: premiumSince,
                                 open: { open(tenure) },
                                 hovering: { pointer(badge.id, onCard: true, inside: $0) }
                             )
+                        } else if userID != nil {
+                            BadgeCard(badge: nil, label: badge.label, iconURL: badge.iconURL)
                         } else {
                             BadgeFlyout(label: badge.label)
                         }
@@ -114,9 +134,62 @@ struct BadgeRow: View {
                     // actually drawn against — the app's.
                     .appColorScheme()
                     .accessibilityLabel(Text(badge.label))
-                    .accessibilityAddTraits(tenure == nil ? [] : .isButton)
+                    .accessibilityAddTraits(tenure == nil && userID == nil ? [] : .isButton)
+            }
+            if badges.count > Self.shownLimit {
+                Button("+\(badges.count - Self.shownLimit)") {
+                    directoryBadge = nil
+                    showsDirectory = userID != nil
+                }
+                .buttonStyle(.plain)
+                .font(.system(.caption, weight: .semibold))
+                .foregroundStyle(InkColor.secondary)
+                .frame(height: Self.side)
+                .accessibilityLabel("\(badges.count - Self.shownLimit) more badges")
+            }
+            if isEditing, userID != nil {
+                Button {
+                    showsCustomizer = true
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: Self.side, height: Self.side)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(InkColor.secondary)
+                .help("Customize your badges")
+                .popover(isPresented: $showsCustomizer, arrowEdge: .bottom) {
+                    if let userID {
+                        BadgeCustomizer(userID: userID) {
+                            showsCustomizer = false
+                            directoryBadge = nil
+                            showsDirectory = true
+                        }
+                    }
+                }
             }
         }
+        .popover(isPresented: $showsDirectory, arrowEdge: .bottom) {
+            if let userID {
+                BadgeDirectory(userID: userID, initialBadgeID: directoryBadge) {
+                    showsDirectory = false
+                    showsCustomizer = true
+                }
+            }
+        }
+    }
+
+    /// Opens the directory on `badge` — or, with no person behind the row,
+    /// Nitro's own sheet as before.
+    private func openDirectory(on badge: ProfileBadge, tenure: PremiumTenure?) {
+        guard let userID else {
+            open(tenure)
+            return
+        }
+        dismiss()
+        model.loadBadgeCatalog(of: userID)
+        directoryBadge = BadgeKind.forProfileID(badge.id)?.rawValue
+        showsDirectory = true
     }
 
     /// Where the pointer is, from either surface, and what that means for the
@@ -171,7 +244,10 @@ struct BadgeRow: View {
 
     @ViewBuilder
     private func mark(_ badge: ProfileBadge) -> some View {
-        if let url = badge.iconURL {
+        // A levelled badge wears its current level's mark (Phase 8).
+        if let userID, let url = model.catalogBadge(forProfileBadge: badge.id, of: userID)?.mark {
+            BadgeArtwork(url: url, side: Self.side)
+        } else if let url = badge.iconURL {
             RemoteImage(url: url, side: Self.side) {
                 symbol(badge)
             }

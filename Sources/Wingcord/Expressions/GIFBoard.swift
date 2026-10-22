@@ -16,6 +16,9 @@ import WingcordCore
 /// that made drawing worth it.
 struct GIFBoard: View {
     @Binding var query: String
+    /// Whether the reader's favourites lead the landing. Discord's Choose GIF
+    /// for an avatar or a banner leaves them out (`hideFavorites`).
+    var showsFavorites = true
     var onPick: (GIF) -> Void
 
     @Environment(AppModel.self) private var model
@@ -99,7 +102,7 @@ struct GIFBoard: View {
                 // whose contents the reader put there themselves. Absent rather
                 // than empty: a tile that opens onto nothing is worse than no
                 // tile, which is the same rule the rail follows.
-                if !model.favoriteGIFs.isEmpty {
+                if showsFavorites, !model.favoriteGIFs.isEmpty {
                     tile(
                         title: "Favorites",
                         icon: "star.fill",

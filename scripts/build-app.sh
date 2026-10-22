@@ -72,6 +72,21 @@ xcrun actool "$ICON_STAGE/AppIcon.icon" \
     "$APP/Contents/Info.plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$APP/Contents/Info.plist"
 
+# ── Now Playing ────────────────────────────────────────────────────────────
+# The vendored mediaremote-adapter: the framework /usr/bin/perl loads to read
+# what macOS says is playing, and the script that loads it. See
+# Packaging/MediaRemoteAdapter/README.md.
+ADAPTER="$("$ROOT/scripts/build-mediaremote-adapter.sh")"
+mkdir -p "$APP/Contents/Frameworks"
+cp -R "$ADAPTER" "$APP/Contents/Frameworks/"
+cp "$ROOT/Packaging/MediaRemoteAdapter/bin/mediaremote-adapter.pl" "$APP/Contents/Resources/"
+
+# ── App Intents ────────────────────────────────────────────────────────────
+# The Focus filter and the Shortcuts actions, described for the system. Before
+# signing, because the bundle it writes is part of what is signed.
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
+"$ROOT/scripts/extract-app-intents.sh" "$APP" "$CONFIG" "$BUNDLE_ID"
+
 # ── Code signing ───────────────────────────────────────────────────────────
 # Signed with entitlements. Unsigned, the app cannot hold the microphone or
 # camera permissions it will eventually ask for, and macOS re-prompts for
@@ -141,6 +156,11 @@ elif [ "${SIGN_NAME:-}" = "Wingcord Dev" ]; then
     echo "note: signing with a self-signed identity, which has no team id." >&2
     echo "      expect one Keychain prompt per build. See the comment above." >&2
 fi
+
+# Nested code first: the app's signature seals the framework as it stands.
+codesign --force --sign "$SIGN_IDENTITY" --timestamp=none \
+    "$APP/Contents/Frameworks/MediaRemoteAdapter.framework" \
+    || echo "warning: signing MediaRemoteAdapter.framework failed." >&2
 
 codesign --force --sign "$SIGN_IDENTITY" \
     --entitlements "$ROOT/Packaging/Wingcord.entitlements" \

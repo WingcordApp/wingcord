@@ -113,7 +113,7 @@ struct InviteCardLayoutTests {
             let pixels = RenderProbe.pixels(width: 320, height: Int(slot.rect.height) + 10) { context, _ in
                 TimelineRowPainter.drawInviteCard(
                     slot, offset: .zero, context: context, isSettled: false,
-                    hovered: nil, images: ImageStore.shared, scale: 1
+                    hovered: nil, images: ImageStore.shared, scale: 1, style: style
                 )
             }
             var region: [UInt8] = []

@@ -25,6 +25,10 @@ extension SessionController {
                     do {
                         let lookup = try await rest.inviteCard(code)
                         model.inviteLookups[code] = lookup
+                        // A voice invite draws its room from the first frame.
+                        if case .resolved(let card) = lookup, card.isVoiceChannel {
+                            model.refreshVoiceInviteRosters()
+                        }
                         if case .resolved(let card) = lookup, let event = card.event, event.status.isLive {
                             resolveEventCard(EventCardKey(guildID: event.guildID, eventID: event.id, invite: code))
                         }

@@ -57,4 +57,40 @@ struct TypingTableTests {
         #expect(model.typers(in: dm).isEmpty)
         #expect(next == now.addingTimeInterval(5))
     }
+
+    // MARK: Custom indicators
+
+    private let yapping = TypingIndicatorStyle(emojis: [EmojiRef(name: "❤️")], animation: .wave, suggestion: .yapping)
+
+    @Test("A typer's indicator is kept while they type anywhere, and no longer")
+    func styleLivesWithTyping() {
+        let model = model()
+        model.noteTyping(friend, in: dm, until: .now.addingTimeInterval(10), style: yapping)
+        model.noteTyping(friend, in: server, until: .now.addingTimeInterval(10), style: yapping)
+        #expect(model.typingStyle(of: friend) == yapping)
+        model.clearTyping(friend, in: dm)
+        #expect(model.typingStyle(of: friend) == yapping, "still typing in the server")
+        model.clearTyping(friend, in: server)
+        #expect(model.typingStyle(of: friend) == nil)
+    }
+
+    @Test("Each event says which: a plain one takes back a dropped indicator")
+    func plainEventReplacesStyle() {
+        let model = model()
+        model.noteTyping(friend, in: dm, until: .now.addingTimeInterval(10), style: yapping)
+        model.noteTyping(friend, in: dm, until: .now.addingTimeInterval(10), style: nil)
+        #expect(model.typingStyle(of: friend) == nil)
+    }
+
+    @Test("A lapsed indicator takes its style with it")
+    func pruningForgetsStyles() {
+        let model = model()
+        let now = Date.now
+        model.noteTyping(friend, in: dm, until: now.addingTimeInterval(-1), style: yapping)
+        _ = model.pruneTyping(now: now)
+        #expect(model.typingStyle(of: friend) == nil)
+        model.noteTyping(friend, in: dm, until: now.addingTimeInterval(10), style: yapping)
+        model.clearAllTyping()
+        #expect(model.typingStyle(of: friend) == nil)
+    }
 }

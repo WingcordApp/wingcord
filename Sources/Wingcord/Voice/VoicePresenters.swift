@@ -16,8 +16,12 @@ private struct VoiceRootPresenter: ViewModifier {
     func body(content: Content) -> some View {
         content
             .overlay { GoLiveLayer() }
-            .overlay(alignment: .top) { incomingCall }
-            .animation(motion.panel, value: model.incomingCallChannelID)
+            // Animated here, on the card's own layer — not on the whole app,
+            // where every change the call brought was animated with it.
+            .overlay(alignment: .top) {
+                incomingCall
+                    .animation(motion.panel, value: model.incomingCallChannelID)
+            }
     }
 
     @ViewBuilder

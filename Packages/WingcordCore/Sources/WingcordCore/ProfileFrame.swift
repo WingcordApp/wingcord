@@ -185,3 +185,14 @@ public struct ProfileFrameLayout: Equatable, Sendable {
         layerWidth = width + leading * 2
     }
 }
+
+extension ProfileFrame {
+    /// The piece a frame is recognised by — its top staple, the roses or the
+    /// ears — for a thumbnail that has room for one picture.
+    public var crownURL: URL? {
+        let all = frontLayers + backLayers
+        return (all.first { $0.anchor == .top && $0.kind == .staple }
+            ?? all.first { $0.anchor == .top }
+            ?? all.first)?.url
+    }
+}

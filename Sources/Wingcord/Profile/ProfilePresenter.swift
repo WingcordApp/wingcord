@@ -50,8 +50,11 @@ struct ProfilePresenter: ViewModifier {
     /// window; it also has exactly the lifetime of this presentation, so a
     /// store-held copy is one more thing that has to be remembered to clear.
     @State private var editor: ProfileEditor?
-    /// Which cosmetic sheet a rail tile raised.
+    /// The one sheet left in the editor — adding a connection, a sign-in.
     @State private var picker: ProfileEditPicker?
+    /// Which flyout is up — see `ProfileFlyouts`. One for the presenter's
+    /// lifetime; closed whenever the profile changes.
+    @State private var flyouts = ProfileFlyouts()
 
     /// The card's own width, shared by the card and by the arithmetic that
     /// places it. Two copies is how a card ends up anchored eight points from
@@ -99,6 +102,7 @@ struct ProfilePresenter: ViewModifier {
                 // for none at all, so both cases land here.
                 .onChange(of: model.profileRequest?.id) {
                     picker = nil
+                    flyouts.close()
                     // **Seeded rather than merely cleared**, for the one caller
                     // that asks to arrive editing — the server menu's Edit
                     // Per-server Profile, which has a server in hand and a page
@@ -121,7 +125,7 @@ struct ProfilePresenter: ViewModifier {
     /// describe, and it makes the two ways out of this card the same object
     /// rather than two that can disagree.
     private func dismissLayer(dimmed: Bool) -> some View {
-        Button { model.profileRequest = nil } label: {
+        Button(action: requestClose) {
             // **A scrim under the full profile, nothing under the card.** A
             // modal task dims what it interrupts; a card beside a row does not
             // interrupt anything, and dimming the transcript behind it would
@@ -173,52 +177,30 @@ struct ProfilePresenter: ViewModifier {
                 ),
                 editor: editor,
                 beginEditing: { editor = makeEditor(.account, for: profile.userID) },
-                endEditing: { editor = nil },
+                endEditing: {
+                    // The rail's chevron is a way out too — and the same rule.
+                    if let editor, editor.isDirty { editor.nudge() } else { editor = nil }
+                },
                 scopes: editor == nil ? [] : model.profileEditScopes(for: profile.userID),
                 selectScope: { switchScope(to: $0.scope, for: profile.userID) },
                 saveEdits: { commit(profile) },
-                presentPicker: { picker = $0 },
-                dismiss: { model.profileRequest = nil },
+                // Only the connection sheet is raised by closure; every
+                // cosmetic is a flyout hung off its own control.
+                presentPicker: { raised in
+                    if raised == .connection { picker = raised } else { flyouts.show(raised, from: .rail) }
+                },
+                dismiss: requestClose,
                 initialTab: request.tab
             )
             // **Keyed on the one value that can change under the draft**, not on
             // the whole presentation: resolving a profile per body evaluation to
             // compare it would be a presentation build on every hover.
             .onChange(of: editorLayer) { refreshEditorIfUntouched() }
+            .environment(flyouts)
+            .environment(editor)
             .sheet(item: $picker) { picker in
-                if let kind = picker.collectible {
-                    CollectiblePickerSheet(
-                        kind: kind,
-                        profile: profile,
-                        selection: worn(kind),
-                        apply: { chosen in
-                            wear(chosen, kind: kind)
-                            self.picker = nil
-                        },
-                        dismiss: { self.picker = nil }
-                    )
-                } else if picker == .connection {
+                if picker == .connection {
                     AddConnectionSheet(dismiss: { self.picker = nil })
-                } else if picker == .displayNameStyle {
-                    DisplayNameStyleSheet(
-                        profile: profile,
-                        current: editor?.displayNameStyle,
-                        apply: { style in
-                            editor?.displayNameStyle = style
-                            self.picker = nil
-                        },
-                        dismiss: { self.picker = nil }
-                    )
-                } else {
-                    AvatarPickerSheet(
-                        profile: profile,
-                        current: editor?.avatar ?? .unchanged,
-                        choose: { edit in
-                            editor?.avatar = edit
-                            self.picker = nil
-                        },
-                        dismiss: { self.picker = nil }
-                    )
                 }
             }
             // Add App, over the app's profile — Discord's authorize modal over
@@ -242,40 +224,15 @@ struct ProfilePresenter: ViewModifier {
         }
     }
 
-    /// What the draft currently wears of one kind.
-    private func worn(_ kind: CollectibleKind) -> String? {
-        switch kind {
-        case .nameplate: editor?.nameplate?.skuID
-        case .avatarDecoration: editor?.avatarDecorationSKU
-        case .profileEffect: editor?.profileEffectSKU
-        case .profileFrame: nil
+    /// Closes the profile — **unless an edit is unsaved**, which Discord
+    /// refuses with "Careful — you have unsaved changes!" and so does this:
+    /// the save bar shakes, and the draft stays.
+    private func requestClose() {
+        if let editor, editor.isDirty {
+            editor.nudge()
+            return
         }
-    }
-
-    /// Puts a choice into the draft. **Into the draft and no further** — nothing
-    /// in the editor writes to Discord except the save bar, which is what makes
-    /// Reset able to take five changes back at once.
-    private func wear(_ chosen: OwnedCollectible?, kind: CollectibleKind) {
-        switch kind {
-        case .nameplate:
-            // Rebuilt as a `Nameplate` so the rail can draw it at once. The
-            // palette is the wash behind a roster row and the purchase carries
-            // it, so it travels with the asset rather than being looked up again.
-            editor?.nameplate = chosen.map { item in
-                Nameplate(
-                    asset: item.asset,
-                    palette: item.palette.flatMap(NameplatePalette.init(rawValue:)) ?? .none,
-                    label: item.label,
-                    skuID: item.skuID
-                )
-            }
-        case .avatarDecoration:
-            editor?.avatarDecorationSKU = chosen?.skuID
-            // The hash, so the rail and the preview can draw it before saving.
-            editor?.decorationAsset = chosen?.asset
-        case .profileEffect: editor?.profileEffectSKU = chosen?.skuID
-        case .profileFrame: break
-        }
+        model.profileRequest = nil
     }
 
     /// Writes the draft, and reloads the profile from Discord rather than
@@ -288,9 +245,25 @@ struct ProfilePresenter: ViewModifier {
     /// truth in exactly the cases the reader cannot see.
     private func commit(_ profile: ProfilePresentation) {
         guard let editor else { return }
+        // `--demo` makes no requests: the draft lands on the fixture instead.
+        if LaunchOptions.current.usesDemoFixtures {
+            model.applyDemoProfileEdit(editor)
+            self.editor = nil
+            return
+        }
         Task {
             if await editor.save(using: model.sessionController.rest) {
                 self.editor = nil
+                // The member the server answered with, filed now — the roster
+                // and the transcript read the new nickname and face from it.
+                if let member = editor.savedMember, let guildID = editor.scope.guildID {
+                    model.members[guildID, default: [:]][member.userID] = member
+                }
+                // Nothing echoes the account's own indicator back, so the
+                // draft that just landed is the truth until the next READY.
+                if editor.scope == .account {
+                    model.ownTypingIndicatorStyle = editor.typingIndicatorStyle
+                }
                 // **The scope that was written**, not the one the rail happens
                 // to be pointing at: a server edit saved from a DM has to
                 // refetch that server's layer or the card shows the old one.
@@ -336,7 +309,8 @@ struct ProfilePresenter: ViewModifier {
             // dropped the ids.
             widgets: model.profileWidgets[userID] ?? [],
             scope: scope,
-            accountName: model.users[userID]?.preferredName
+            accountName: model.users[userID]?.preferredName,
+            typingIndicatorStyle: model.ownTypingIndicatorStyle
         )
     }
 

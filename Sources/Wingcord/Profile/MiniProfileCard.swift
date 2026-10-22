@@ -254,6 +254,8 @@ struct MiniProfileCard: View {
                         isColumn: form == .column,
                         openBoard: { openFullProfile(.board) }
                     )
+                    // A personal widget's pictures are addressed by its owner.
+                    .environment(\.widgetOwner, profile.userID)
                     .padding(.horizontal, Spacing.margin)
                     .padding(.bottom, widgetPreviews.isEmpty ? 0 : Spacing.snug)
                 }
@@ -281,7 +283,8 @@ struct MiniProfileCard: View {
                 }
                 if !profile.isLoading {
                     connections
-                    if !profile.isSelf {
+                    // Streamer Mode's personal information: the reader's notes.
+                    if !profile.isSelf, !StreamerMode.shared.hidesPersonalInformation {
                         ProfileNoteField(
                             userID: profile.userID,
                             note: profile.note,
@@ -730,7 +733,7 @@ struct MiniProfileCard: View {
                         GuildTagChip(tag: tag)
                     }
                     if !profile.badges.isEmpty {
-                        BadgeRow(badges: profile.badges, premiumSince: profile.premiumSince)
+                        BadgeRow(badges: profile.badges, premiumSince: profile.premiumSince, userID: profile.userID)
                     }
                     Spacer(minLength: 0)
                 }
@@ -861,7 +864,10 @@ struct MiniProfileCard: View {
     /// exists for below the fold on anybody with four linked accounts.
     @ViewBuilder
     private var connections: some View {
-        if !profile.connections.isEmpty {
+        // The reader's own connected accounts are Streamer Mode's personal
+        // information.
+        if !profile.connections.isEmpty,
+           !(profile.isSelf && StreamerMode.shared.hidesPersonalInformation) {
             section("Connections") {
                 FlowLayout(spacing: Spacing.tight) {
                     ForEach(profile.connections) { connection in

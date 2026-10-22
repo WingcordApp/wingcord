@@ -39,6 +39,13 @@ public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable
     case videoTiles
     /// Who is in the voice channel, and who is talking.
     case voice
+    /// What the reader is showing as their activity right now, and the
+    /// switches that change it — Phase 6 (docs/CLIPS-PRESENCE.md, D20).
+    case activity
+    /// What the machine is spending — processor, graphics, memory, heat. A
+    /// game's own frame rate is not readable from outside it, so it is not
+    /// here.
+    case performance
     /// The call's own controls — mute, deafen, camera, share, disconnect.
     case quickActions
     /// Toasts for messages that arrive while a game is in front.
@@ -55,6 +62,8 @@ public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable
         case .streams: "Streams"
         case .videoTiles: "Video Tiles"
         case .voice: "Voice"
+        case .activity: "Activity"
+        case .performance: "Performance"
         case .quickActions: "Controls"
         case .notifications: "Notifications"
         case .clips: "Clips"
@@ -82,6 +91,11 @@ public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable
         case .streams: CGPoint(x: 0.63, y: 0.82)
         case .videoTiles: CGPoint(x: 0.07, y: 0.76)
         case .voice: CGPoint(x: 0.08, y: 0.40)
+        // Beside the controls, clear of the corner's own buttons.
+        case .activity: CGPoint(x: 0.74, y: 0.08)
+        // Under the corner's buttons, where a frame counter is looked for,
+        // and above the top of the Friends panel.
+        case .performance: CGPoint(x: 0.92, y: 0.16)
         case .quickActions: CGPoint(x: 0.5, y: 0.06)
         case .notifications: CGPoint(x: 0.14, y: 0.08)
         case .clips: CGPoint(x: 0.88, y: 0.88)
@@ -100,11 +114,24 @@ public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable
     /// *reads and types into*, and there is no reading a transcript that
     /// cannot take a click. The two tile widgets are pinned, because watching
     /// somebody's screen while you play is the entire point of them.
+    ///
+    /// The activity card is unpinned for the same reason as the controls are
+    /// asleep: its point is the switches on it. The meter is pinned, because a
+    /// meter you can only see with the game paused measures nothing.
     public var isPinnedByDefault: Bool {
         switch self {
-        case .quickActions, .friends, .chat: false
-        case .streams, .videoTiles, .voice, .notifications, .clips: true
+        case .quickActions, .friends, .chat, .activity: false
+        case .streams, .videoTiles, .voice, .notifications, .clips, .performance: true
         }
+    }
+
+    /// Whether a fresh install draws it at all.
+    ///
+    /// **Only the meter starts off.** It samples the machine once a second for
+    /// as long as it is up, and a number nobody asked for over a game is
+    /// clutter — Discord's own performance widget is a debug surface.
+    public var isEnabledByDefault: Bool {
+        self != .performance
     }
 
     /// Whether pinning this one is even offered.
@@ -171,7 +198,8 @@ public struct OverlayLayout: Hashable, Sendable, Codable {
                 uniqueKeysWithValues: OverlayWidgetKind.allCases.map { kind in
                     (kind, OverlayPlacement(
                         centre: kind.defaultCentre,
-                        isPinned: kind.isPinnedByDefault
+                        isPinned: kind.isPinnedByDefault,
+                        isEnabled: kind.isEnabledByDefault
                     ))
                 }
             )
@@ -184,7 +212,11 @@ public struct OverlayLayout: Hashable, Sendable, Codable {
 
     public func placement(for kind: OverlayWidgetKind) -> OverlayPlacement {
         var placement = placements[kind]
-            ?? OverlayPlacement(centre: kind.defaultCentre, isPinned: kind.isPinnedByDefault)
+            ?? OverlayPlacement(
+                centre: kind.defaultCentre,
+                isPinned: kind.isPinnedByDefault,
+                isEnabled: kind.isEnabledByDefault
+            )
         // **Normalised on the way out as well as refused on the way in**, so a
         // layout stored by a build that allowed it cannot resurrect a pin the
         // reader now has no control to clear.
@@ -253,8 +285,16 @@ public struct OverlayLayout: Hashable, Sendable, Codable {
     ///
     /// The rule that decides everything about the locked state, and it is one
     /// line: **a locked overlay draws only what is pinned.**
-    public func visibleWidgets(locked: Bool) -> [OverlayWidgetKind] {
+    ///
+    /// - Parameter hidden: widgets withheld whatever the layout says —
+    ///   Streamer Mode's "Hide overlay widgets". A layer over the layout rather
+    ///   than an edit to it, so turning Streamer Mode off puts back exactly
+    ///   what was there.
+    public func visibleWidgets(
+        locked: Bool, hiding hidden: Set<OverlayWidgetKind> = []
+    ) -> [OverlayWidgetKind] {
         OverlayWidgetKind.allCases.filter { kind in
+            guard !hidden.contains(kind) else { return false }
             let placement = placement(for: kind)
             guard placement.isEnabled else { return false }
             return locked ? placement.isPinned : true

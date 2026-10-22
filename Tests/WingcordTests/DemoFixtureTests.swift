@@ -105,4 +105,107 @@ struct DemoFixtureTests {
         model.selectedGuildID = themed.id
         #expect(model.activeServerTheme?.theme.resolved == .preset(3))
     }
+
+    // MARK: Phase 2's surfaces
+
+    /// The opening channel's messages above Phase 4's clip — Phase 2's
+    /// surfaces sit at the foot of what came before it.
+    private func aboveTheClip(in model: AppModel) throws -> ArraySlice<Message> {
+        let channelID = try #require(model.selectedChannelID)
+        let messages = try #require(model.messages(in: channelID)?.messages)
+        // The shared clip itself — not a reply carrying another view of it.
+        let clip = try #require(messages.lastIndex { message in
+            message.referencedMessageID == nil && message.attachments.contains { $0.clip != nil }
+        })
+        return messages[..<clip]
+    }
+
+    @Test("Two voice invites at the transcript's foot: the crowd's as the channel row, the reader's own as the card")
+    func voiceInvites() throws {
+        let saved = AppSettings.shared.voiceInviteCardStyle
+        defer { AppSettings.shared.voiceInviteCardStyle = saved }
+        AppSettings.shared.voiceInviteCardStyle = .asDiscordDecides
+        let model = self.model()
+        let codes = try aboveTheClip(in: model).suffix(4).flatMap { InviteCard.codes(in: $0.content) }
+        #expect(codes == ["demo-crowd", "demo-hangout"])
+
+        let states = model.voiceInviteStates()
+        #expect(states.count == 2, "both rooms drawn")
+        let crowd = try #require(states.values.first { $0.asChannelRow })
+        #expect(crowd.people.count >= 5, "a crowd, so the row counts the rest")
+        #expect(crowd.people.contains { $0.isStreaming })
+        let own = try #require(states.values.first { !$0.asChannelRow })
+        let me = try #require(model.currentUserID)
+        #expect(own.people.contains { $0.id == me }, "the reader's own room, so its card is settled")
+    }
+
+    @Test("A shared theme, somebody typing with a custom indicator, the reader's own worn")
+    func themeAndTyping() throws {
+        let model = self.model()
+        let channelID = try #require(model.selectedChannelID)
+        let last = try #require(try aboveTheClip(in: model).last)
+        #expect(last.sharedTheme?.colors.count == 3)
+        // Seeded, so Appearance never asks Discord for them in `--demo`.
+        #expect(model.accountCustomThemes?.count == 2)
+        #expect(model.accountCustomThemes?.contains { $0.isLight } == true)
+        #expect(model.ownTypingIndicatorStyle?.isPlain == false)
+
+        let conversation = try #require(model.channelIndex.privateChannelIDs().first)
+        let typer = try #require(model.typers(in: conversation).keys.first)
+        #expect(model.typingStyle(of: typer)?.suggestion == .yapping)
+        #expect(model.channelIndex[conversation]?.recipientIDs.contains(typer) == true, "the other person")
+        #expect(model.messages(in: conversation)?.messages.isEmpty == false, "a transcript under it")
+        #expect(model.typers(in: channelID).isEmpty, "kept off the channel the demo opens on")
+    }
+
+    // MARK: Phase 4's clip
+
+    @Test("A friend's clip at the foot — five people, speech, the game's moments — and two timeline comments on it")
+    func sharedClip() throws {
+        let model = self.model()
+        let channelID = try #require(model.selectedChannelID)
+        let messages = try #require(model.messages(in: channelID)?.messages)
+        // The clip, a teammate's view of the same moment, and two comments.
+        let foot = Array(messages.suffix(4))
+        let attachment = try #require(foot.first?.attachments.first)
+        let clip = try #require(attachment.clip)
+        #expect(attachment.contentType == "video/mp4")
+        #expect(clip.participants.count == 5, "four faces and one more")
+        #expect(clip.hasSpeaking && clip.hasTimelineComments)
+        #expect(clip.applicationName == "Battlefield 6")
+        let kills = clip.timeline.compactMap { entry -> Double? in
+            guard case .game(let type, _) = entry.event, type == .kill || type == .multikill else { return nil }
+            return Double(entry.timestampMS) / 1_000
+        }
+        #expect(kills == DemoMedia.gameClipKills, "the marks fall on the picture's flashes")
+
+        for reply in foot.dropFirst() {
+            #expect(reply.referencedMessageID == foot.first?.id)
+        }
+        // Phase 7.3: the second view shares the moment's id, so the player
+        // offers it.
+        let view = try #require(foot[1].attachments.first?.clip)
+        #expect(view.remoteID == clip.remoteID && clip.remoteID != nil)
+        #expect(ClipPointsOfView.views(of: attachment, in: messages).count == 2)
+        for comment in foot.dropFirst(2) {
+            #expect(comment.mediaMention?.attachmentID == attachment.id)
+        }
+        let comments = model.timelineComments(on: attachment.id, in: channelID)
+        #expect(comments.map(\.content) == ["that flank was insane", "😆"])
+        #expect(comments.last?.emoji == .unicode("😆"))
+    }
+
+    @Test("Settings › Experiments has the account's, the open server's and the newer ones")
+    func experiments() throws {
+        let model = self.model()
+        #expect(model.experiments.user.count == 6)
+        // Native markdown, search feedback, and badge settings (Phase 8).
+        #expect(model.experiments.apex.count == 3)
+        #expect(model.badgeManagement == (enabled: true, tenureHideable: true))
+        let open = try #require(model.selectedGuildID)
+        // The opening server is a community: in Server Theme in full.
+        #expect(model.guildExperimentBucket("2026-04_server_theme", in: open) == 1)
+        #expect(model.guildExperimentBucket("2026-02_hangout_window", in: open) == ExperimentBucket.control)
+        #expect(model.guildExperimentBucket(AppModel.voiceChannelRowExperiment, in: open) == nil)
+    }
 }

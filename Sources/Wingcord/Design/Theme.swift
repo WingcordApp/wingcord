@@ -1,4 +1,5 @@
 import Foundation
+import WingcordCore
 
 // MARK: - What a theme is, and what it deliberately is not
 //
@@ -725,6 +726,9 @@ enum ThemeChoice: Hashable, Sendable {
     case preset(ThemePreset)
     case discord(DiscordTheme)
     case custom
+    /// A custom theme somebody shared and the reader kept — Discord's custom
+    /// theme, carried whole so choosing it needs nothing looked up.
+    case shared(SharedClientTheme)
 
     var preset: ThemePreset? {
         if case .preset(let preset) = self { return preset }
@@ -739,6 +743,8 @@ enum ThemeChoice: Hashable, Sendable {
         switch self {
         case .system: true
         case .preset(let preset): preset.isStated
+        // Its intensity is the sharer's, stated in the theme.
+        case .shared: true
         case .discord, .custom: false
         }
     }

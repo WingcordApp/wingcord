@@ -35,6 +35,8 @@ struct OutgoingMessage: Identifiable, Equatable, Sendable {
         /// An invitation to listen along on the reader's Spotify, which is the
         /// whole message, as a poll is.
         var listenAlong: ListenAlongInvite?
+        /// A reply at a moment of a clip — Discord's timeline comment.
+        var mediaMention: MediaMention?
     }
 
     enum State: Hashable, Sendable {

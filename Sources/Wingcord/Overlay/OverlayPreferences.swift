@@ -108,31 +108,35 @@ enum OverlayCorner: String, CaseIterable, Identifiable, Sendable, Codable {
     }
 }
 
-/// How much of the screen a clip keeps.
+/// How much of what just happened a clip keeps — Discord's three lengths
+/// (`SECONDS_30`, `MINUTES_1`, `MINUTES_2`), with its default of thirty.
 ///
-/// **Fifteen seconds is the ceiling, and it is Apple's rather than a choice.**
-/// `SCClipBufferingOutput` — the first-party rolling buffer new in macOS 27 —
-/// documents "Maximum duration is 15 seconds" and exposes no knob anywhere on
-/// `SCStream` or `SCStreamConfiguration`. Discord's shortest clip is thirty, so
-/// anything longer than this means keeping our own ring of compressed samples;
-/// that is a real week of work and a permanently-running encoder, and it is
-/// deliberately not what this ships.
+/// **Wingcord's own replay buffer since Phase 3** (docs/CLIPS-PRESENCE.md,
+/// D10): `SCClipBufferingOutput` stops at fifteen seconds, so the picture is
+/// kept by our own encoder and ring instead, and the length is what the ring
+/// is sized to — two minutes costs about four times what thirty seconds does.
 enum ClipLength: String, CaseIterable, Identifiable, Sendable, Codable {
-    case fiveSeconds
-    case tenSeconds
-    case fifteenSeconds
+    case thirtySeconds
+    case oneMinute
+    case twoMinutes
 
     var id: String { rawValue }
 
     var seconds: TimeInterval {
         switch self {
-        case .fiveSeconds: 5
-        case .tenSeconds: 10
-        case .fifteenSeconds: 15
+        case .thirtySeconds: 30
+        case .oneMinute: 60
+        case .twoMinutes: 120
         }
     }
 
-    var title: String { "\(Int(seconds)) seconds" }
+    var title: String {
+        switch self {
+        case .thirtySeconds: "30 seconds"
+        case .oneMinute: "1 minute"
+        case .twoMinutes: "2 minutes"
+        }
+    }
 }
 
 /// What a clip is recorded at.

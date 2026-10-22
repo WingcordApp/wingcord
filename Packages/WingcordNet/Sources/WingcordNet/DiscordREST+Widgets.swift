@@ -147,6 +147,50 @@ extension DiscordREST {
         return name
     }
 
+    /// Puts one clip where a clips gallery can name it.
+    ///
+    /// Discord's `uploadWidgetClip` (`958805`): `POST
+    /// /users/@me/widgets/clips/upload {file_size}` answers a signed upload URL
+    /// and the `upload_filename` to quote, and the video goes to that URL as
+    /// `video/mp4` — with no Authorization header, the signature being the
+    /// credential (`uploadWidgetAsset`'s rule).
+    ///
+    /// - Parameter progress: called with the fraction sent, on the session's
+    ///   queue.
+    /// - Returns: the `upload_filename` for `ProfileClip.Storage.staged`.
+    public func uploadWidgetClip(
+        from file: URL, progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> String {
+        struct Body: Encodable, Sendable { var file_size: Int }
+        struct Reply: Decodable, Sendable {
+            var upload_url: URL?
+            var upload_filename: String?
+        }
+        let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let staged = try await post(
+            "/users/@me/widgets/clips/upload",
+            route: "users/@me/widgets/clips/upload",
+            body: Body(file_size: size),
+            as: Reply.self
+        )
+        guard let url = staged.upload_url, let name = staged.upload_filename else {
+            throw Failure.decoding("clip upload reply carried no url")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("video/mp4", forHTTPHeaderField: "Content-Type")
+        let delegate = progress.map(UploadProgressDelegate.init(report:))
+        let (_, response) = try await session.upload(for: request, fromFile: file, delegate: delegate)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw Failure.api(
+                status: (response as? HTTPURLResponse)?.statusCode ?? 0,
+                code: nil,
+                message: "The clip could not be uploaded."
+            )
+        }
+        return name
+    }
+
     /// Games Discord suggests for the reader's own board.
     public func suggestedWidgetGames() async throws -> (played: [ApplicationID], wishlist: [ApplicationID]) {
         struct Reply: Decodable, Sendable {
@@ -210,5 +254,22 @@ struct WidgetApplicationDTO: Decodable, Sendable {
             connectionEntrypointURL: connection_entrypoint_url,
             linkedGameIDs: (linked_games ?? []).compactMap(\.id)
         )
+    }
+}
+
+/// Reports an upload's progress as a fraction.
+private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    let report: @Sendable (Double) -> Void
+
+    init(report: @escaping @Sendable (Double) -> Void) {
+        self.report = report
+    }
+
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64, totalBytesExpectedToSend: Int64
+    ) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        report(Double(totalBytesSent) / Double(totalBytesExpectedToSend))
     }
 }

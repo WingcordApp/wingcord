@@ -17,7 +17,7 @@ struct BoardSlab: View {
     @State private var isMenuOpen = false
 
     var body: some View {
-        BoardSlabBody(tile: tile, ground: ground) {
+        BoardSlabBody(tile: tile, ground: ground, userID: userID) {
             AnyView(
                 BoardTileMenuButton(
                     isOpen: $isMenuOpen,
@@ -38,7 +38,7 @@ struct BoardTilePreview: View {
         // The app's own neutral ground. See `ReportSheet.preview`: this sheet is
         // the app asking a question, and the reported account's theme has no
         // business framing it.
-        BoardSlabBody(tile: tile, ground: ProfileGround(themeColorValues: []))
+        BoardSlabBody(tile: tile, ground: ProfileGround(themeColorValues: []), userID: nil)
             .allowsHitTesting(false)
     }
 }
@@ -47,6 +47,8 @@ struct BoardTilePreview: View {
 private struct BoardSlabBody: View {
     var tile: BoardTile
     var ground: ProfileGround
+    /// Whose board — the clips viewer names them. Nil in the report preview.
+    var userID: UserID?
     /// The "…". Nil in the report sheet's preview, where nothing is pressable.
     var menu: (() -> AnyView)?
 
@@ -68,8 +70,13 @@ private struct BoardSlabBody: View {
         case .personal(let widget):
             ProfileBleedSlab(ground: ground) {
                 PersonalWidgetCard(widget: widget, ground: ground)
+                    .environment(\.widgetOwner, userID)
             }
             .overlay(alignment: .topTrailing) { menu?().padding(Spacing.snug) }
+        case .clips(let clips):
+            ClipsGalleryCard(
+                title: tile.title, clips: clips, userID: userID ?? UserID(rawValue: 0), menu: menu
+            )
         }
     }
 }

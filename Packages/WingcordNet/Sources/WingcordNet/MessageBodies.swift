@@ -36,6 +36,9 @@ struct AttachmentBody: Encodable {
     var uploaded_filename: String
     var description: String?
     var original_content_type: String?
+    /// A clip's fields — Discord writes them on the message's entry too
+    /// (its `d` in the attachment module: `a.is_clip=!0, a.title=…`).
+    var clip: ClipFields?
 
     init(_ attachment: UploadedAttachment) {
         id = attachment.id
@@ -43,8 +46,55 @@ struct AttachmentBody: Encodable {
         uploaded_filename = attachment.uploadedFilename
         description = attachment.altText
         original_content_type = attachment.originalContentType
+        clip = attachment.clip.map(ClipFields.init)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, filename, uploaded_filename, description, original_content_type
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(filename, forKey: .filename)
+        try container.encode(uploaded_filename, forKey: .uploaded_filename)
+        try container.encodeIfPresent(description, forKey: .description)
+        try container.encodeIfPresent(original_content_type, forKey: .original_content_type)
+        try clip?.encode(to: encoder)
     }
 }
+
+/// A clip's fields, flat beside a file's own — `is_clip`, `title`,
+/// `application_id`, `clip_created_at`, `clip_participant_ids`,
+/// `clip_events_timeline`, `duration_secs`. Discord's `getUploadPayload` and
+/// its message-attachment writer put exactly these (web build 641803), and a
+/// distributed clip's two more (Phase 7.3): `clip_remote_id`, the moment's
+/// shared id, and `clip_sync_timestamp`.
+struct ClipFields: Encodable {
+    var is_clip = true
+    var title: String?
+    var application_id: String?
+    var clip_created_at: String
+    var clip_participant_ids: [String]
+    var clip_events_timeline: [ClipTimelineEvent]?
+    var duration_secs: Double?
+    var clip_remote_id: String?
+    var clip_sync_timestamp: String?
+
+    init(_ clip: ClipUpload) {
+        title = clip.title
+        application_id = clip.applicationID.map(String.init)
+        // JavaScript's `toISOString()`: milliseconds and a `Z`.
+        clip_created_at = ISO8601DateFormatter.withFraction.string(from: clip.createdAt)
+        clip_participant_ids = clip.participantIDs.map(String.init)
+        // Discord leaves it out when there is nothing in it.
+        clip_events_timeline = clip.timeline.isEmpty ? nil : clip.timeline
+        duration_secs = clip.durationSeconds
+        clip_remote_id = clip.remoteID
+        clip_sync_timestamp = clip.syncTimestamp.map(ISO8601DateFormatter.withFraction.string(from:))
+    }
+}
+
 
 /// A poll, as Discord's `createPoll` writes it.
 ///

@@ -72,6 +72,7 @@ extension AppModel {
             items: items,
             index: index,
             messageID: messageID,
+            channelID: channelID,
             origin: origin,
             authorName: authorName(of: message, in: channelID),
             sentAt: message.sentAt

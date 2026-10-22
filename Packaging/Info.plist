@@ -30,9 +30,32 @@
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.social-networking</string>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>dev.wingcord.take</string>
+            <key>UTTypeDescription</key>
+            <string>Wingcord Recording</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>com.apple.package</string>
+                <string>public.composite-content</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>wingcordtake</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Wingcord uses the microphone for voice channels and voice messages.</string>
+    <string>Wingcord uses the microphone for voice channels, voice messages and screen recordings.</string>
     <key>NSCameraUsageDescription</key>
-    <string>Wingcord uses the camera for video calls.</string>
+    <string>Wingcord uses the camera for video calls and screen recordings.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Wingcord asks your browser which tab is playing, so your activity can show the video and link to it.</string>
 </dict>
 </plist>

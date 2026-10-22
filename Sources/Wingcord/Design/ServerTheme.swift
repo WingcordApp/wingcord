@@ -52,6 +52,16 @@ nonisolated struct ServerTheme: Equatable, Sendable {
         self.room = room
     }
 
+    /// A custom theme somebody shared — the same generator, fed from the share:
+    /// its colours, angle and mix, **and its own room**, which Discord's
+    /// Preview switches the window to (`tR` sets the base theme it carries).
+    init(shared theme: SharedClientTheme) {
+        stops = theme.gradientStops
+        angle = theme.gradientAngle
+        baseMix = theme.baseMix
+        room = theme.isLight ? .light : .dark
+    }
+
     // MARK: The generator, `dY`
 
     /// `100 − base_mix`: how far the theme stands back.

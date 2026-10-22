@@ -320,6 +320,18 @@ final class VideoPlayback {
         }
     }
 
+    /// A jump to a moment, exactly — a clip's mark.
+    func seek(to seconds: Double) {
+        guard duration > 0 else { return }
+        let target = min(duration, max(0, seconds))
+        publish(time: target)
+        player.seek(
+            to: CMTime(seconds: target, preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
+    }
+
     /// A relative jump, for the arrow keys.
     func skip(by seconds: Double) {
         guard duration > 0 else { return }

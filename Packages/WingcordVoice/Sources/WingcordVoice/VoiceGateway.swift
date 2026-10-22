@@ -66,6 +66,10 @@ public actor VoiceGateway {
         /// Opcode 20: which kind of client somebody is on — Discord's
         /// `RTC_CONNECTION_PLATFORM`, drawn as the mark beside their name.
         case clientPlatform(userID: UInt64, platform: Int)
+        /// Opcode 18's `flags`: what somebody's client says about clips —
+        /// Discord's `RTC_CONNECTION_FLAGS` (1 clips on, 2 allows their voice
+        /// to be recorded, 4 allows any viewer to clip their stream).
+        case clientFlags(userID: UInt64, flags: Int)
         case resumed
         /// - Parameter code: the websocket close code. §"Never log a close code
         ///   without its reason" is about the reader; a caller that recovers
@@ -405,6 +409,9 @@ public actor VoiceGateway {
                   let userID = UInt64(payload.d.user_id)
             else { return }
             continuation?.yield(.clientsConnected([userID]))
+            if let flags = payload.d.flags {
+                continuation?.yield(.clientFlags(userID: userID, flags: flags))
+            }
 
         case 20:
             guard let payload = decode(ClientPlatformPayload.self, from: data),
@@ -1106,8 +1113,11 @@ private struct ClientConnectPayload: Decodable {
     var d: Body
     struct Body: Decodable {
         var user_id: String
-        /// What they are transmitting. Read for the trace, acted on nowhere:
-        /// what a client transmits is said by opcodes 5 and 12.
+        /// What their client says about clips — **not** what it transmits,
+        /// which opcodes 5 and 12 say. Discord's media engine reports it as
+        /// `RTC_CONNECTION_FLAGS`, and its `ClipsManager` reads two bits:
+        /// `CLIPS_ENABLED` (1) and `ALLOW_VOICE_RECORDING` (2), with
+        /// `ALLOW_ANY_VIEWER_CLIPS` (4) beside them (web build 641803).
         var flags: Int?
     }
 }

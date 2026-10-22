@@ -13,27 +13,38 @@ struct TypingIndicatorContainer: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        TypingIndicator(names: names)
+        let typers = self.typers
+        TypingIndicator(
+            names: typers.map(\.name),
+            // Their own indicator only while they type alone — with two or
+            // more, the plain one, as on Discord's mobile clients.
+            style: AppSettings.shared.drawsCustomTypingIndicators
+                ? TypingSentence.drawnStyle(
+                    typers: typers.count,
+                    style: typers.first.flatMap { model.typingStyle(of: $0.id) }
+                )
+                : nil
+        )
     }
 
     /// Who is typing, named the way the transcript names them.
     ///
     /// The reader is excluded: an indicator that reports your own keystrokes
     /// back at you is a control that describes itself.
-    private var names: [String] {
+    private var typers: [(id: UserID, name: String)] {
         let typing = model.typers(in: channelID)
         guard !typing.isEmpty else { return [] }
         let guildID = model.channelIndex.guildID(of: channelID)
-        var result: [String] = []
+        var result: [(id: UserID, name: String)] = []
         result.reserveCapacity(typing.count)
         for userID in typing.keys where userID != model.currentUserID {
             guard let user = model.users[userID] else { continue }
             let member = guildID.flatMap { model.members[$0]?[userID] }
-            result.append(member?.resolvedName(user: user) ?? user.preferredName)
+            result.append((userID, member?.resolvedName(user: user) ?? user.preferredName))
         }
         // Sorted so a flush that reorders a dictionary does not reshuffle the
         // sentence under the reader's eyes.
-        result.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+        result.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         return result
     }
 }
@@ -52,9 +63,12 @@ struct TypingIndicatorContainer: View {
 /// display link is a display link running in every open channel.
 struct TypingIndicator: View, Equatable {
     var names: [String]
+    /// The one typer's custom indicator: their emoji in place of the dots and
+    /// their word in place of "typing". Nil for the plain one.
+    var style: TypingIndicatorStyle? = nil
 
     static func == (lhs: TypingIndicator, rhs: TypingIndicator) -> Bool {
-        lhs.names == rhs.names
+        lhs.names == rhs.names && lhs.style == rhs.style
     }
 
     @Environment(\.motion) private var motion
@@ -63,7 +77,11 @@ struct TypingIndicator: View, Equatable {
         Group {
             if !names.isEmpty {
                 HStack(spacing: Spacing.base) {
-                    dots
+                    if let style, !style.emojis.isEmpty {
+                        TypingEmojiRow(style: style)
+                    } else {
+                        dots
+                    }
                     Text(sentence)
                         .font(Typeface.rowSubtitle)
                         // Solid rather than the hierarchy: this floats over the
@@ -111,17 +129,10 @@ struct TypingIndicator: View, Equatable {
         }
     }
 
-    /// The sentence, in the shape people actually read.
-    ///
-    /// Two names are joined with "and"; past three it stops naming anybody,
-    /// because a list of five nicknames is longer than the composer and says
-    /// less than "several people" does.
+    /// The sentence, in the shape people actually read — see `TypingSentence`:
+    /// "is yapping…" for one typer who chose it; two names joined with "and";
+    /// past three, nobody named.
     private var sentence: String {
-        switch names.count {
-        case 1: "\(names[0]) is typing…"
-        case 2: "\(names[0]) and \(names[1]) are typing…"
-        case 3: "\(names[0]), \(names[1]) and \(names[2]) are typing…"
-        default: "Several people are typing…"
-        }
+        TypingSentence.make(names: names, style: style)
     }
 }

@@ -4,3 +4,10 @@ build/
 *.xcuserdatastate
 .DS_Store
 wingcord-images/
+
+# Local only — never in the repository: Discord bundle extracts, reference
+# screenshots of real accounts, and tool state.
+docs/research/
+docs/references/
+.claude/
+.playwright-mcp/

@@ -54,9 +54,14 @@ final class AnimationClock {
     /// **Scoped to emoji.** Stickers and GIF attachments in the transcript have
     /// always played regardless, and quietly changing that is a behaviour change
     /// nobody asked for; the setting's own label names emoji and avatars.
+    ///
+    /// Game Mode's override is the third answer: Discord turns animated emoji
+    /// off while a game is in front and the app is neither focused nor under
+    /// the pointer.
     static var playsAnimatedEmoji: Bool {
         AppSettings.shared.playsAnimatedContent
             && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            && !GameMode.shared.isThrottling
     }
 
     private var link: CADisplayLink?

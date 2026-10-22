@@ -94,6 +94,28 @@ struct UserProfileDecodeTests {
         #expect(decoration.premiumTier == .nitro)
     }
 
+    /// The save sends this list back with one kind swapped, so it has to be
+    /// each layer's own — a server's never stands in for the account's.
+    @Test("Each layer keeps its own worn collectibles")
+    func wornCollectiblesPerLayer() throws {
+        let json = """
+        { "user": { "id": "1", "username": "a", "discriminator": "0" },
+          "user_profile": { "collectibles": [
+              { "sku_id": "10", "type": 1 }, { "sku_id": "11", "type": 3 } ] },
+          "guild_member_profile": { "pronouns": "they/them" } }
+        """
+        let dto = try JSONDecoder().decode(UserProfileDTO.self, from: Data(json.utf8))
+        #expect(dto.domain.decoration?.wornCollectibles == [
+            WornCollectible(skuID: "10", kind: .profileEffect),
+            WornCollectible(skuID: "11", kind: .profileFrame),
+        ])
+        // The server's layer said nothing about collectibles: nil, not the
+        // account's list.
+        #expect(dto.guildDomain?.decoration?.wornCollectibles == nil)
+        // The frame is still drawn through from the account's layer.
+        #expect(dto.guildDomain?.decoration?.profileFrameSKU == "11")
+    }
+
     /// Absent is not the same as malformed. An account with no style must decode
     /// to nil rather than to a style that draws nothing.
     @Test("A profile with no style decodes to none")

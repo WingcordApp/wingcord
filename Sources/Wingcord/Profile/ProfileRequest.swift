@@ -156,6 +156,11 @@ struct ProfilePresentation: Equatable, Sendable {
     var pronouns: String?
     /// The layered animation drawn over the card, once its SKU has resolved.
     var effect: ProfileEffect?
+    /// Every collectible this profile lists as worn, as the route said it —
+    /// unfiltered, and for a server's profile the server's own list or nil.
+    /// The editor writes an effect or a frame by swapping into this; see
+    /// `WornCollectible.skus(effect:frame:)`.
+    var wornCollectibles: [WornCollectible]? = nil
     /// The artwork wrapping the card's edges, once its SKU has resolved.
     ///
     /// Separate from `effect` because they are separate purchases and an

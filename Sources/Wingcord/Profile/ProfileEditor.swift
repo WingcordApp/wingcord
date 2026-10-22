@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 import SwiftUI
@@ -48,6 +49,16 @@ final class ProfileEditor {
         case uploaded(ImageData)
     }
 
+    /// What the banner picture is about to become — Nitro in either scope.
+    ///
+    /// Three states for the same reason the avatar has four: an upload is
+    /// bytes, a removal is an explicit `null`, and untouched is no key at all.
+    enum PictureEdit: Hashable, Sendable {
+        case unchanged
+        case removed
+        case uploaded(ImageData)
+    }
+
     /// What a widget the reader has just added is identified by until Discord
     /// gives it a real one.
     ///
@@ -94,6 +105,11 @@ final class ProfileEditor {
     /// free field unreachable for anybody who had ever set a theme.
     var themeColors: [UInt32]?
     var avatar: AvatarEdit = .unchanged
+    /// Alt text for a newly uploaded avatar — `avatar_description`, sent with
+    /// the bytes. Meaningless for any other avatar edit.
+    var avatarDescription = ""
+    /// The banner picture. The colour behind it is `accentColor`/`themeColors`.
+    var banner: PictureEdit = .unchanged
     /// Nil is "no tag". Distinct from `unchanged`, which is the original's value
     /// still being in place.
     var primaryGuildID: GuildID?
@@ -103,10 +119,17 @@ final class ProfileEditor {
     /// the sku — see `saveAccount`.
     var nameplate: Nameplate?
     var profileEffectSKU: String?
+    /// The frame's sku — written with the effect as the profile's
+    /// collectibles (`collectibles_sku_ids`).
+    var profileFrameSKU: String?
     var avatarDecorationSKU: String?
     /// The face, effect and colours the display name is set in. Nil is no style
     /// at all, which clears all three keys together — see `DisplayNameStyleWrite`.
     var displayNameStyle: DisplayNameStyle?
+    /// The custom typing indicator — the emoji, the movement and the word others
+    /// see while the reader types alone. Nil is the plain one, which clears the
+    /// key. Account scope only: there is no per-server indicator.
+    var typingIndicatorStyle: TypingIndicatorStyle?
     /// Pictures the reader has chosen for a personal widget but not yet sent,
     /// keyed by the widget and the slot inside it.
     ///
@@ -136,6 +159,10 @@ final class ProfileEditor {
     // MARK: What it started as
 
     private let original: Snapshot
+    /// Every collectible the profile being edited listed as worn — the list a
+    /// changed effect or frame is swapped into, so nothing else on it is lost.
+    /// See `WornCollectible.skus(effect:frame:)`.
+    private let wornCollectibles: [WornCollectible]
 
     private struct Snapshot: Equatable {
         var displayName: String
@@ -147,14 +174,30 @@ final class ProfileEditor {
         var primaryGuildID: GuildID?
         var nameplate: Nameplate?
         var profileEffectSKU: String?
+        var profileFrameSKU: String?
         var avatarDecorationSKU: String?
         var displayNameStyle: DisplayNameStyle?
+        var typingIndicatorStyle: TypingIndicatorStyle?
         var widgets: [ProfileWidget]
     }
 
     // MARK: Saving
 
     private(set) var isSaving = false
+    /// The member a server save answered with — what the server's roster and
+    /// transcript read the nickname, the face and the cosmetics from, so the
+    /// presenter files it at once rather than waiting for the gateway.
+    private(set) var savedMember: Member?
+    /// How many times somebody has tried to leave with changes unsaved — the
+    /// save bar shakes on each.
+    private(set) var nudges = 0
+
+    /// Refuses to let the draft go quietly: the bar shakes and the trackpad
+    /// bumps, and the reader saves, resets, or tries again.
+    func nudge() {
+        nudges += 1
+        Haptics.bump()
+    }
     /// What went wrong, in Discord's own words where it gave any. Cleared by the
     /// next edit, so a stale failure never sits over a draft that has moved on.
     private(set) var failure: String?
@@ -165,12 +208,27 @@ final class ProfileEditor {
         profile: ProfilePresentation,
         widgets: [ProfileWidget],
         scope: Scope,
-        accountName: String? = nil
+        accountName: String? = nil,
+        typingIndicatorStyle: TypingIndicatorStyle? = nil
     ) {
         self.scope = scope
         userID = profile.userID
         base = profile
         self.accountName = accountName ?? profile.displayName
+        // **What is worn, from the route's own list where it gave one** — the
+        // drawn effect and frame wait on their products resolving, and a draft
+        // seeded from those would think nothing was worn until they had. A
+        // server with no list of its own starts from none: its save writes the
+        // server's list, never the account's.
+        let worn = profile.wornCollectibles ?? (scope == .account
+            ? [
+                profile.effect.map { WornCollectible(skuID: $0.skuID, kind: .profileEffect) },
+                profile.frame.map { WornCollectible(skuID: $0.skuID, kind: .profileFrame) },
+            ].compactMap(\.self)
+            : [])
+        wornCollectibles = worn
+        let wornEffect = worn.first { $0.type == CollectibleKind.profileEffect.rawValue }?.skuID
+        let wornFrame = worn.first { $0.type == CollectibleKind.profileFrame.rawValue }?.skuID
         let snapshot = Snapshot(
             displayName: profile.displayName,
             pronouns: profile.pronouns ?? "",
@@ -186,9 +244,11 @@ final class ProfileEditor {
                 : profile.themeColorValues,
             primaryGuildID: profile.guildTag?.guildID,
             nameplate: profile.nameplate,
-            profileEffectSKU: profile.effect?.skuID,
+            profileEffectSKU: wornEffect ?? profile.effect?.skuID,
+            profileFrameSKU: wornFrame ?? profile.frame?.skuID,
             avatarDecorationSKU: profile.avatarDecorationSKU,
             displayNameStyle: profile.displayNameStyle,
+            typingIndicatorStyle: scope == .account ? typingIndicatorStyle : nil,
             // **The raw widgets, not `BoardPresentation.tiles`.** A tile is
             // what the board *draws* — a resolved name, cover art, a span — and
             // it has thrown away the game ids and the comment the write route
@@ -205,9 +265,11 @@ final class ProfileEditor {
         primaryGuildID = snapshot.primaryGuildID
         nameplate = snapshot.nameplate
         profileEffectSKU = snapshot.profileEffectSKU
+        profileFrameSKU = snapshot.profileFrameSKU
         avatarDecorationSKU = snapshot.avatarDecorationSKU
         displayNameStyle = snapshot.displayNameStyle
-        // `self.`, because the initialiser's parameter shadows the property.
+        // `self.`, because the initialisers' parameters shadow the properties.
+        self.typingIndicatorStyle = snapshot.typingIndicatorStyle
         self.widgets = snapshot.widgets
     }
 
@@ -245,6 +307,11 @@ final class ProfileEditor {
             preview.decorationURL = decorationURL
         }
         preview.displayNameStyle = displayNameStyle
+        switch banner {
+        case .unchanged: break
+        case .removed: preview.bannerURL = nil
+        case .uploaded(let image): preview.bannerURL = Self.stage(image)
+        }
         switch avatar {
         case .unchanged:
             break
@@ -284,7 +351,14 @@ final class ProfileEditor {
     /// write it twice, and living in the caches directory so the system reclaims
     /// it rather than this app having to remember to.
     private static func stage(_ image: ImageData) -> URL? {
-        let name = "wingcord-avatar-\(image.bytes.hashValue).bin"
+        // The type in the name, so the loader can tell a moving picture from
+        // a still one by the address, as it does for the CDN's.
+        let kind = image.mimeType.split(separator: "/").last.map(String.init) ?? "bin"
+        // **A digest of every byte, not `hashValue`.** `Data` hashes only its
+        // first eighty bytes, which two PNGs of the same size share header and
+        // all — so the second picture chosen was shown as the first.
+        let digest = SHA256.hash(data: image.bytes).prefix(12).map { String(format: "%02x", $0) }.joined()
+        let name = "wingcord-picture-\(digest).\(kind)"
         let url = FileManager.default.temporaryDirectory.appending(path: name)
         if !FileManager.default.fileExists(atPath: url.path) {
             try? image.bytes.write(to: url)
@@ -301,7 +375,7 @@ final class ProfileEditor {
     /// nothing, and a bar that stays up telling them otherwise is a bar they
     /// learn to dismiss without reading.
     var isDirty: Bool {
-        avatar != .unchanged || !pendingImages.isEmpty || current != original
+        avatar != .unchanged || banner != .unchanged || !pendingImages.isEmpty || current != original
     }
 
     private var current: Snapshot {
@@ -315,8 +389,10 @@ final class ProfileEditor {
             primaryGuildID: primaryGuildID,
             nameplate: nameplate,
             profileEffectSKU: profileEffectSKU,
+            profileFrameSKU: profileFrameSKU,
             avatarDecorationSKU: avatarDecorationSKU,
             displayNameStyle: displayNameStyle,
+            typingIndicatorStyle: typingIndicatorStyle,
             widgets: widgets
         )
     }
@@ -332,11 +408,16 @@ final class ProfileEditor {
         primaryGuildID = original.primaryGuildID
         nameplate = original.nameplate
         profileEffectSKU = original.profileEffectSKU
+        profileFrameSKU = original.profileFrameSKU
         avatarDecorationSKU = original.avatarDecorationSKU
         displayNameStyle = original.displayNameStyle
+        typingIndicatorStyle = original.typingIndicatorStyle
         widgets = original.widgets
         pendingImages = [:]
         avatar = .unchanged
+        avatarDescription = ""
+        banner = .unchanged
+        decorationAsset = nil
         failure = nil
     }
 
@@ -389,6 +470,14 @@ final class ProfileEditor {
             // already; sending the board first would quote names that do not
             // exist yet.
             try await uploadPendingImages(using: rest)
+            // Clips picked from this Mac go up now, for the same reason.
+            try await uploadPendingClips(using: rest)
+            // An empty gallery is not a widget — Discord's `isDiscardable` —
+            // and the route would refuse one.
+            widgets.removeAll { widget in
+                if case .clipsGallery(let clips) = widget.content { return clips.isEmpty }
+                return false
+            }
             if widgets != original.widgets {
                 // **A board holding a widget this client cannot name is not
                 // saved at all**, and everything else in the edit still is. The
@@ -452,44 +541,53 @@ final class ProfileEditor {
         pendingImages = [:]
     }
 
+    /// How far the clip uploads have got, 0…1, while they run — the save bar
+    /// shows it. Nil otherwise.
+    var clipUploadProgress: Double?
+
+    /// Sends every clip still on this Mac through Discord's clip route and
+    /// writes the filename it answers with into the gallery.
+    private func uploadPendingClips(using rest: DiscordREST) async throws {
+        let pending = widgets.indices.flatMap { index in
+            widgets[index].content.clipsOnThisMac.map { (index, $0) }
+        }
+        guard !pending.isEmpty else { return }
+        clipUploadProgress = 0
+        defer { clipUploadProgress = nil }
+        for (done, entry) in pending.enumerated() {
+            let (index, file) = entry
+            let share = 1 / Double(pending.count)
+            let base = Double(done) * share
+            let filename = try await rest.uploadWidgetClip(from: file) { [weak self] fraction in
+                Task { @MainActor in self?.clipUploadProgress = base + fraction * share }
+            }
+            guard case .clipsGallery(var clips) = widgets[index].content,
+                  let slot = clips.firstIndex(where: { $0.localFile == file })
+            else { continue }
+            clips[slot].storage = .staged(uploadFilename: filename)
+            widgets[index].content = .clipsGallery(clips)
+        }
+    }
+
     private func saveAccount(using rest: DiscordREST) async throws {
         let name = edit(displayName, original.displayName)
-        let avatarEdit = avatar
+        let (picture, recent) = avatarWrites
         let plate = edit(nameplate?.skuID, original.nameplate?.skuID)
         let decoration = edit(avatarDecorationSKU, original.avatarDecorationSKU)
-        // **One edit, three keys.** A style whose font arrived without its
-        // effect is a half-applied style, so the write type fans it out and
-        // clears all three together — see `DisplayNameStyleWrite`.
-        let style: FieldEdit<DisplayNameStyleWrite> =
-            displayNameStyle == original.displayNameStyle
-                ? .unchanged
-                : displayNameStyle.map { worn in
-                    .set(
-                        DisplayNameStyleWrite(
-                            fontID: worn.font.rawValue,
-                            effectID: worn.effect.rawValue,
-                            colors: worn.colors.map(Int.init)
-                        )
-                    )
-                } ?? .cleared
+        let style = styleWrite
+        let typing = edit(typingIndicatorStyle, original.typingIndicatorStyle)
 
-        if name.isDirty || avatarEdit != .unchanged || plate.isDirty
-            || decoration.isDirty || style.isDirty {
-            var picture: FieldEdit<ImageData> = .unchanged
-            var recent: FieldEdit<String> = .unchanged
-            switch avatarEdit {
-            case .unchanged: break
-            case .removed: picture = .cleared
-            case .recent(let entry): recent = .set(entry.id)
-            case .uploaded(let image): picture = .set(image)
-            }
+        if name.isDirty || picture.isDirty || recent.isDirty || plate.isDirty
+            || decoration.isDirty || style.isDirty || typing.isDirty {
             _ = try await rest.modifyCurrentUser(
                 displayName: name,
                 avatar: picture,
+                avatarDescription: altText,
                 recentAvatarID: recent,
                 nameplateSKU: plate,
                 avatarDecorationSKU: decoration,
-                displayNameStyle: style
+                displayNameStyle: style,
+                typingIndicatorStyle: typing
             )
         }
 
@@ -497,16 +595,20 @@ final class ProfileEditor {
         let pronounEdit = edit(pronouns, original.pronouns)
         let accent = edit(accentColor, original.accentColor)
         let theme = edit(themeColors, original.themeColors)
-        let effect = edit(profileEffectSKU, original.profileEffectSKU)
+        let bannerWrite = bannerWrite
+        let collectibles = collectibleSKUsIfChanged
         if bioEdit.isDirty || pronounEdit.isDirty || accent.isDirty
-            || theme.isDirty || effect.isDirty
+            || theme.isDirty || bannerWrite.isDirty || collectibles != nil
         {
+            // **The banner goes with the profile**, as Discord's own save
+            // sends it (`56348`'s `banner`), not with the account.
             try await rest.modifyProfile(
                 bio: bioEdit,
                 pronouns: pronounEdit,
                 accentColor: accent.map(Int.init),
                 themeColors: theme.map { $0.map(Int.init) },
-                profileEffectSKU: effect
+                banner: bannerWrite,
+                collectibleSKUs: collectibles
             )
         }
 
@@ -515,22 +617,170 @@ final class ProfileEditor {
         }
     }
 
+    /// A server's profile, **across the two routes Discord splits it over**
+    /// (build 643186): what the reader wears as a member — nickname, avatar,
+    /// decoration, nameplate, name style — on `PATCH /guilds/{id}/members/@me`,
+    /// and the profile itself — bio, pronouns, colours, banner, effect and
+    /// frame — on `PATCH /guilds/{id}/profile/@me`. This used to send only the
+    /// nickname to the first and silently dropped the avatar, the decoration,
+    /// the nameplate and the name style.
     private func saveGuild(_ guildID: GuildID, using rest: DiscordREST) async throws {
-        if nickname != original.nickname {
-            _ = try await rest.setNickname(nickname, in: guildID)
+        let nick = edit(nickname, original.nickname)
+        let (picture, recent) = avatarWrites
+        let plate = edit(nameplate?.skuID, original.nameplate?.skuID)
+        let decoration = edit(avatarDecorationSKU, original.avatarDecorationSKU)
+        let style = styleWrite
+        if nick.isDirty || picture.isDirty || recent.isDirty || plate.isDirty
+            || decoration.isDirty || style.isDirty {
+            savedMember = try await rest.modifyCurrentMember(
+                in: guildID,
+                nick: nick,
+                avatar: picture,
+                avatarDescription: altText,
+                recentAvatarID: recent,
+                avatarDecorationSKU: decoration,
+                nameplateSKU: plate,
+                displayNameStyle: style
+            )
         }
+
         let bioEdit = edit(bio, original.bio)
         let pronounEdit = edit(pronouns, original.pronouns)
         let accent = edit(accentColor, original.accentColor)
-        let effect = edit(profileEffectSKU, original.profileEffectSKU)
-        if bioEdit.isDirty || pronounEdit.isDirty || accent.isDirty || effect.isDirty {
+        let theme = edit(themeColors, original.themeColors)
+        let bannerWrite = bannerWrite
+        let collectibles = collectibleSKUsIfChanged
+        if bioEdit.isDirty || pronounEdit.isDirty || accent.isDirty || theme.isDirty
+            || bannerWrite.isDirty || collectibles != nil {
             try await rest.modifyGuildProfile(
                 in: guildID,
                 pronouns: pronounEdit,
                 bio: bioEdit,
                 accentColor: accent.map(Int.init),
-                profileEffectSKU: effect
+                themeColors: theme.map { $0.map(Int.init) },
+                banner: bannerWrite,
+                collectibleSKUs: collectibles
             )
+        }
+    }
+
+    /// The avatar as the two keys that carry it: bytes for an upload, an id
+    /// to go back to a recent one, `null` to take it off.
+    private var avatarWrites: (picture: FieldEdit<ImageData>, recent: FieldEdit<String>) {
+        switch avatar {
+        case .unchanged: (.unchanged, .unchanged)
+        case .removed: (.cleared, .unchanged)
+        case .recent(let entry): (.unchanged, .set(entry.id))
+        case .uploaded(let image): (.set(image), .unchanged)
+        }
+    }
+
+    /// The alt text, only beside an upload and only when there is some.
+    private var altText: FieldEdit<String> {
+        guard case .uploaded = avatar else { return .unchanged }
+        let text = avatarDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? .unchanged : .set(text)
+    }
+
+    private var bannerWrite: FieldEdit<ImageData> {
+        switch banner {
+        case .unchanged: .unchanged
+        case .removed: .cleared
+        case .uploaded(let image): .set(image)
+        }
+    }
+
+    /// **One edit, three keys.** A style whose font arrived without its effect
+    /// is a half-applied style, so the write type fans it out and clears all
+    /// three together — see `DisplayNameStyleWrite`.
+    private var styleWrite: FieldEdit<DisplayNameStyleWrite> {
+        guard displayNameStyle != original.displayNameStyle else { return .unchanged }
+        return displayNameStyle.map { worn in
+            .set(
+                DisplayNameStyleWrite(
+                    fontID: worn.font.rawValue,
+                    effectID: worn.effect.rawValue,
+                    colors: worn.colors.map(Int.init)
+                )
+            )
+        } ?? .cleared
+    }
+
+    /// The profile's collectibles as Discord writes them — the worn list with
+    /// the changed effect or frame swapped in — when either changed; nil when
+    /// neither did.
+    private var collectibleSKUsIfChanged: [String]? {
+        wornCollectibles.skus(
+            effect: edit(profileEffectSKU, original.profileEffectSKU),
+            frame: edit(profileFrameSKU, original.profileFrameSKU)
+        )
+    }
+
+    // MARK: The colours
+
+    /// What a colour control opens on where the profile has none of its own:
+    /// the first of the colours quantised out of the avatar, or blurple.
+    var fallbackColour: UInt32 {
+        base.themeColorValues.first ?? base.accentColorValue ?? 0x58_65_F2
+    }
+
+    /// One end of the theme, falling back to what the card is drawn with now
+    /// — the derived pair, then the banner colour — so a profile with no theme
+    /// yet opens on its own colours rather than on black.
+    func themeStop(_ index: Int) -> UInt32 {
+        if let colours = themeColors, colours.indices.contains(index) { return colours[index] }
+        if base.themeColorValues.indices.contains(index) { return base.themeColorValues[index] }
+        return accentColor ?? fallbackColour
+    }
+
+    /// **Always written as a pair.** The field takes two integers or null, so
+    /// one stop moving still sends both — and a profile that had no theme has
+    /// to acquire a whole one rather than half of it.
+    func setThemeStop(_ index: Int, to value: UInt32) {
+        var stops = [themeStop(0), themeStop(1)]
+        stops[index] = value
+        themeColors = stops
+    }
+
+    func swapThemeStops() {
+        themeColors = [themeStop(1), themeStop(0)]
+    }
+
+    // MARK: Wearing a collectible
+
+    /// What the draft currently wears of one kind.
+    func worn(_ kind: CollectibleKind) -> String? {
+        switch kind {
+        case .nameplate: nameplate?.skuID
+        case .avatarDecoration: avatarDecorationSKU
+        case .profileEffect: profileEffectSKU
+        case .profileFrame: profileFrameSKU
+        }
+    }
+
+    /// Puts a choice into the draft. **Into the draft and no further** —
+    /// nothing in the editor writes to Discord except the save bar, which is
+    /// what makes Reset able to take five changes back at once.
+    func wear(_ chosen: OwnedCollectible?, kind: CollectibleKind) {
+        switch kind {
+        case .nameplate:
+            // Rebuilt as a `Nameplate` so the rail can draw it at once. The
+            // palette is the wash behind a roster row and the purchase carries
+            // it, so it travels with the asset rather than being looked up again.
+            nameplate = chosen.map { item in
+                Nameplate(
+                    asset: item.asset,
+                    palette: item.palette.flatMap(NameplatePalette.init(rawValue:)) ?? .none,
+                    label: item.label,
+                    skuID: item.skuID
+                )
+            }
+        case .avatarDecoration:
+            avatarDecorationSKU = chosen?.skuID
+            // The hash, so the rail and the preview can draw it before saving.
+            decorationAsset = chosen?.asset
+        case .profileEffect: profileEffectSKU = chosen?.skuID
+        case .profileFrame: profileFrameSKU = chosen?.skuID
         }
     }
 }
@@ -563,6 +813,8 @@ extension ProfileWidget {
             ProfileWidgetWrite(id: savedID, applicationID: applicationID)
         case .personal(let personal):
             ProfileWidgetWrite(id: savedID, personal: personal)
+        case .clipsGallery(let clips):
+            ProfileWidgetWrite(id: savedID, clips: clips)
         case .unknown:
             nil
         }
@@ -572,5 +824,13 @@ extension ProfileWidget {
     /// has only just added. See `ProfileEditor.draftIDPrefix`.
     private var savedID: String? {
         id.hasPrefix(ProfileEditor.draftIDPrefix) ? nil : id
+    }
+}
+
+extension ProfileWidget.Content {
+    /// A gallery's clips still on this Mac, waiting for Save to upload them.
+    var clipsOnThisMac: [URL] {
+        guard case .clipsGallery(let clips) = self else { return [] }
+        return clips.compactMap(\.localFile)
     }
 }

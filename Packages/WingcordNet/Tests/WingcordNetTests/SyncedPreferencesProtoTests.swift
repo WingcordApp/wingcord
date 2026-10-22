@@ -48,6 +48,28 @@ struct SyncedPreferencesProtoTests {
         #expect(MessagingPrivacyProto.decode(on).privacy == MessagingPrivacyProto.decode(Self.capturedTextAndImages).privacy)
     }
 
+    /// Discord's `clips.allowVoiceRecording?.value ?? true` (web build 641803):
+    /// no `clips` says nothing, `clips` without the wrapper is on, an empty
+    /// wrapper is off.
+    @Test("Allow my voice to be recorded in Clips reads as Discord reads it, and writes")
+    func allowsVoiceRecording() throws {
+        #expect(SyncedPreferencesProto.decode(Data()).allowsVoiceRecordingInClips == nil)
+        var bare = ProtobufWriter()
+        bare.message(field: 19, Data())
+        #expect(SyncedPreferencesProto.decode(bare.data).allowsVoiceRecordingInClips == true)
+
+        let off = try #require(Data(base64Encoded: SyncedPreferencesProto.patch(
+            applying: .allowsVoiceRecordingInClips(false), to: bare.data
+        )))
+        #expect(SyncedPreferencesProto.decode(off).allowsVoiceRecordingInClips == false)
+        let on = try #require(Data(base64Encoded: SyncedPreferencesProto.patch(
+            applying: .allowsVoiceRecordingInClips(true), to: off
+        )))
+        #expect(SyncedPreferencesProto.decode(on).allowsVoiceRecordingInClips == true)
+        // Everything else in the blob reads as it did.
+        #expect(SyncedPreferencesProto.decode(on).soundboardVolume == nil)
+    }
+
     /// Discord's `getSetting()?.volume ?? 100`: no `voice_and_video` says
     /// nothing; one without `soundboard_settings` is 100; an empty
     /// `soundboard_settings` is 0, because proto3 writes no zero.

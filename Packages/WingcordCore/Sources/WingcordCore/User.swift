@@ -383,6 +383,15 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     /// worn collectible by type; `profile_effect` names only the effect, so a
     /// client reading that alone never learns the frame exists.
     public let profileFrameSKU: String?
+    /// Every collectible this layer of the profile lists as worn — the
+    /// profile route's `collectibles` — **without** the account's layer
+    /// standing in for a server's. Nil where the route said nothing.
+    ///
+    /// Read for one thing: Discord saves an effect or a frame by sending this
+    /// list back with that one kind swapped (`collectibles_sku_ids`), so a
+    /// write built from the effect and the frame alone would drop whatever
+    /// else the list carried. See `WornCollectible.skus(swapping:)`.
+    public let wornCollectibles: [WornCollectible]?
     /// Free text the account chose. Discord shows it beside the handle.
     public let pronouns: String?
     public let connectedAccounts: [ConnectedAccount]
@@ -426,6 +435,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         badges: [AccountBadge] = [],
         profileEffectSKU: String? = nil,
         profileFrameSKU: String? = nil,
+        wornCollectibles: [WornCollectible]? = nil,
         pronouns: String? = nil,
         connectedAccounts: [ConnectedAccount] = [],
         premiumTier: PremiumTier = .none,
@@ -450,6 +460,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         self.badges = badges
         self.profileEffectSKU = profileEffectSKU
         self.profileFrameSKU = profileFrameSKU
+        self.wornCollectibles = wornCollectibles
         self.pronouns = pronouns
         self.connectedAccounts = connectedAccounts
         self.premiumTier = premiumTier
@@ -492,6 +503,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
             badges: incoming.badges.isEmpty ? existing.badges : incoming.badges,
             profileEffectSKU: incoming.profileEffectSKU ?? existing.profileEffectSKU,
             profileFrameSKU: incoming.profileFrameSKU ?? existing.profileFrameSKU,
+            wornCollectibles: incoming.wornCollectibles ?? existing.wornCollectibles,
             pronouns: incoming.pronouns ?? existing.pronouns,
             connectedAccounts: incoming.connectedAccounts.isEmpty
                 ? existing.connectedAccounts
@@ -535,7 +547,8 @@ public final class UserDecoration: Hashable, Sendable, Codable {
             && bannerHash == nil
             && accentColor == nil && bio == nil && primaryGuildTag == nil
             && (themeColorValues?.isEmpty ?? true) && badges.isEmpty
-            && profileEffectSKU == nil && profileFrameSKU == nil && pronouns == nil
+            && profileEffectSKU == nil && profileFrameSKU == nil
+            && (wornCollectibles?.isEmpty ?? true) && pronouns == nil
             && connectedAccounts.isEmpty && premiumTier == .none
             && legacyUsername == nil && mutualGuilds.isEmpty && mutualFriends.isEmpty
             && !isProfilePrivate && application == nil
@@ -553,6 +566,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
                 && lhs.badges == rhs.badges
                 && lhs.profileEffectSKU == rhs.profileEffectSKU
                 && lhs.profileFrameSKU == rhs.profileFrameSKU
+                && lhs.wornCollectibles == rhs.wornCollectibles
                 && lhs.pronouns == rhs.pronouns
                 && lhs.connectedAccounts == rhs.connectedAccounts
                 && lhs.premiumTier == rhs.premiumTier

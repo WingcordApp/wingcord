@@ -140,6 +140,9 @@ nonisolated enum TimelineRowPainter {
         var activityInviteIsJoined = false
         /// A listen-along card's host, painted — see `ListenAlongCard`.
         var listenAlong: ListenAlongCard?
+        /// A shared theme card's two states, painted: being previewed, kept.
+        var isPreviewingSharedTheme = false
+        var isSharedThemeSaved = false
         /// How far an upload's files have got, 0...1 — the session's, and so
         /// painted rather than laid out. See `UploadCardSlot`.
         var uploadProgress: Double = 0
@@ -777,6 +780,19 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
+        if let theme = row.sharedTheme {
+            drawSharedThemeCard(
+                theme,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                isPreviewing: state.isPreviewingSharedTheme,
+                isSaved: state.isSharedThemeSaved,
+                hovered: state.hoveredComponent,
+                images: images,
+                scale: scale
+            )
+        }
+
         for card in row.inviteCards {
             drawInviteCard(
                 card,
@@ -785,7 +801,8 @@ nonisolated enum TimelineRowPainter {
                 isSettled: state.settledInviteCodes.contains(card.code),
                 hovered: state.hoveredComponent,
                 images: images,
-                scale: scale
+                scale: scale,
+                style: style
             )
         }
 
@@ -1825,6 +1842,9 @@ nonisolated enum TimelineRowPainter {
                 isHidden: isHidden,
                 clock: clock
             )
+            if let clip = slot.clip, !isHidden {
+                drawClipHeader(clip, in: frame, context: context, style: style, images: images, scale: scale)
+            }
         case .voice:
             drawVoiceNote(slot, in: frame, context: context, style: style)
         case .textPreview:
@@ -2000,6 +2020,82 @@ nonisolated enum TimelineRowPainter {
             font: NSFont.systemFont(ofSize: 10, weight: .semibold),
             context: context
         )
+    }
+
+    /// A Discord clip's title, game and people over the top of its poster —
+    /// see `ClipTileHeader`. White over a shade, as Discord's player draws
+    /// them: a poster can be any colour, and a fixed shade is what keeps the
+    /// words legible on all of them.
+    private static func drawClipHeader(
+        _ header: ClipTileHeader,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        context.saveGState()
+        context.addPath(CGPath(roundedRect: frame, cornerWidth: 8, cornerHeight: 8, transform: nil))
+        context.clip()
+        let shadeBottom = frame.minY + min(frame.height, ClipTileHeader.shadeHeight)
+        if let shade = CGGradient(
+            colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+            colors: [
+                NSColor.black.withAlphaComponent(0.6).cgColor,
+                NSColor.black.withAlphaComponent(0).cgColor,
+            ] as CFArray,
+            locations: [0, 1]
+        ) {
+            context.drawLinearGradient(
+                shade,
+                start: CGPoint(x: frame.midX, y: frame.minY),
+                end: CGPoint(x: frame.midX, y: shadeBottom),
+                options: []
+            )
+        }
+        context.restoreGState()
+
+        let (faces, overflow) = header.faceRects(in: frame)
+        for (face, rect) in zip(header.faces, faces) {
+            drawAvatar(
+                url: face.url, monogram: face.monogram, in: rect,
+                context: context, style: style, images: images, scale: scale
+            )
+        }
+        if let overflow {
+            drawChip(
+                "+\(header.overflow)",
+                in: overflow,
+                fill: NSColor.black.withAlphaComponent(0.55),
+                textColor: .white,
+                font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+                context: context
+            )
+        }
+
+        let left = frame.minX + 12
+        let right = (faces.first?.minX ?? overflow?.minX ?? frame.maxX) - 10
+        if let title = header.title {
+            drawSymbol("film", tint: .white, in: CGRect(x: left, y: frame.minY + 11, width: 14, height: 13), context: context)
+            drawText(
+                title,
+                font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+                color: .white,
+                at: CGPoint(x: left + 19, y: frame.minY + 9),
+                maxWidth: max(0, right - left - 19),
+                context: context
+            )
+        }
+        if let subtitle = header.subtitle {
+            drawText(
+                subtitle,
+                font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                color: NSColor.white.withAlphaComponent(0.88),
+                at: CGPoint(x: left, y: frame.minY + 28),
+                maxWidth: max(0, right - left),
+                context: context
+            )
+        }
     }
 
     /// A file with nothing to show: a glyph, its name, its size.

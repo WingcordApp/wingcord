@@ -162,7 +162,8 @@ struct OverlayLayoutTests {
     func stableOrder() {
         var layout = OverlayLayout.default
         layout.move(.notifications, to: CGPoint(x: 0.9, y: 0.9))
-        #expect(layout.visibleWidgets(locked: false) == OverlayWidgetKind.allCases)
+        #expect(layout.visibleWidgets(locked: false)
+            == OverlayWidgetKind.allCases.filter(\.isEnabledByDefault))
     }
 
     // MARK: Persistence
@@ -229,6 +230,24 @@ struct OverlayLayoutTests {
         // stored layout, and must not land at (0,0).
         let sparse = OverlayLayout(placements: [:])
         #expect(sparse.placement(for: .voice).centre == OverlayWidgetKind.voice.defaultCentre)
-        #expect(sparse.visibleWidgets(locked: false) == OverlayWidgetKind.allCases)
+        #expect(sparse.visibleWidgets(locked: false)
+            == OverlayWidgetKind.allCases.filter(\.isEnabledByDefault))
+        // Including whether it is on at all: the meter arrives switched off
+        // for a reader whose layout predates it.
+        #expect(!sparse.placement(for: .performance).isEnabled)
+        #expect(sparse.placement(for: .activity).isEnabled)
+    }
+
+    @Test("Streamer Mode withholds widgets without editing the layout")
+    func hiddenWidgets() {
+        let layout = OverlayLayout.default
+        let hidden: Set<OverlayWidgetKind> = [.chat, .notifications]
+        let unlocked = layout.visibleWidgets(locked: false, hiding: hidden)
+        #expect(!unlocked.contains(.chat))
+        #expect(!unlocked.contains(.notifications))
+        #expect(unlocked.contains(.voice))
+        // Locked too: a pinned toast is exactly what a stream must not show.
+        #expect(!layout.visibleWidgets(locked: true, hiding: hidden).contains(.notifications))
+        #expect(layout.visibleWidgets(locked: true).contains(.notifications))
     }
 }
