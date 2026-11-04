@@ -165,8 +165,7 @@ private extension ReactionHover {
 ///
 /// **AppKit's popover, not SwiftUI's `.popover`, for its behaviour.** SwiftUI's
 /// is transient, and a transient popover spends the next click anywhere
-/// outside it on its own dismissal — `TenureBadgeFlyout` names the same trade.
-/// Here that click lands on the chip under the card, which is the one thing a
+/// outside it on its own dismissal. Here that click lands on the chip under the card, which is the one thing a
 /// reader resting on a reaction is about to press. `.applicationDefined` leaves
 /// every click where it falls; the overlay decides when the card goes.
 ///

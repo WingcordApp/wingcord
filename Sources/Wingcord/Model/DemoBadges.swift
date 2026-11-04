@@ -35,11 +35,19 @@ enum DemoBadges {
              ("Serious", "150 hours"), ("Devoted", "300 hours"), ("Seasoned", "500 hours"), ("Ironclad", "1,000 hours")],
             symbol: "bolt.fill", colour: NSColor(srgbRed: 0.85, green: 0.35, blue: 0.85, alpha: 1)
         )
-        let nitro = tiers(
+        var nitro = tiers(
             [("Starter", ""), ("Bronze", "1 month"), ("Silver", "3 months"), ("Gold", "6 months"),
              ("Platinum", "1 year"), ("Diamond", "2 years"), ("Emerald", "3 years"), ("Ruby", "5 years")],
             symbol: "seal.fill", colour: NSColor(srgbRed: 0.95, green: 0.3, blue: 0.45, alpha: 1)
         )
+        // **The one picture here that's Discord's**, by address as a real
+        // directory sends it: what's being looked at is the film itself, its
+        // canvas and its timing, and a drawn stand-in would prove neither.
+        if let gold = nitro.firstIndex(where: { $0.key == "gold" }) {
+            nitro[gold].complexIconAnimatedURL = URL(
+                string: "https://cdn.discordapp.com/assets/content/1518ef16d0790bcc0d2a409db2e71a25d7b8726703150612a9b06b45219f4066.png"
+            )
+        }
         // The booster's nine as the directory sends them: keys and
         // milestones, and no names — which is what drew "LEVEL_1".
         let booster = ["1 month", "2 months", "3 months", "6 months", "9 months", "12 months", "15 months",

@@ -52,6 +52,15 @@ struct BadgeCatalogTests {
         #expect(streaming().displayRarity == .epic)
     }
 
+    @Test("The moving form is the level's, then the badge's own, and a still badge has none")
+    func animatedArtwork() {
+        #expect(streaming().animatedArtwork?.lastPathComponent == "B-moving.png")
+        let own = CatalogBadge(badgeID: 17, isOwned: true, complexIconAnimatedURL: url("own"))
+        #expect(own.animatedArtwork?.lastPathComponent == "own.png")
+        let still = CatalogBadge(badgeID: 17, isOwned: true, complexIconURL: url("still"))
+        #expect(still.animatedArtwork == nil)
+    }
+
     @Test("Nitro's title is Nitro and its level")
     func nitroTitle() {
         let nitro = CatalogBadge(

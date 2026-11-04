@@ -65,10 +65,9 @@ struct BadgeRow: View {
     /// Whose flyout is up.
     @State private var shown: ProfileBadge.ID?
     /// Where the pointer actually is. **Two latches, because the card sits
-    /// directly above the badge** — a tenure badge's flyout is a 240-point
-    /// object a reader is meant to click, and reaching it means leaving the
-    /// mark that raised it. The plain one-line flyout never needed this because
-    /// nothing in it was worth reaching.
+    /// directly above the badge**, and reaching it means leaving the mark that
+    /// raised it. The plain one-line flyout never needed this because nothing in
+    /// it was worth reaching.
     @State private var onBadge: ProfileBadge.ID?
     @State private var onCard: ProfileBadge.ID?
     @State private var dismissal: Task<Void, Never>?
@@ -115,23 +114,19 @@ struct BadgeRow: View {
                         ),
                         arrowEdge: .top
                     ) {
-                        // **A tenure badge gets a card, everything else a
-                        // line.** That is Discord's own split rather than a
-                        // preference: it is the only badge it says more than a
-                        // sentence about, and the only one that opens a page.
+                        // **One card, before the directory answers and after.**
+                        // A line only where there's no person behind the row and
+                        // nothing else to say.
                         Group {
-                            if let userID, let entry = model.catalogBadge(forProfileBadge: badge.id, of: userID) {
-                                BadgeCard(badge: entry, label: badge.label, iconURL: badge.iconURL)
-                                    .onHover { pointer(badge.id, onCard: true, inside: $0) }
-                            } else if let tenure {
-                                TenureBadgeFlyout(
+                            if userID != nil || tenure != nil {
+                                BadgeCard(
+                                    badge: userID.flatMap { model.catalogBadge(forProfileBadge: badge.id, of: $0) },
                                     tenure: tenure,
                                     premiumSince: premiumSince,
-                                    open: { open(tenure) },
-                                    hovering: { pointer(badge.id, onCard: true, inside: $0) }
+                                    label: badge.label,
+                                    iconURL: badge.iconURL
                                 )
-                            } else if userID != nil {
-                                BadgeCard(badge: nil, label: badge.label, iconURL: badge.iconURL)
+                                .onHover { pointer(badge.id, onCard: true, inside: $0) }
                             } else {
                                 BadgeFlyout(label: badge.label)
                             }
@@ -184,6 +179,11 @@ struct BadgeRow: View {
         }
         .popover(isPresented: $showsDirectory, arrowEdge: .bottom) {
             if let userID { badgePanel($rowPanel, userID: userID) }
+        }
+        // **As the row appears, as Discord's does** (`useEffect` in its badge
+        // list), so a card's first hover already has the moving artwork.
+        .task(id: userID) {
+            if let userID { model.loadBadgeCatalog(of: userID) }
         }
     }
 
@@ -899,24 +899,35 @@ struct GuildTagChip: View {
     @Environment(\.motion) private var motion
     /// The card's, not the window's — a themed profile flips it.
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.profileWearsTheme) private var profileWearsTheme
     @State private var isOpen = false
     @State private var isHovering = false
 
     private static let badgeSide: CGFloat = 12
 
-    /// What the tag rides on.
+    /// What the tag rides on, **Discord's own rule** (`guildTagPill`, `956495`):
     ///
-    /// **A neutral plate, not a wash of the card**, and that is measured rather
-    /// than reasoned: on a profile whose ground is `#e2ca9c` Discord draws the
-    /// chip at `#91919b` — a blue-grey with no trace of the gold under it, so it
-    /// is an opaque surface token rather than black at some opacity over the
-    /// person's colour, which would have kept the hue.
+    /// ```css
+    /// .guildTagPill { background: var(--background-mod-subtle);
+    ///                 border: 1px solid var(--border-muted) }
+    /// .guildTagPill:hover { background-color: var(--background-mod-strong) }
+    /// .custom-user-profile-theme.theme-light .guildTagPill { background: var(--opacity-white-24) }
+    /// .custom-user-profile-theme.theme-light .guildTagPill:hover { background-color: var(--opacity-white-40) }
+    /// ```
     ///
-    /// On a dark card the app's own hover fill is already that plate, so only
-    /// the light side needs the constant. One sample, and it is labelled as one.
+    /// This was an opaque `#91919b` carrying white letters, taken from one sample,
+    /// and it was a grey lump on a pale card (Alex's image 52). The dark side is as
+    /// it was.
     private var plate: Color {
-        let base = colorScheme == .light ? Color(hex: 0x91_91_9B) : Color.white.opacity(0.16)
-        return isHovering || isOpen ? base.opacity(colorScheme == .light ? 0.85 : 0.28) : base
+        let isRaised = isHovering || isOpen
+        guard colorScheme == .light else { return .white.opacity(isRaised ? 0.28 : 0.16) }
+        return ProfileLightPlate.fill(wearsTheme: profileWearsTheme, isRaised: isRaised)
+    }
+
+    /// `--border-muted`: most of what a pill this pale has to separate it from the
+    /// card. A fifth on the light side, and next to nothing on the dark.
+    private var edge: Color {
+        ProfileLightPlate.mod.opacity(colorScheme == .light ? 0.2 : 0.04)
     }
 
     var body: some View {
@@ -954,9 +965,8 @@ struct GuildTagChip: View {
                     // The card supplies its own ground, so the popover must
                     // supply none — two materials in series read as frost.
                     .presentationBackground(.clear)
-                    // A server's card is the app's own surface, not the
-                    // person's — see the badge flyout above.
-                    .appColorScheme()
+                    // In the profile's room, as its other flyouts are.
+                    .profileFlyoutAppearance()
                 }
             } else {
                 chip
@@ -972,18 +982,17 @@ struct GuildTagChip: View {
                     .frame(width: Self.badgeSide, height: Self.badgeSide)
             }
             Text(tag.text)
-                // **Always white, whatever the card under it is doing.** The
-                // tag is a server's mark rather than the person's ink, and it
-                // rides a plate chosen to carry white — so it does not follow
-                // `colorScheme` the way everything else on a themed card does.
+                // The card's own ink, Discord's `text-default`: the plate is
+                // see-through now, so what it's on decides what reads on it.
                 .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
         }
         .padding(.leading, tag.badgeURL == nil ? 6 : 4)
         .padding(.trailing, 6)
         .padding(.vertical, 2)
         .background(plate, in: .capsule)
+        .overlay { Capsule().strokeBorder(edge, lineWidth: 1) }
         .contentShape(.capsule)
     }
 }

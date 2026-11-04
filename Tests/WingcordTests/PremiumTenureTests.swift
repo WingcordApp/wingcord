@@ -57,7 +57,7 @@ struct PremiumTenureTests {
         ])
     }
 
-    @Test("The date line is the flyout's, not the badge's description")
+    @Test("The date line is the card's, not the badge's description")
     func subscriberLine() throws {
         let tier = try #require(PremiumTenure.named("premium_tenure_3_month_v2"))
         var parts = DateComponents()
@@ -65,9 +65,8 @@ struct PremiumTenureTests {
         parts.month = 5
         parts.day = 24
         let date = try #require(Calendar(identifier: .gregorian).date(from: parts))
-        let line = try #require(tier.subscriberLine(since: date))
-        #expect(line.hasPrefix("Subscriber since"))
-        #expect(line.contains("26"))
+        // Word for word what the directory's own `info_label` says, in any region.
+        #expect(tier.subscriberLine(since: date) == "Subscriber since 5/24/26")
         // Nothing to say without a date, and an empty line is worse than none.
         #expect(tier.subscriberLine(since: nil) == nil)
     }

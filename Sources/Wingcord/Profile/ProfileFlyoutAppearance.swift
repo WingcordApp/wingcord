@@ -8,6 +8,9 @@ extension EnvironmentValues {
     /// `ProfileGroundFill`, and read by `profileFlyoutAppearance()` from inside the
     /// popover: a presentation inherits the environment it was raised in.
     @Entry var profileFlyoutScheme: ColorScheme?
+    /// Whether the profile underneath wears a colour of its own, rather than the
+    /// app's. Discord's `.custom-user-profile-theme`. Set by `ProfileGroundFill`.
+    @Entry var profileWearsTheme = false
 }
 
 extension View {

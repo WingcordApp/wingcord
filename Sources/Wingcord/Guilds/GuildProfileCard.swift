@@ -180,7 +180,7 @@ struct GuildProfileCard: View {
                 .font(.system(size: Self.iconSide * 0.3, weight: .bold))
                 .foregroundStyle(Ink.secondary)
                 .frame(width: Self.iconSide, height: Self.iconSide)
-                .background(Palette.surfaceRaised)
+                .background(ProfileFlyoutGround.raised(in: colorScheme))
         }
     }
 
@@ -400,6 +400,7 @@ private struct TraitFlow: View {
 /// popover at a time — so `+7` unfolds the list under the row, and the card
 /// grows to hold it.
 struct GuildProfileGameRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     var games: [GuildProfileGame]
     var open: ((ApplicationID) -> Void)?
 
@@ -460,7 +461,7 @@ struct GuildProfileGameRow: View {
                         .monospacedDigit()
                         .frame(width: Self.side, height: Self.side)
                         .background(
-                            Palette.surfaceRaised,
+                            ProfileFlyoutGround.raised(in: colorScheme),
                             in: .rect(cornerRadius: 9, style: .continuous)
                         )
                         .contentShape(.rect)
@@ -483,6 +484,7 @@ struct GuildProfileGameRow: View {
 /// even-odd mask the rail's live-voice tile uses and the mutual-avatar cluster
 /// does: a circle subtracted from the icon's own shape.
 private struct GuildProfileGameMark: View {
+    @Environment(\.colorScheme) private var colorScheme
     var game: GuildProfileGame
     var side: CGFloat
 
@@ -494,7 +496,7 @@ private struct GuildProfileGameMark: View {
 
     var body: some View {
         RemoteImage(url: game.iconURL, side: side) {
-            Palette.surfaceRaised
+            ProfileFlyoutGround.raised(in: colorScheme)
         }
         .frame(width: side, height: side)
         .clipShape(.rect(cornerRadius: side * 0.28, style: .continuous))

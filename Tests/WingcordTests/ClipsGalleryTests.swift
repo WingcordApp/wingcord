@@ -30,6 +30,29 @@ struct ClipsGalleryTests {
         return model
     }
 
+    /// A 432-point board card: 400 inside the panel's padding, so a 225-point clip
+    /// and a 72-point row. Offscreen, so `WINGCORD_RENDER_DIR` shows the placement,
+    /// which is what was wrong: the card was this tall even while the large clip
+    /// came out 148 points high with the row floating in a gap.
+    @Test("The tile sits on a panel, tall enough for the large clip at 16:9 and the row")
+    func tileLayout() throws {
+        let clips = [
+            BoardClip(id: "1", title: "the bridge triple", gameName: "Battlefield 6"),
+            BoardClip(id: "2", title: "night raid"),
+            BoardClip(id: "3", title: "one tap"),
+        ]
+        let card = ClipsGalleryCard(
+            title: "Clips Gallery",
+            clips: clips,
+            ground: ProfileGround(themeColorValues: [0x1F_4E_5F, 0x0E_2A_38]),
+            userID: owner
+        )
+        let result = try SurfaceRender.render(card.environment(AppModel()), named: "clips-gallery-tile", width: 432)
+        // The margins of 12 are `SurfaceRender`'s own.
+        let height = result.size.height - 24
+        #expect(height > 225 + 72 + 2 * Spacing.margin + 22)
+    }
+
     @Test("The board draws only clips that can play, with their game's name")
     func tile() throws {
         let model = model([clip("1", title: "Triple"), clip("2", video: false), clip("3")])

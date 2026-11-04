@@ -229,11 +229,17 @@ public struct CatalogBadge: Hashable, Sendable, Identifiable {
         (isOwned ? currentTier : nextTier) ?? tiers.first
     }
 
+    /// The artwork's moving form, if it has one. An APNG, since Discord draws it
+    /// in an `<img>`; Nitro's is the one that moves so far.
+    public var animatedArtwork: URL? {
+        displayTier?.complexIconAnimatedURL ?? complexIconAnimatedURL
+    }
+
     /// The artwork to draw large: moving unless motion is reduced, then
     /// still, then the small mark — Discord's `k ?? F ?? D`.
     public func artwork(reducesMotion: Bool) -> URL? {
         let tier = displayTier
-        let animated = reducesMotion ? nil : (tier?.complexIconAnimatedURL ?? complexIconAnimatedURL)
+        let animated = reducesMotion ? nil : animatedArtwork
         return animated ?? tier?.complexIconURL ?? complexIconURL ?? tier?.simpleIconURL ?? simpleIconURL
     }
 

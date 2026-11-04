@@ -638,37 +638,28 @@ extension View {
     }
 }
 
-/// The quiet circle that opens the person menu.
+/// The glass circle that opens the person menu, in a small card's corner.
 ///
-/// Deliberately small and achromatic. It sits over somebody's own banner, which
-/// is artwork nobody here chose, so it takes a fixed scrim rather than glass —
-/// `INVARIANTS.md` §4: a sampled material over a picture cannot promise the
-/// glyph on top of it stays legible frame to frame, and a banner may be animated.
+/// **The same glass as the full profile's close button**: clear, since it sits
+/// over somebody's banner, with the glyph in the card's own ink. It was a black
+/// scrim under a white glyph, on the argument that glass can't promise legibility
+/// over a picture, and on a pale card that was a grey disc (Alex's images 55, 56).
 struct UserMenuButton: View {
     @Binding var isOpen: Bool
 
-    @Environment(\.motion) private var motion
-    @State private var isHovered = false
-
-    private static let side: CGFloat = 24
+    /// Up from 24, which Alex found small. Measured off his image 56.
+    private static let side: CGFloat = 30
 
     var body: some View {
         Button { isOpen.toggle() } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.white)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(InkColor.primary)
                 .frame(width: Self.side, height: Self.side)
-                .background {
-                    Circle().fill(.black.opacity(isHovered || isOpen ? 0.55 : 0.35))
-                }
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            guard hovering != isHovered else { return }
-            isHovered = hovering
-        }
-        .animation(motion.fadeQuick, value: isHovered)
+        .interactiveChromeOverMedia(in: .circle)
         .help("More")
         .accessibilityLabel(Text("More actions"))
     }

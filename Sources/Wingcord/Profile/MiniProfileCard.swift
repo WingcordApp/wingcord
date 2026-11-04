@@ -367,6 +367,9 @@ struct MiniProfileCard: View {
         .overlay(alignment: .topTrailing) {
             if !profile.isSelf, model.offersProfileMenu(for: profile.userID) {
                 UserMenuButton(isOpen: $isMenuOpen)
+                    // This sits outside the ground's environment, and its glyph
+                    // and glass are the card's.
+                    .environment(\.colorScheme, ground.wantsDarkInk ? .light : .dark)
                     .padding(Spacing.base)
                     .presentsUserMenu(
                         for: profile.userID,

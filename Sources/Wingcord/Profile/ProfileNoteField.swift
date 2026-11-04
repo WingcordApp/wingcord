@@ -62,8 +62,25 @@ struct ProfileNoteField: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
+    /// The card's, not the window's — a themed profile flips it.
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.profileWearsTheme) private var profileWearsTheme
     @State private var draft = ""
     @FocusState private var isFocused: Bool
+
+    /// What the field sits in.
+    ///
+    /// **Recessed on a dark card.** A note is somewhere the reader writes, and the
+    /// handoff sinks it into the rail — a dark well with a hairline — where every
+    /// other block on the column floats. Glass here would make it a fifth floating
+    /// thing and there would be nothing left to say "this one takes input".
+    ///
+    /// **See-through on a light one**, where that well was a grey slab across a
+    /// pale card. The hairline below is what keeps it a field.
+    private var well: Color {
+        guard colorScheme == .light else { return .black.opacity(0.22) }
+        return ProfileLightPlate.fill(wearsTheme: profileWearsTheme, isRaised: isFocused)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
@@ -84,15 +101,7 @@ struct ProfileNoteField: View {
                 .padding(.horizontal, form == .card ? Spacing.base : 13)
                 .padding(.vertical, form == .card ? Spacing.base - 2 : 11)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                // **Recessed, not raised.** A note is somewhere the reader
-                // writes, and the handoff sinks it into the rail — a dark well
-                // with a hairline — where every other block on the column
-                // floats. Glass here would make it a fifth floating thing and
-                // there would be nothing left to say "this one takes input".
-                .background(
-                    Color.black.opacity(0.22),
-                    in: .rect(cornerRadius: form.corner, style: .continuous)
-                )
+                .background(well, in: .rect(cornerRadius: form.corner, style: .continuous))
                 .overlay {
                     // The focus ring the plain style does not draw. A field with
                     // no visible focus is a field Full Keyboard Access cannot be

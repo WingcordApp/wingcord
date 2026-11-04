@@ -106,9 +106,38 @@ extension DemoFixtures {
                     displayNameStyle: user.decoration?.displayNameStyle,
                     bio: "serpent is lord, and this profile is pink",
                     themeColorValues: [0xF8_D3_EA, 0xFF_9B_D8],
+                    // Nobody's directory answers in `--demo` but the reader's, so
+                    // this is a Nitro badge's card before Discord has said anything.
+                    badges: [
+                        AccountBadge(id: "premium_tenure_12_month_v2", iconHash: nil, label: "Subscriber since Oct 3, 2025"),
+                    ],
                     connectedAccounts: user.decoration?.connectedAccounts ?? demoConnections,
                     premiumTier: .nitro,
-                    premiumSince: Date.now.addingTimeInterval(-86_400 * 400)
+                    premiumSince: Date.now.addingTimeInterval(-86_400 * 400),
+                    primaryGuildTag: "IRIS",
+                    primaryGuildID: guildID
+                )
+            )
+        }
+        // **And a dark one wearing the same tag**, so its card can be seen turning
+        // both ways whichever theme the demo is in.
+        if let shin = who("rin"), let user = model.users[shin] {
+            model.users[shin] = User(
+                id: user.id,
+                username: user.username,
+                displayName: user.displayName,
+                avatarHash: user.avatarHash,
+                discriminator: user.discriminator,
+                flags: user.flags,
+                isBot: user.isBot,
+                isSystem: user.isSystem,
+                decoration: UserDecoration(
+                    nameplate: user.decoration?.nameplate,
+                    displayNameStyle: user.decoration?.displayNameStyle,
+                    themeColorValues: user.decoration?.themeColorValues,
+                    premiumTier: .nitro,
+                    primaryGuildTag: "IRIS",
+                    primaryGuildID: guildID
                 )
             )
         }

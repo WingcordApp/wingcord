@@ -18,6 +18,7 @@ struct BadgeDirectory: View {
     var customize: (() -> Void)?
 
     @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
     @State private var selected: Int?
     /// Whose badges are showing — the person's, or after "View Your Badges"
     /// the reader's own.
@@ -143,7 +144,7 @@ struct BadgeDirectory: View {
                             .glassEffect(.regular, in: .capsule)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    BadgeArtwork(url: badge.artwork(reducesMotion: false) ?? URL(filePath: "/"), side: 170)
+                    artwork(badge)
                         .frame(height: 170)
                     if let name = badge.eyebrow {
                         Text(name)
@@ -161,6 +162,18 @@ struct BadgeDirectory: View {
             }
         } else {
             ContentUnavailableView("No badges yet", systemImage: "rosette")
+        }
+    }
+
+    /// The chosen badge's picture. **Nitro's moves, and is the size Discord's
+    /// detail makes it**: `.badgeGraphicAnimatedNitro { height: 150px }`, which is
+    /// a drawing 105 across on that canvas (Alex's image 51).
+    @ViewBuilder private func artwork(_ badge: CatalogBadge) -> some View {
+        let film = motion.reduceMotion ? nil : badge.animatedArtwork
+        if badge.kind == .premiumTenure || film != nil {
+            BadgeGraphic(still: badge.artwork(reducesMotion: true), film: film, height: 105)
+        } else if let url = badge.artwork(reducesMotion: true) {
+            BadgeArtwork(url: url, side: 170)
         }
     }
 

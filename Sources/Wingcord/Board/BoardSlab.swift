@@ -75,7 +75,7 @@ private struct BoardSlabBody: View {
             .overlay(alignment: .topTrailing) { menu?().padding(Spacing.snug) }
         case .clips(let clips):
             ClipsGalleryCard(
-                title: tile.title, clips: clips, userID: userID ?? UserID(rawValue: 0), menu: menu
+                title: tile.title, clips: clips, ground: ground, userID: userID ?? UserID(rawValue: 0), menu: menu
             )
         }
     }
