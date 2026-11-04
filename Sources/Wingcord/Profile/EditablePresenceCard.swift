@@ -137,6 +137,7 @@ struct EditablePresenceCard: View {
             )
             .padding(Spacing.margin)
             .frame(width: 300)
+            .profileFlyoutAppearance()
         }
     }
 
@@ -223,7 +224,7 @@ struct EditablePresenceCard: View {
             .buttonStyle(.plain)
             .help(presence.largeArt.text)
             .accessibilityLabel(Text("Large Image URL/Key"))
-            .popover(isPresented: art(.large), arrowEdge: .bottom) { artEditor(.large) }
+            .popover(isPresented: art(.large), arrowEdge: .bottom) { artEditor(.large).profileFlyoutAppearance() }
 
             Button { openArt = .small } label: {
                 well(presence.smallArt, side: CurrentActivityCard.badgeSide)
@@ -234,7 +235,7 @@ struct EditablePresenceCard: View {
             .offset(x: 6, y: 6)
             .help(presence.smallArt.text)
             .accessibilityLabel(Text("Small Image URL/Key"))
-            .popover(isPresented: art(.small), arrowEdge: .bottom) { artEditor(.small) }
+            .popover(isPresented: art(.small), arrowEdge: .bottom) { artEditor(.small).profileFlyoutAppearance() }
         }
         .frame(width: CurrentActivityCard.artworkSide, height: CurrentActivityCard.artworkSide)
     }

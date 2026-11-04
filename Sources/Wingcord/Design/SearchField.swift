@@ -22,12 +22,20 @@ struct SearchField: View {
     var onMove: ((Int) -> Void)?
     /// Return, for the same field: pick what is highlighted.
     var onSubmit: (() -> Void)?
+    /// Whether it takes the keyboard as it appears: a field that replaced the
+    /// button that asked for it.
+    var takesFocus = false
+    /// Escape, where it closes the search rather than only clearing the words.
+    var onCancel: (() -> Void)?
 
     /// The toolbar search item's height, and the segmented strip's.
     static var height: CGFloat { SegmentedPicker<Int>.stripHeight }
 
     var body: some View {
-        SearchFieldControl(prompt: prompt, text: $text, onMove: onMove, onSubmit: onSubmit)
+        SearchFieldControl(
+            prompt: prompt, text: $text, onMove: onMove, onSubmit: onSubmit,
+            takesFocus: takesFocus, onCancel: onCancel
+        )
             .controlSize(.large)
             .padding(.horizontal, 12)
             .frame(height: Self.height)
@@ -40,6 +48,8 @@ private struct SearchFieldControl: NSViewRepresentable {
     @Binding var text: String
     var onMove: ((Int) -> Void)?
     var onSubmit: (() -> Void)?
+    var takesFocus = false
+    var onCancel: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text)
@@ -47,6 +57,7 @@ private struct SearchFieldControl: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSSearchField {
         let field = GlassSearchField()
+        field.takesFocusInWindow = takesFocus
         field.placeholderString = prompt
         // The glass is the capsule; the field draws no slab of its own.
         field.isBezeled = false
@@ -73,6 +84,7 @@ private struct SearchFieldControl: NSViewRepresentable {
         context.coordinator.text = $text
         context.coordinator.onMove = onMove
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onCancel = onCancel
         if field.stringValue != text { field.stringValue = text }
         if field.placeholderString != prompt { field.placeholderString = prompt }
     }
@@ -84,9 +96,22 @@ private struct SearchFieldControl: NSViewRepresentable {
     /// the glass's icon and the typed text over it (measured). The cell below
     /// edits and selects in `searchTextRect`, where the placeholder already is.
     final class GlassSearchField: NSSearchField {
+        var takesFocusInWindow = false
+
         override class var cellClass: AnyClass? {
             get { GlassSearchFieldCell.self }
             set {}
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard takesFocusInWindow, window != nil else { return }
+            takesFocusInWindow = false
+            // Next turn: the window is mid-layout while this is being added.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.window?.makeFirstResponder(self)
+            }
         }
     }
 
@@ -117,6 +142,7 @@ private struct SearchFieldControl: NSViewRepresentable {
         var text: Binding<String>
         var onMove: ((Int) -> Void)?
         var onSubmit: (() -> Void)?
+        var onCancel: (() -> Void)?
 
         init(text: Binding<String>) {
             self.text = text
@@ -145,6 +171,10 @@ private struct SearchFieldControl: NSViewRepresentable {
             case #selector(NSResponder.insertNewline(_:)):
                 guard let onSubmit else { return false }
                 onSubmit()
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                guard let onCancel else { return false }
+                onCancel()
                 return true
             default:
                 return false

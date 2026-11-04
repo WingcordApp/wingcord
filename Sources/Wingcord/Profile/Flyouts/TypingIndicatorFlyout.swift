@@ -244,6 +244,7 @@ private struct EmojiSlot: View {
                 if let picked = EmojiRef(picked: item) { pick(picked) }
             }, onPickGIF: { _ in })
             .presentationBackground(.clear)
+            .profileFlyoutAppearance()
         }
         .accessibilityLabel(Text(
             emoji.map { "Emoji \(slot + 1) of \(TypingIndicatorStyle.emojiLimit): \($0.name.isEmpty ? "custom emoji" : $0.name)" }

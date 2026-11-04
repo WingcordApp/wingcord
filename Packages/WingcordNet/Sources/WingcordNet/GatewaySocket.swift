@@ -587,6 +587,25 @@ public actor GatewaySocket {
     /// The nonce comes back on the chunk. Nothing here reads it: the chunk
     /// merges into the same tables every other member source does, so there is
     /// no request to correlate it with.
+    /// Who in a server goes by a name — Discord's `requestMembers` (op 8 with a
+    /// `query`), what its own mention box and search ask. Twenty-five at most, the
+    /// limit its callers use. The answer merges into the tables like any other chunk.
+    public func queryGuildMembers(guildID: GuildID, query: String, limit: Int = 25) {
+        guard !query.isEmpty else { return }
+        struct Request: Encodable {
+            var op = 8
+            var d: Data
+
+            struct Data: Encodable {
+                var guild_id: String
+                var query: String
+                var limit: Int
+                var presences = true
+            }
+        }
+        send(Request(d: .init(guild_id: guildID.description, query: query, limit: limit)))
+    }
+
     public func requestGuildMembers(guildID: GuildID, userIDs: [UserID]) {
         guard !userIDs.isEmpty else { return }
         struct Request: Encodable {

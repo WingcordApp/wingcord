@@ -1437,6 +1437,31 @@ final class AppSettings {
         didSet { defaults.set(hidesActivityCards, forKey: Key.hidesActivityCards) }
     }
 
+    /// How the member list is arranged — its head's Organize by. One choice for the
+    /// whole app, as Discord keeps its friends sidebar's (`FriendRowStore`).
+    var memberListOrganization = MemberListOrganization.standard {
+        didSet { defaults.set(memberListOrganization.rawValue, forKey: Key.memberListOrganization) }
+    }
+
+    /// Whether people in the same voice channel gather under it — Discord's
+    /// `voiceGroupingEnabled`, on by default.
+    var groupsMembersInVoice = true {
+        didSet { defaults.set(groupsMembersInVoice, forKey: Key.groupsMembersInVoice) }
+    }
+
+    /// The member list's sections the reader folded away, by server and by group
+    /// conversation — see `AppModel.memberListScope`. Discord forgets these when
+    /// the list unmounts; a section someone folds is one they don't want back.
+    var collapsedMemberSections: [String: Set<String>] = [:] {
+        didSet {
+            guard collapsedMemberSections != oldValue else { return }
+            defaults.set(
+                collapsedMemberSections.mapValues { Array($0).sorted() },
+                forKey: Key.collapsedMemberSections
+            )
+        }
+    }
+
     /// Which Activity cards the reader has been shown, and when first — what
     /// retires a card after three days. Kept on the device, as Discord keeps it.
     var activityImpressions = ActivityImpressions() {
@@ -1578,6 +1603,11 @@ final class AppSettings {
         showsPerformanceInspector = defaults.object(forKey: Key.showsInspector) as? Bool ?? false
         developerMode = defaults.object(forKey: Key.developerMode) as? Bool ?? false
         hidesActivityCards = defaults.object(forKey: Key.hidesActivityCards) as? Bool ?? false
+        memberListOrganization = (defaults.string(forKey: Key.memberListOrganization))
+            .flatMap(MemberListOrganization.init(rawValue:)) ?? .standard
+        groupsMembersInVoice = defaults.object(forKey: Key.groupsMembersInVoice) as? Bool ?? true
+        collapsedMemberSections = (defaults.dictionary(forKey: Key.collapsedMemberSections) as? [String: [String]])?
+            .mapValues(Set.init) ?? [:]
         activityImpressions = (defaults.data(forKey: Key.activityImpressions))
             .flatMap { try? JSONDecoder().decode(ActivityImpressions.self, from: $0) } ?? ActivityImpressions()
         storedMediaVolume = defaults.object(forKey: Key.mediaVolume) as? Double ?? 1
@@ -1786,6 +1816,9 @@ final class AppSettings {
         static let developerMode = "advanced.developerMode"
         static let hidesActivityCards = "memberList.hidesActivityCards"
         static let activityImpressions = "memberList.activityImpressions"
+        static let memberListOrganization = "memberList.organization"
+        static let collapsedMemberSections = "memberList.collapsedSections"
+        static let groupsMembersInVoice = "memberList.groupsInVoice"
         static let launchDestination = "startup.launchDestination"
         static let lastGuild = "startup.lastGuildID"
         static let lastChannel = "startup.lastChannelID"

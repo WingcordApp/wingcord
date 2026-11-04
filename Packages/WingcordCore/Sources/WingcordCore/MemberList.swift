@@ -193,4 +193,50 @@ extension MemberList {
         }
         return pages
     }
+
+    /// How many pages a list can be asked for at once: the first and two more.
+    ///
+    /// **Not a number Discord's client states**, but the shape its rule above
+    /// produces, and what the unofficial docs say the server takes ("other than
+    /// the [0,99] range, 2 other ranges can be requested for"). Asking for more,
+    /// or walking a list page by page, is what a scraper does.
+    public static let maximumPages = 3
+
+    /// The longest list that can be held whole.
+    public static let wholeListRows = maximumPages * pageSize
+
+    /// Whether every row of a list this long can be subscribed at once — so that
+    /// the client may put it in an order of its own, and a count over it is a
+    /// count rather than a floor.
+    public static func isWhole(rowCount: Int) -> Bool {
+        rowCount <= wholeListRows
+    }
+
+    /// The pages to subscribe to while `visible` runs of rows are on screen.
+    ///
+    /// **Runs, because a collapsed section is a hole in the column**: the rows on
+    /// either side of it can be thousands apart in the server's list, and one
+    /// range from the first to the last would ask for every page between them.
+    ///
+    /// **All of a list that fits**, whatever is on screen, which is what lets
+    /// Active Now see everybody. A longer one gets Discord's rule, cut to the
+    /// three pages it can have, nearest the viewport's first run first.
+    public static func pages(
+        visible: [ClosedRange<Int>],
+        margin: Int,
+        rowCount: Int
+    ) -> [ClosedRange<Int>] {
+        if isWhole(rowCount: rowCount) {
+            let count = max(1, (rowCount + pageSize - 1) / pageSize)
+            return (0..<count).map { $0 * pageSize...($0 + 1) * pageSize - 1 }
+        }
+        var chosen: [ClosedRange<Int>] = [0...pageSize - 1]
+        for run in visible {
+            for page in pages(visible: run, margin: margin) where !chosen.contains(page) {
+                guard chosen.count < maximumPages else { return chosen }
+                chosen.append(page)
+            }
+        }
+        return chosen
+    }
 }

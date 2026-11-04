@@ -172,6 +172,7 @@ public enum MessagingPrivacyProto {
                 value.allowsDirectMessagesByDefault = (reader.wrappedValue(for: field) ?? 0) == 0
             case Privacy.hideFriendRequestNotes:
                 value.showsFriendRequestNotes = (reader.wrappedValue(for: field) ?? 0) == 0
+                value.hasFriendRequestNotesSetting = true
             case Privacy.gameFriendDirectMessages:
                 value.allowsGameFriendDirectMessages =
                     (reader.wrappedValue(for: field) ?? 0) != 0

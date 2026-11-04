@@ -32,6 +32,7 @@ import SwiftUI
 /// is not worth a hand-sampled sixteen-stop gradient that would then be wrong
 /// the moment the tokens move.
 struct TenureBadgeFlyout: View {
+    @Environment(\.colorScheme) private var colorScheme
     var tenure: PremiumTenure
     /// When the subscription started, from the profile route. Nil where it has
     /// not arrived — the card then names the tier and says nothing it cannot
@@ -102,12 +103,7 @@ struct TenureBadgeFlyout: View {
         // own material reads as a pane of glass with somebody's banner showing
         // through it; the wash below is a 30 % tint and needs a ground of its
         // own to be a colour rather than a haze.
-        .background(alignment: .center) { wash.background(Palette.surfaceRaised) }
-        // **Its ground is the app's, so its ink is too.** The card is opaque
-        // `Palette.surfaceRaised` whatever the profile behind it did to
-        // `colorScheme`, and inheriting a light scheme out of a light profile
-        // put dark type on it — as a hard-coded dark would in a light room.
-        .appColorScheme()
+        .background(alignment: .center) { wash.background(ProfileFlyoutGround.raised(in: colorScheme)) }
         .contentShape(.rect)
         .onTapGesture(perform: open)
         .onHover(perform: hovering)

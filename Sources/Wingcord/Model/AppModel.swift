@@ -1149,6 +1149,11 @@ final class AppModel {
     var guildOnboardings: [GuildID: GuildOnboarding] = [:]
     /// How many people hold each role, for the server whose questions are open.
     var roleMemberCounts: [GuildID: [RoleID: Int]] = [:]
+    /// The last search of the member list, for its memo.
+    @ObservationIgnored var memberSearchCache: (key: MemberSearchKey, value: Roster)?
+    /// A role's icon where `--demo` has no real one on the CDN to point at. Empty
+    /// outside it. See `DemoFixtures.populateRoster`.
+    var demoRoleIcons: [RoleID: URL] = [:]
     var memberVerifications: [GuildID: MemberVerification] = [:]
     var gameServers: [GuildID: [GameServer]] = [:]
     /// Connection instructions, by SKU rather than by instance: two servers on
@@ -1526,6 +1531,9 @@ final class AppModel {
     /// landed yet, which on a privacy surface reads as a setting having been
     /// changed.
     var messagingPrivacy = MessagingPrivacy()
+    /// Whether the account is cleared for age-restricted content. Nil where the
+    /// answer hasn't said: only `false` counts for anything.
+    var isNSFWAllowed: Bool?
     /// Nil until the pane has fetched. What draws the pane's loading state, and
     /// what stops a write going out against bytes nobody has.
     @ObservationIgnored var messagingPrivacyRaw: (text: Data, privacy: Data)?

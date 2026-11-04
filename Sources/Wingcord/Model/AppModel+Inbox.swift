@@ -1118,6 +1118,19 @@ extension AppModel {
         FriendRequest.incomingCount(of: relationships)
     }
 
+    /// Whether a request's note is shown at all — Settings' "Show personalized
+    /// messages", and Discord's fallback where it was never set.
+    var showsFriendRequestNotes: Bool {
+        messagingPrivacy.resolvedShowsFriendRequestNotes(isNSFWAllowed: isNSFWAllowed)
+    }
+
+    /// What somebody wrote with their request, if the reader takes those —
+    /// Discord's `z` (`420825`).
+    func friendRequestNote(of userID: UserID) -> String? {
+        guard showsFriendRequestNotes else { return nil }
+        return relationshipFacts[userID]?.note
+    }
+
     /// Accepts an incoming request, or withdraws an outgoing one.
     ///
     /// Both go through `toggleFriend`, which is the one place the four acts on

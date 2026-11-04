@@ -456,6 +456,7 @@ final class SessionController {
     /// READY then merges over it.
     private func adoptEntitlements(of account: CurrentAccount) {
         model.ownTypingIndicatorStyle = account.typingIndicatorStyle
+        model.isNSFWAllowed = account.isNSFWAllowed
         model.entitlements = AccountEntitlements().updated(
             premiumType: account.premiumType,
             ageVerificationStatus: account.ageVerificationStatus
@@ -1863,6 +1864,29 @@ final class SessionController {
         Task { await socket.requestGuildMembers(guildID: guildID, userIDs: wanted) }
     }
 
+    /// Asks a server who goes by a name, for the member list's search.
+    func queryMembers(_ query: String, inGuild guildID: GuildID) {
+        guard let socket else { return }
+        Task { await socket.queryGuildMembers(guildID: guildID, query: query) }
+    }
+
+    /// Everyone in a room in this server that this session has no record of — for
+    /// Active Now, which is the one part of a big server's list that isn't limited
+    /// to the rows the server sends. Their presences come back with them.
+    func requestPeopleInRooms(inGuild guildID: GuildID) {
+        guard let socket else { return }
+        let known = model.members[guildID]
+        var wanted: [UserID] = []
+        for state in model.voiceStates.values where state.guildID == guildID && state.channelID != nil {
+            guard known?[state.userID] == nil || model.presences[state.userID] == nil,
+                  memberRequests.insert(MemberRequest(guildID: guildID, userID: state.userID)).inserted
+            else { continue }
+            wanted.append(state.userID)
+        }
+        guard !wanted.isEmpty else { return }
+        Task { await socket.requestGuildMembers(guildID: guildID, userIDs: wanted) }
+    }
+
     /// What a role mention's flyout needs: the role's holders by id, asked of
     /// the gateway for anybody this session has no record of, and every
     /// role's head count — Discord's preload for its role popout (`545868`).
@@ -1910,9 +1934,17 @@ final class SessionController {
     ///
     /// Subscribes the pages around them — Discord's `updateSubscription`, which
     /// its list calls fifty milliseconds after the scroll stops moving.
-    func showMemberListRows(_ rows: ClosedRange<Int>, margin: Int) {
-        guard let channelID = model.selectedChannelID else { return }
-        subscribeMemberListPages(MemberList.pages(visible: rows, margin: margin), for: channelID)
+    ///
+    /// **All of a list that fits**, whatever's on screen: see `MemberList.pages`.
+    func showMemberListRows(_ runs: [ClosedRange<Int>], margin: Int) {
+        guard let channelID = model.selectedChannelID,
+              let target = model.memberListTarget(for: channelID)
+        else { return }
+        let rowCount = model.memberLists[target.key]?.rowCount ?? 1
+        subscribeMemberListPages(
+            MemberList.pages(visible: runs, margin: margin, rowCount: rowCount),
+            for: channelID
+        )
     }
 
     /// Asks for `pages` of the list a channel shows, unless that is already the

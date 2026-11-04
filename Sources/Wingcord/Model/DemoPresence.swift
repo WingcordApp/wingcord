@@ -80,7 +80,8 @@ extension DemoFixtures {
                         largeImageKey: "spotify:ab67616d0000b2737905832361a25be8d74a5c65",
                         largeText: "The Rockwood Escape Plan",
                         startedAt: Date.now.addingTimeInterval(-134),
-                        endsAt: Date.now.addingTimeInterval(109)
+                        endsAt: Date.now.addingTimeInterval(109),
+                        partyID: "spotify:demo"
                     ),
                 ])
             )

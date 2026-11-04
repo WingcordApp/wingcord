@@ -25,8 +25,16 @@ struct InspectorPane: View {
     var chromeHeight: CGFloat
 
     @State private var tab = InspectorTab.people
+    /// What the member list is being searched for, or nil while it isn't.
+    @State private var memberSearch: String?
 
     static let width: CGFloat = Proportions.profileColumnIdeal
+
+    /// Whether the column's head is up: the People tab of a list of people, not a
+    /// direct message's profile. Only that tab has anything to organize or search.
+    private var showsMemberHead: Bool {
+        tab == .people && base == .members
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,12 +53,20 @@ struct InspectorPane: View {
         // The switch floats at the column's head, over whatever the tab
         // scrolls under it.
         .overlay(alignment: .top) {
-            InspectorSegments(tabs: InspectorTab.allCases, peopleTitle: peopleTitle, selection: $tab)
-                .padding(.top, chromeHeight + Spacing.base)
-                .padding(.horizontal, Spacing.snug)
+            VStack(spacing: Spacing.base) {
+                InspectorSegments(tabs: InspectorTab.allCases, peopleTitle: peopleTitle, selection: $tab)
+                if showsMemberHead {
+                    MemberListHead(search: $memberSearch)
+                }
+            }
+            .padding(.top, chromeHeight + Spacing.base)
+            .padding(.horizontal, Spacing.snug)
         }
         .ignoresSafeArea(.container, edges: .top)
-        .onChange(of: channelID) { _, _ in tab = .people }
+        .onChange(of: channelID) { _, _ in
+            tab = .people
+            memberSearch = nil
+        }
     }
 
     private var peopleTitle: String {
@@ -66,7 +82,11 @@ struct InspectorPane: View {
         case .members:
             // The roster runs under the chrome as before, with the switch's
             // height added to what it keeps clear.
-            MemberListContainer(topInset: chromeHeight + InspectorSegments.height + Spacing.base * 2)
+            // Its head floats there too, over whatever scrolls under it.
+            MemberListContainer(
+                topInset: chromeHeight + InspectorSegments.height + MemberListHead.height + Spacing.base * 2,
+                search: memberSearch
+            )
         case .profile(let userID):
             VStack(spacing: 0) {
                 Color.clear.frame(height: chromeHeight + InspectorSegments.height + Spacing.base)

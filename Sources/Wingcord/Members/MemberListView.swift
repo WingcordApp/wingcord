@@ -15,9 +15,23 @@ struct MemberListView: NSViewRepresentable {
     var topInset: CGFloat = 0
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
     var openMenu: (UserID, CGRect) -> Void = { _, _ in }
-    /// The rows on screen and half a viewport of rows, once the scroll settles
-    /// — what the list's subscription follows.
-    var showRows: (ClosedRange<Int>, Int) -> Void = { _, _ in }
+    /// The runs of the server's rows on screen and half a viewport of rows, once
+    /// the scroll settles — what the list's subscription follows.
+    var showRows: ([ClosedRange<Int>], Int) -> Void = { _, _ in }
+    /// A section's heading clicked.
+    var toggleSection: (MemberSectionKey) -> Void = { _ in }
+    /// The row the glass buttons belong on changed. Nil where a list has no
+    /// buttons: a role's popout.
+    var noteHover: ((MemberRowHover?) -> Void)?
+    /// Which rooms' headings carry a button.
+    var noteVoiceButtons: (([MemberVoiceButton]) -> Void)?
+    /// A room's name clicked.
+    var openRoom: (ChannelID) -> Void = { _ in }
+    /// The row that stays lit: a card or a menu open on it, or the pointer on its
+    /// buttons.
+    var pinnedUserID: UserID?
+    /// Applications whose rows are waiting on their icon.
+    var needApplications: ([ApplicationID]) -> Void = { _ in }
     /// Whose card is open over this roster. See
     /// `MemberListCanvas.profiledUserID`.
     var profiledUserID: UserID?
@@ -50,6 +64,13 @@ struct MemberListView: NSViewRepresentable {
         context.coordinator.toggleActivity = toggleActivity
         context.coordinator.activityMenu = activityMenu
         context.coordinator.noteActivityShown = noteActivityShown
+        context.coordinator.toggleSection = toggleSection
+        context.coordinator.noteHover = noteHover
+        context.coordinator.noteVoiceButtons = noteVoiceButtons
+        context.coordinator.openRoom = openRoom
+        context.coordinator.needApplications = needApplications
+        context.coordinator.setShowsRowActions(noteHover != nil)
+        context.coordinator.setPinnedUser(pinnedUserID)
         context.coordinator.update(activity: activity)
         // The one environment value a drawn canvas cannot read for itself. See
         // `MemberListCanvas.animatesPlate`.
@@ -89,7 +110,12 @@ final class MemberListCoordinator: NSObject {
 
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
     var openMenu: (UserID, CGRect) -> Void = { _, _ in }
-    var showRows: (ClosedRange<Int>, Int) -> Void = { _, _ in }
+    var showRows: ([ClosedRange<Int>], Int) -> Void = { _, _ in }
+    var toggleSection: (MemberSectionKey) -> Void = { _ in }
+    var noteHover: ((MemberRowHover?) -> Void)?
+    var noteVoiceButtons: (([MemberVoiceButton]) -> Void)?
+    var openRoom: (ChannelID) -> Void = { _ in }
+    var needApplications: ([ApplicationID]) -> Void = { _ in }
     var openActivity: (String, CGRect) -> Void = { _, _ in }
     var toggleActivity: () -> Void = {}
     var activityMenu: (CGRect) -> Void = { _ in }
@@ -116,6 +142,18 @@ final class MemberListCoordinator: NSObject {
         }
         canvas.onOpenMenu = { [weak self] userID, frame in
             self?.openMenu(userID, frame)
+        }
+        canvas.onToggleSection = { [weak self] key in
+            self?.toggleSection(key)
+        }
+        canvas.onHoverRow = { [weak self] hover in
+            self?.noteHover?(hover)
+        }
+        canvas.onVoiceButtons = { [weak self] buttons in
+            self?.noteVoiceButtons?(buttons)
+        }
+        canvas.onOpenRoom = { [weak self] room in
+            self?.openRoom(room)
         }
         canvas.onWidthChange = { [weak self] _ in
             self?.applyRows()
@@ -209,9 +247,18 @@ final class MemberListCoordinator: NSObject {
         canvas?.profiledUserID = userID
     }
 
+    func setShowsRowActions(_ shows: Bool) {
+        canvas?.showsRowActions = shows
+    }
+
+    func setPinnedUser(_ userID: UserID?) {
+        canvas?.pinnedUserID = userID
+    }
+
     func tearDown() {
         guard !isTornDown else { return }
         isTornDown = true
+        foldAnimator.end()
         prefetchTask?.cancel()
         prefetchTask = nil
         impressionTask?.cancel()
@@ -234,6 +281,10 @@ final class MemberListCoordinator: NSObject {
         canvas?.onOpenActivity = nil
         canvas?.onToggleActivity = nil
         canvas?.onActivityMenu = nil
+        canvas?.onToggleSection = nil
+        canvas?.onHoverRow = nil
+        canvas?.onVoiceButtons = nil
+        canvas?.onOpenRoom = nil
         canvas?.onWidthChange = nil
         canvas?.onHoveredRowChange = nil
         canvas = nil
@@ -290,6 +341,25 @@ final class MemberListCoordinator: NSObject {
         // view is keyed on the list's id. The same list seen from another
         // channel keeps its place.
         let isNewList = roster.identity != self.roster.identity
+        // **A search borrows the column and gives it back as it was**, scrolled
+        // where it was: the answers are a list of their own, and any other new list
+        // starts at the top.
+        var restoring: CGFloat?
+        if isNewList, let scrollView {
+            if roster.identity.hasPrefix(Self.searchPrefix), !self.roster.identity.hasPrefix(Self.searchPrefix) {
+                placeBeforeSearch = (self.roster.identity, scrollView.contentView.bounds.minY)
+            } else if let place = placeBeforeSearch, place.identity == roster.identity {
+                restoring = place.y
+                placeBeforeSearch = nil
+            }
+        }
+        defer {
+            if let restoring, let scrollView {
+                scrollView.contentView.scroll(to: NSPoint(x: 0, y: restoring))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                positionCanvas()
+            }
+        }
         if presentationRevision != self.presentationRevision {
             self.presentationRevision = presentationRevision
             canvas?.style = PresentationRevision.shared.style
@@ -300,10 +370,119 @@ final class MemberListCoordinator: NSObject {
         // A presence flush that moved nobody settles here, because the roster
         // comes from a memo and hands back the same value.
         guard roster != self.roster else { return }
+        // **A section folding keeps its heading where it was clicked**: not
+        // `holdPlace`, which would hold the rows below it still and throw the
+        // heading off the screen instead.
+        if !isNewList, let fold = Self.fold(from: self.roster, to: roster) {
+            apply(fold, roster: roster)
+            return
+        }
+        foldAnimator.end()
         let before = isNewList ? [:] : visibleMemberTops()
         self.roster = roster
         applyRows(scrollingToTop: isNewList)
         holdPlace(from: before)
+    }
+
+    private static let searchPrefix = "search:"
+    private var placeBeforeSearch: (identity: String, y: CGFloat)?
+
+    // MARK: A section folding
+
+    private let foldAnimator = RosterFoldAnimator()
+
+    /// One section going one way between two rosters of the same list.
+    private struct Fold {
+        var old: RosterSection
+        var new: RosterSection
+    }
+
+    private static func fold(from old: Roster, to new: Roster) -> Fold? {
+        // Only headings of their own: a section's rooms come and go with it.
+        let oldSections = old.sections.filter { $0.kind == .standard }
+        let newSections = new.sections.filter { $0.kind == .standard }
+        guard oldSections.count == newSections.count else { return nil }
+        var fold: Fold?
+        for (before, after) in zip(oldSections, newSections) {
+            guard before.key == after.key else { return nil }
+            guard before.isCollapsed != after.isCollapsed else { continue }
+            guard fold == nil else { return nil }
+            fold = Fold(old: before, new: after)
+        }
+        return fold
+    }
+
+    /// Moves to the new roster, playing the fold where it can be seen: the heading
+    /// on screen and motion allowed. Otherwise it's just the new roster.
+    private func apply(_ fold: Fold, roster: Roster) {
+        guard let canvas, let scrollView else { return }
+        let carried = foldAnimator.openness(of: fold.new.key)
+        foldAnimator.end()
+        canvas.drawingLimit = nil
+
+        let clip = scrollView.contentView
+        let oldHeading = canvas.rowFrame(at: fold.old.index)
+        let isShowing = canvas.window != nil && canvas.animatesPlate
+            && oldHeading.maxY > clip.bounds.minY && oldHeading.maxY < clip.bounds.maxY
+        let isOpening = !fold.new.isCollapsed
+        let width = canvas.bounds.width
+
+        // Folding: the rows are about to stop existing, so they're pictured first.
+        var rows: CGImage?
+        var rowsHeight: CGFloat = 0
+        if isShowing, !isOpening {
+            rowsHeight = min(canvas.bodyHeight(ofHeadingAt: fold.old.index), clip.bounds.maxY - oldHeading.maxY)
+            rows = canvas.renderedImage(of: CGRect(x: 0, y: oldHeading.maxY, width: width, height: rowsHeight))
+        }
+
+        self.roster = roster
+        applyRows()
+        guard isShowing else { return }
+
+        // Folding may have shortened the list past where it was scrolled to.
+        if let documentView {
+            let top = -scrollView.contentInsets.top
+            let bottom = max(top, documentView.frame.height + scrollView.contentInsets.bottom - clip.bounds.height)
+            if clip.bounds.minY > bottom {
+                clip.scroll(to: NSPoint(x: 0, y: bottom))
+                scrollView.reflectScrolledClipView(clip)
+                positionCanvas()
+            }
+        }
+        let heading = canvas.rowFrame(at: fold.new.index)
+        let top = heading.maxY - clip.bounds.minY
+        guard top > 0, top < clip.bounds.height else { return }
+
+        let body = canvas.bodyHeight(ofHeadingAt: fold.new.index)
+        if isOpening {
+            rowsHeight = min(body, clip.bounds.height - top)
+            rows = canvas.renderedImage(of: CGRect(x: 0, y: heading.maxY, width: width, height: rowsHeight))
+        }
+        let belowTop = heading.maxY + (isOpening ? body : 0)
+        let below = canvas.renderedImage(
+            of: CGRect(x: 0, y: belowTop, width: width, height: clip.bounds.height)
+        )
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        canvas.drawingLimit = heading.maxY
+        canvas.displayIfNeeded()
+        foldAnimator.play(
+            key: fold.new.key,
+            over: scrollView,
+            top: top,
+            rows: rows,
+            rowsHeight: rowsHeight,
+            below: below,
+            isOpening: isOpening,
+            from: carried ?? (isOpening ? 0 : 1),
+            scale: canvas.window?.backingScaleFactor ?? 2,
+            finish: { [weak canvas] in
+                canvas?.drawingLimit = nil
+                canvas?.displayIfNeeded()
+            }
+        )
+        CATransaction.commit()
     }
 
     /// Where each member on screen sits, by person.
@@ -408,13 +587,24 @@ final class MemberListCoordinator: NSObject {
             guard !Task.isCancelled, let self, !self.isTornDown,
                   let canvas = self.canvas, let scrollView = self.scrollView
             else { return }
-            let visible = canvas.visibleRowRange()
-            guard let last = visible.last else { return }
+            // **Back into the server's rows, in runs.** A collapsed section is a
+            // hole in the column: the rows either side of it can be thousands
+            // apart in the list, and a person moved up into Active Now is a smaller
+            // one. Active Now's own rows are the client's and ask for nothing.
+            var runs: [ClosedRange<Int>] = []
+            for row in canvas.visibleRowRange() {
+                guard let server = canvas.roster.serverRow(forView: row) else { continue }
+                if let last = runs.last, server <= last.upperBound + 1 {
+                    runs[runs.count - 1] = last.lowerBound...max(last.upperBound, server)
+                } else {
+                    runs.append(server...server)
+                }
+            }
             // Half a viewport of rows either side, as Discord pads it.
             let margin = Int(
                 (scrollView.contentView.bounds.height / 2 / MemberRowGeometry.rowHeight).rounded(.up)
             )
-            self.showRows(visible.lowerBound...last, margin)
+            self.showRows(runs, margin)
         }
     }
 
@@ -430,6 +620,8 @@ final class MemberListCoordinator: NSObject {
 
     private func setScrolling(_ scrolling: Bool) {
         guard !isTornDown else { return }
+        // The pictures don't scroll, so a scroll lands the fold first.
+        if scrolling { foldAnimator.end() }
         canvas?.isScrolling = scrolling
         let owner = ObjectIdentifier(self)
         if scrolling {
@@ -455,12 +647,49 @@ final class MemberListCoordinator: NSObject {
         let scale = canvas.window?.backingScaleFactor ?? 2
         var requests: [(ImageStore.Key, ImageStore.Bucket)] = []
         var seen = Set<ImageStore.Key>()
+        var unresolvedApplications: [ApplicationID] = []
         for index in canvas.visibleRowRange() {
+            // A heading's picture: a role's icon, a game's. **Missing from this
+            // loop is how every role icon in the list never drew** — the same trap
+            // as the tag badge below.
+            if case .header(let section)? = canvas.row(at: index) {
+                let url: URL? = switch section.glyph {
+                case .image(let url): url
+                case .game(let url): url
+                default: nil
+                }
+                if let url {
+                    let key = ImageStore.Key(
+                        url: url,
+                        maximumPixelSize: Int((MemberSectionGeometry.glyphBox * scale).rounded(.up))
+                    )
+                    if seen.insert(key).inserted, ImageStore.shared.cached(key, bucket: .thumbnail) == nil {
+                        requests.append((key, .thumbnail))
+                    }
+                }
+                continue
+            }
             guard let entry = canvas.roster.members[index] else { continue }
+            // The picture at the row's end, at the key the painter peeks with. One
+            // still waiting on its application's icon asks for that instead.
+            switch entry.art {
+            case .image(let url):
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((MemberRowGeometry.artSide * scale).rounded(.up))
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key, bucket: .thumbnail) == nil {
+                    requests.append((key, .thumbnail))
+                }
+            case .placeholder:
+                if let id = entry.liveGame?.applicationID { unresolvedApplications.append(id) }
+            case nil:
+                break
+            }
             if let url = entry.avatarURL {
                 let key = ImageStore.Key(
                     url: url,
-                    maximumPixelSize: Int((Metrics.avatarRow * scale).rounded(.up))
+                    maximumPixelSize: Int((MemberRowGeometry.avatarSide * scale).rounded(.up))
                 )
                 if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
                     requests.append((key, .thumbnail))
@@ -473,7 +702,7 @@ final class MemberListCoordinator: NSObject {
             // as nothing at all. Same rule as the badge below: the painter only
             // peeks, and the key has to match the one it peeks with.
             if let url = entry.decorationURL {
-                let side = Metrics.avatarRow * Metrics.decorationScale
+                let side = MemberRowGeometry.avatarSide * Metrics.decorationScale
                 let key = ImageStore.Key(
                     url: url,
                     maximumPixelSize: Int((side * scale).rounded(.up))
@@ -515,7 +744,7 @@ final class MemberListCoordinator: NSObject {
             // A custom status's own emoji, at the size and in the slot
             // `TimelineRowPainter.drawEmojiInBox` peeks at. A Unicode emoji is
             // a glyph and needs nothing.
-            if let emoji = entry.activityLine?.statusEmoji, let id = emoji.id {
+            if let emoji = entry.line?.emoji, let id = emoji.id {
                 let side = MemberRowGeometry.statusEmojiSide
                 if let url = CDN.emoji(id: id, animated: emoji.isAnimated, side: side) {
                     let key = ImageStore.Key(
@@ -528,6 +757,9 @@ final class MemberListCoordinator: NSObject {
                 }
             }
         }
+        // `resolveApplications` filters what it already knows, so a repeat costs a
+        // set subtraction and no request.
+        if !unresolvedApplications.isEmpty { needApplications(unresolvedApplications) }
         // The Activity cards' faces and pictures, at the painter's sizes.
         for card in canvas.activity?.cards ?? [] {
             let faceKeys = card.faces.compactMap(\.url).map {

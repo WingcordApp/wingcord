@@ -152,7 +152,19 @@ struct MessagingPermissionsPane: View {
                     title: "Show personalized messages",
                     help: "Shows the note somebody wrote with their request. If you accept, "
                         + "the message still arrives in your direct messages.",
-                    isOn: toggle(\.showsFriendRequestNotes) { .friendRequestNotes($0) }
+                    // What's in force, Discord's fallback included, and the
+                    // switch's first move writes the answer down.
+                    isOn: Binding(
+                        get: { model.showsFriendRequestNotes },
+                        set: { newValue in
+                            let previous = model.messagingPrivacy
+                            model.messagingPrivacy.showsFriendRequestNotes = newValue
+                            model.messagingPrivacy.hasFriendRequestNotesSetting = true
+                            model.sessionController.writeMessagingPrivacy(
+                                .friendRequestNotes(newValue), restoring: previous
+                            )
+                        }
+                    )
                 )
             }
         }

@@ -186,6 +186,7 @@ struct CustomStatusBubble: View {
                     onPickGIF: { _ in }
                 )
                 .presentationBackground(.clear)
+                .profileFlyoutAppearance()
             }
             .popover(isPresented: $isReplying, arrowEdge: .bottom) {
                 StatusReplyField(name: answer?.name ?? "") { text in
@@ -193,6 +194,7 @@ struct CustomStatusBubble: View {
                     answer?.send(text)
                 }
                 .presentationBackground(.clear)
+                .profileFlyoutAppearance()
             }
             // **Behind the bubble, not beside it.** The large disc straddles its
             // top edge, and a disc drawn *over* it would show its own rim

@@ -191,12 +191,17 @@ extension DiscordREST {
     ///
     /// - Parameter discriminator: a legacy tag's four digits, for an account
     ///   that still has one; nil for everybody else.
-    public func sendFriendRequest(username: String, discriminator: Int? = nil) async throws {
+    ///
+    /// - Parameter note: what to say with it, already through
+    ///   `FriendRequestNote.cleaned`. Absent from the body when there's none, as
+    ///   Discord's `undefined` is.
+    public func sendFriendRequest(username: String, discriminator: Int? = nil, note: String? = nil) async throws {
         struct Body: Encodable {
             var username: String
             var discriminator: Int?
+            var note: String?
 
-            enum CodingKeys: String, CodingKey { case username, discriminator }
+            enum CodingKeys: String, CodingKey { case username, discriminator, note }
 
             func encode(to encoder: any Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
@@ -207,6 +212,7 @@ extension DiscordREST {
                 } else {
                     try container.encodeNil(forKey: .discriminator)
                 }
+                try container.encodeIfPresent(note, forKey: .note)
             }
         }
         struct Context: Encodable { var location = "Add Friend" }
@@ -215,9 +221,26 @@ extension DiscordREST {
             method: "POST",
             path: "/users/@me/relationships",
             route: "users/@me/relationships",
-            body: Body(username: username, discriminator: discriminator),
+            body: Body(username: username, discriminator: discriminator, note: note),
             headers: context.map { ["x-context-properties": $0] } ?? [:]
         )
+    }
+
+    /// A link that adds the reader as a friend — Discord's `createFriendInvite`.
+    /// Answers its code, which goes after `discord.gg/`.
+    public func createFriendInvite() async throws -> String {
+        struct Empty: Encodable {}
+        struct Answer: Decodable { var code: String }
+        struct Context: Encodable { var location = "Add Friends Popout" }
+        let context = (try? JSONEncoder().encode(Context()))?.base64EncodedString()
+        let data = try await requestData(
+            method: "POST",
+            path: "/users/@me/invites",
+            route: "users/@me/invites",
+            body: Empty(),
+            headers: context.map { ["x-context-properties": $0] } ?? [:]
+        )
+        return try JSONDecoder().decode(Answer.self, from: data).code
     }
 
     // MARK: Notes

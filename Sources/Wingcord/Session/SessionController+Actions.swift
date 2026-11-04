@@ -411,16 +411,21 @@ extension SessionController {
     /// Discord's Add Friend: a request to whoever answers to `tag`, and the
     /// sentence the sheet shows either way — Discord's own, from its
     /// `sendRequest` and the error mapping beside it.
-    func sendFriendRequest(to tag: String) async -> Result<String, FriendRequestFailure> {
+    func sendFriendRequest(to tag: String, note: String = "") async -> Result<String, FriendRequestFailure> {
         var tag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
         // "@name" is how a username is written everywhere else in the app.
         if !tag.contains("#"), tag.hasPrefix("@") { tag.removeFirst() }
         guard !tag.isEmpty else { return .failure(FriendRequestFailure(message: Self.friendRequestDefault)) }
+        // Refused here rather than by the server, in the server's words.
+        guard note.count <= FriendRequestNote.maximumLength else {
+            return .failure(FriendRequestFailure(message: Self.friendRequestNoteRefused))
+        }
         let parts = tag.split(separator: "#", maxSplits: 1).map(String.init)
         do {
             try await rest.sendFriendRequest(
                 username: parts[0],
-                discriminator: parts.count > 1 ? Int(parts[1]) : nil
+                discriminator: parts.count > 1 ? Int(parts[1]) : nil,
+                note: FriendRequestNote.cleaned(note)
             )
             return .success("Success! Your friend request to \(tag) was sent.")
         } catch DiscordREST.Failure.api(_, let code, let message) {
@@ -431,6 +436,9 @@ extension SessionController {
             case 80003: "That's you! You can't send yourself a friend request."
             case 80007: "You're already friends with that user!"
             case 30002: "You've reached the most friends Discord allows."
+            // Discord tests `body.note`; here a form error can only be about the
+            // one free-text field the body has, when a note was sent at all.
+            case 50035 where !note.isEmpty: Self.friendRequestNoteRefused
             default: Self.friendRequestDefault
             }
             return .failure(FriendRequestFailure(message: text))
@@ -442,6 +450,14 @@ extension SessionController {
 
     private static let friendRequestDefault =
         "Hm, didn't work. Double check that the username is correct."
+
+    private static let friendRequestNoteRefused =
+        "Notes can only contain plain text and must be under 120 characters."
+
+    /// A link that adds the reader as a friend, for Add Friend's Copy Friend Link.
+    func createFriendLink() async throws -> String {
+        "https://discord.gg/\(try await rest.createFriendInvite())"
+    }
 
     // MARK: Notes
 

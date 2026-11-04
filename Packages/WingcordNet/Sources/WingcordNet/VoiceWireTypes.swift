@@ -8,6 +8,17 @@ import WingcordCore
 // routes and none of the soundboard routes are in Discord's published
 // documentation.
 
+/// A number of seconds that may arrive as a number or a string, or as neither.
+struct LooseSeconds: Decodable, Sendable {
+    var value: Double?
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        value = (try? container.decode(Double.self))
+            ?? (try? container.decode(String.self)).flatMap(Double.init)
+    }
+}
+
 struct VoiceStateDTO: Decodable, Sendable {
     var user_id: UserID?
     var channel_id: ChannelID?
@@ -23,6 +34,10 @@ struct VoiceStateDTO: Decodable, Sendable {
     /// A raised hand on a stage, as an ISO-8601 instant. Null is a hand down —
     /// which is also how a request is withdrawn.
     var request_to_speak_timestamp: String?
+    /// Seconds since the epoch, by Discord's own use of it (`1e3 * connectedAt`).
+    /// **Read loosely**: a field this client only draws a clock from must not be
+    /// able to fail a whole voice state.
+    var connected_at: LooseSeconds?
     var member: MemberDTO?
 
     var domain: VoiceState? {
@@ -50,7 +65,8 @@ struct VoiceStateDTO: Decodable, Sendable {
             requestToSpeakAt: request_to_speak_timestamp.flatMap {
                 ISO8601DateFormatter.withFraction.date(from: $0)
                     ?? ISO8601DateFormatter.plain.date(from: $0)
-            }
+            },
+            connectedAt: connected_at?.value.map { Date(timeIntervalSince1970: $0) }
         )
     }
 }

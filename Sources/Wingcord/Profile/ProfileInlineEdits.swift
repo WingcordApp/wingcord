@@ -145,7 +145,7 @@ struct ServerTagChooser: View {
             // on the content instead gives a glass with nothing behind it to
             // lens: it lives inside the popover's own window, so it renders as
             // a flat grey slab. The row highlights are the only paint here.
-            .popover(isPresented: $isOpen, arrowEdge: .bottom) { list }
+            .popover(isPresented: $isOpen, arrowEdge: .bottom) { list.profileFlyoutAppearance() }
     }
 
     // MARK: The chip
@@ -434,6 +434,7 @@ struct EditableBioField: View {
                     .popover(isPresented: $isPickingEmoji, arrowEdge: .bottom) {
                         ExpressionPicker(mode: .emoji, onPick: insert, onPickGIF: { _ in })
                             .presentationBackground(.clear)
+                            .profileFlyoutAppearance()
                     }
                 Spacer(minLength: 0)
                 Text("\(text.count) / \(Self.limit)")

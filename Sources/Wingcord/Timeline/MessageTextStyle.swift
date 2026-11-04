@@ -36,6 +36,13 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     /// The metadata face in italic — what Discord sets a reply's placeholder
     /// in ("Message could not be loaded", `repliedTextPlaceholder`).
     var metadataItalicFont: NSFont
+    /// A name in the member list, the line under it and its section headings —
+    /// Discord's `body-md/medium`, `body-xs/medium` and `body-sm/medium` in its
+    /// friends sidebar. Built once: `NSFont.systemFont` goes through the font
+    /// manager, and a list asks for these per row per repaint.
+    var memberNameFont: NSFont
+    var memberLineFont: NSFont
+    var memberHeadingFont: NSFont
 
     var primaryColor: NSColor
     var secondaryColor: NSColor
@@ -106,6 +113,9 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             authorFont: manager.convert(body, toHaveTrait: .boldFontMask),
             metadataFont: metadata,
             metadataItalicFont: manager.convert(metadata, toHaveTrait: .italicFontMask),
+            memberNameFont: NSFont.systemFont(ofSize: body.pointSize, weight: .medium),
+            memberLineFont: NSFont.systemFont(ofSize: metadata.pointSize, weight: .medium),
+            memberHeadingFont: NSFont.systemFont(ofSize: (body.pointSize + metadata.pointSize) / 2, weight: .medium),
             // The app's own ramp rather than the system's labels — brighter
             // secondary and tertiary rungs (REDESIGN.md R13, `InkRamp`).
             primaryColor: tinted(InkRamp.nsColor(.primary)),

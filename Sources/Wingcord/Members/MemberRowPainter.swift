@@ -14,69 +14,280 @@ import WingcordCore
 /// legible over arbitrary artwork is part of the same step.
 nonisolated enum MemberRowPainter {
 
+    /// A section's heading — Discord's `tX` and `tW` (`763349`): a hairline over
+    /// every heading but the first, then a glyph, the name, its count and a chevron.
+    ///
+    /// **The role's own capitalisation, not an upper-cased copy of it.** A server
+    /// names a role "Admin" or "EU Champion" and shouting it back is this client
+    /// deciding it knows better — and it loses information the moment a role is
+    /// deliberately lower case. Discord draws the name it was given.
     static func drawHeader(
         _ section: RosterSection,
         in rowFrame: CGRect,
+        isSeparated: Bool,
         context: CGContext,
         style: MessageTextStyle,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        /// Which of Active Now's lobes is dim right now, or nil for none.
+        dimmedLobe: Int? = nil
     ) {
-        var textX = rowFrame.minX + MemberRowGeometry.horizontalMargin
-            + MemberRowGeometry.contentInset
-        let side = MemberRowGeometry.sectionIconSide
-        let baseline = rowFrame.minY + MemberRowGeometry.sectionSpacing + 8
-        let font = NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold)
+        switch section.kind {
+        case .standard: break
+        case .continuation: return
+        case .voiceGroup(let group):
+            drawVoiceGroupHeader(section, group, in: rowFrame, context: context, style: style)
+            return
+        }
+        let inset = MemberSectionGeometry.inset
+        if isSeparated {
+            let y = rowFrame.minY + MemberSectionGeometry.hairlineOffset
+            context.setFillColor(ThemeInk.current.lift(0.1))
+            context.fill(CGRect(
+                x: rowFrame.minX + inset, y: y, width: max(0, rowFrame.width - inset * 2), height: 1
+            ))
+        }
+        let eyebrow = MemberSectionGeometry.eyebrow(in: rowFrame)
+        var x = rowFrame.minX + inset
 
-        // **The role's own capitalisation, not an upper-cased copy of it.** A
-        // server names a role "Admin" or "EU Champion" and shouting it back is
-        // this client deciding it knows better — and it loses information the
-        // moment a role is deliberately lower case. Discord draws the name it
-        // was given.
-        guard let label = section.label else {
-            // A group the server has not named yet: a bar where the words go,
-            // as Discord's list draws its unknown group.
-            let bar = CGRect(x: textX, y: baseline + 2, width: 72, height: 8)
+        // A group the server has not named yet: a bar where the words go, as
+        // Discord's list draws its unknown group.
+        if section.isPlaceholder {
+            let bar = CGRect(x: x, y: eyebrow.midY - 4, width: 72, height: 8)
             context.addPath(CGPath(roundedRect: bar, cornerWidth: 4, cornerHeight: 4, transform: nil))
             context.setFillColor(ThemeInk.current.lift(0.05))
             context.fillPath()
             return
         }
 
-        // **Only when it is already decoded.** A painter may not start a fetch —
-        // it runs inside a draw, and a heading is redrawn on every scroll — so
-        // an icon that has not arrived yet simply leaves the label where it
-        // would have been anyway. The row's own avatars warm the same store.
-        if let iconURL = section.iconURL,
-           let icon = images.cached(
-               ImageStore.Key(url: iconURL, maximumPixelSize: Int((side * scale).rounded(.up))),
-               bucket: .thumbnail
-           )
-        {
-            // Centred on the label's capitals, for the reason `capCenteredY`
-            // gives: a line box is ascent plus descent, and an all-caps-ish
-            // heading has no descenders to fill the space under it.
-            let top = baseline + font.ascender - font.capHeight / 2 - side / 2
-            context.saveGState()
-            // Fitted in its square, as the transcript's is — Discord's
-            // `contain`; a wide icon stretched to the square drew thin.
-            let square = CGRect(x: textX, y: top, width: side, height: side)
-            context.draw(icon, in: TimelineRowPainter.fittedRect(icon, in: square, covering: false))
-            context.restoreGState()
-            textX += side + 5
+        let font = style.memberHeadingFont
+        let ink = style.secondaryColor
+        if section.glyph != .none {
+            drawSectionGlyph(
+                section.glyph,
+                in: MemberSectionGeometry.glyphRect(in: rowFrame),
+                dimmedLobe: dimmedLobe,
+                context: context,
+                style: style,
+                images: images,
+                scale: scale
+            )
+            x += MemberSectionGeometry.glyphBox + MemberSectionGeometry.gap
         }
 
-        TimelineRowPainter.drawText(
-            label,
-            font: font,
-            // A hoisted role's heading takes the role's colour, which is how the
-            // list says *why* these people are grouped. The synthetic Online and
-            // Offline groups have no colour and take the quiet default.
-            color: section.colorValue.map { NSColor(Color(hex: $0)) } ?? style.tertiaryColor,
-            at: CGPoint(x: textX, y: baseline),
-            maxWidth: rowFrame.maxX - MemberRowGeometry.horizontalMargin - textX,
+        let chevronSide = MemberSectionGeometry.chevronSide
+        let limit = rowFrame.maxX - inset
+            - (section.canCollapse ? chevronSide + MemberSectionGeometry.gap : 0)
+        // **The count is measured first and the name truncates against it**, so
+        // "Very Long Role Na… · 12" still says how many.
+        let count = section.countText.map { "\u{A0}\u{A0}·\u{A0}\u{A0}\($0)" }
+        let countWidth = count.map { ceil(TimelineLayoutEngine.measure($0, font: font)) } ?? 0
+        let y = TimelineRowPainter.capCenteredY(of: font, in: eyebrow)
+        if let title = section.title {
+            x += TimelineRowPainter.drawText(
+                title,
+                font: font,
+                // A hoisted role's name takes the role's colour, which is how the
+                // list says *why* these people are grouped.
+                color: section.colorValue.map { NSColor(Color(hex: $0)) } ?? ink,
+                at: CGPoint(x: x, y: y),
+                maxWidth: max(0, limit - x - countWidth),
+                context: context
+            )
+        }
+        if let count {
+            x += TimelineRowPainter.drawText(
+                count, font: font, color: ink, at: CGPoint(x: x, y: y),
+                maxWidth: countWidth + 1, context: context
+            )
+        }
+        if section.canCollapse {
+            if section.title != nil { x += MemberSectionGeometry.gap }
+            // Down while open, inward while closed: the HIG's disclosure, and
+            // Discord's `tY`.
+            let box = CGRect(
+                x: x, y: eyebrow.midY - chevronSide / 2, width: chevronSide, height: chevronSide
+            )
+            TimelineRowPainter.drawSymbol(
+                section.isCollapsed ? "chevron.right" : "chevron.down",
+                tint: ink,
+                in: box.insetBy(dx: 3, dy: 3),
+                context: context
+            )
+        }
+    }
+
+    // MARK: A room
+
+    /// A room's name, with its green speaker in front — Discord's `tW` with a
+    /// `leading` of the channel's icon and its text in `text-default`.
+    private static func drawVoiceGroupHeader(
+        _ section: RosterSection,
+        _ group: RosterVoiceGroup,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle
+    ) {
+        let eyebrow = MemberVoiceGroupGeometry.eyebrow(in: frame)
+        let inset = MemberSectionGeometry.inset
+        let side = MemberRowGeometry.activityGlyphSide
+        TimelineRowPainter.drawSymbol(
+            (group.isStage ? ActivityStatusLine.Glyph.stage : .voice).symbolName,
+            tint: NSColor(Palette.presenceOnline),
+            in: CGRect(x: frame.minX + inset + 2, y: eyebrow.midY - side / 2, width: side, height: side),
             context: context
         )
+        let x = voiceGroupNameX(in: frame)
+        let font = style.memberHeadingFont
+        TimelineRowPainter.drawText(
+            section.title ?? "",
+            font: font,
+            color: style.primaryColor,
+            at: CGPoint(x: x, y: TimelineRowPainter.capCenteredY(of: font, in: eyebrow)),
+            // The Join button sits at the far end when it's shown.
+            maxWidth: max(0, frame.maxX - inset - x - 56),
+            context: context
+        )
+    }
+
+    /// Where a room's name starts, for the click that opens the room.
+    static func voiceGroupNameX(in frame: CGRect) -> CGFloat {
+        frame.minX + MemberSectionGeometry.inset + MemberSectionGeometry.glyphBox + MemberSectionGeometry.gap
+    }
+
+    /// Under a room's rows: a faint green wash that fades across, and a green edge
+    /// on the column's side — Discord's `.groupBackgroundEffect` (`798350`). Then
+    /// "2 others in voice", behind a little spine out of the rows above it.
+    static func drawVoiceGroupGround(
+        _ group: RosterVoiceGroup,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle
+    ) {
+        let inset = MemberVoiceGroupGeometry.backgroundInset
+        let band = frame.insetBy(dx: 0, dy: inset)
+        let green = NSColor(Palette.presenceOnline)
+        if let wash = voiceWash {
+            context.saveGState()
+            context.clip(to: band)
+            context.drawLinearGradient(
+                wash,
+                start: CGPoint(x: band.minX, y: band.midY),
+                end: CGPoint(x: band.maxX, y: band.midY),
+                options: []
+            )
+            context.restoreGState()
+        }
+        context.setFillColor(green.withAlphaComponent(0.4).cgColor)
+        context.fill(CGRect(x: band.minX, y: band.minY, width: 1, height: band.height))
+
+        guard group.extraCount > 0 else { return }
+        let extraHeight = MemberVoiceGroupGeometry.extraHeight
+        let line = CGRect(
+            x: frame.minX,
+            y: frame.maxY - MemberVoiceGroupGeometry.padding - extraHeight,
+            width: frame.width,
+            height: extraHeight
+        )
+        // An L out of the avatars' column, `calc(var(--space-24) - 1px)` in from the
+        // list's content, with `--radius-sm` on its bend.
+        let spineX = frame.minX + MemberRowGeometry.horizontalMargin + 23
+        let spine = CGMutablePath()
+        spine.move(to: CGPoint(x: spineX, y: line.minY + 4))
+        spine.addLine(to: CGPoint(x: spineX, y: line.minY + 12 - 6))
+        spine.addQuadCurve(
+            to: CGPoint(x: spineX + 6, y: line.minY + 12),
+            control: CGPoint(x: spineX, y: line.minY + 12)
+        )
+        spine.addLine(to: CGPoint(x: spineX + 15, y: line.minY + 12))
+        context.addPath(spine)
+        context.setStrokeColor(ThemeInk.current.lift(0.25))
+        context.setLineWidth(2)
+        context.strokePath()
+
+        let font = style.memberLineFont
+        let words = group.extraCount == 1 ? "1 other in voice" : "\(group.extraCount.formatted()) others in voice"
+        TimelineRowPainter.drawText(
+            words,
+            font: font,
+            color: style.secondaryColor,
+            at: CGPoint(
+                x: spineX + 15 + MemberRowGeometry.activityGap,
+                y: TimelineRowPainter.capCenteredY(of: font, in: line)
+            ),
+            maxWidth: frame.maxX - spineX - 15 - MemberSectionGeometry.inset,
+            context: context
+        )
+    }
+
+    /// `var(--custom-group-color)` at 8%, masked from opaque to clear left to right.
+    private nonisolated(unsafe) static let voiceWash: CGGradient? = {
+        let green = NSColor(Palette.presenceOnline).usingColorSpace(.sRGB) ?? .systemGreen
+        return CGGradient(
+            colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+            colors: [
+                green.withAlphaComponent(0.08).cgColor,
+                green.withAlphaComponent(0).cgColor,
+            ] as CFArray,
+            locations: [0, 1]
+        )
+    }()
+
+    /// What goes in a heading's glyph box. **A painter only ever peeks at the image
+    /// caches**, so a picture nobody prefetched leaves the box empty —
+    /// `MemberListCoordinator.schedulePrefetch` asks for these at the same key.
+    private static func drawSectionGlyph(
+        _ glyph: RosterGlyph,
+        in box: CGRect,
+        dimmedLobe: Int?,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        switch glyph {
+        case .none:
+            break
+        case .activeNow:
+            MemberSectionGlyphs.drawActiveNow(in: box, dimmedLobe: dimmedLobe, context: context)
+        case .online:
+            MemberSectionGlyphs.drawOnline(in: box, ink: style.secondaryColor, context: context)
+        case .offline:
+            MemberSectionGlyphs.drawOffline(in: box, context: context)
+        case .image(let url):
+            if let icon = images.cached(
+                ImageStore.Key(url: url, maximumPixelSize: Int((box.width * scale).rounded(.up))),
+                bucket: .thumbnail
+            ) {
+                // Fitted in its square, as the transcript's is — Discord's
+                // `contain`; a wide icon stretched to the square drew thin.
+                TimelineRowPainter.drawFlipped(
+                    icon, in: TimelineRowPainter.fittedRect(icon, in: box, covering: false), context: context
+                )
+            }
+        case .emoji(let emoji):
+            TimelineRowPainter.drawEmojiInBox(
+                EmojiRef(name: emoji),
+                in: box.insetBy(dx: 1, dy: 1),
+                context: context,
+                color: style.secondaryColor,
+                images: images,
+                scale: scale
+            )
+        case .game(let url):
+            drawArtwork(url.map { .image($0) } ?? .placeholder(.game), in: box, context: context, style: style, images: images, scale: scale)
+        case .letter(let letter):
+            let font = NSFontManager.shared.convert(style.memberHeadingFont, toHaveTrait: .boldFontMask)
+            TimelineRowPainter.drawText(
+                letter,
+                font: font,
+                color: style.primaryColor,
+                at: CGPoint(x: box.minX, y: TimelineRowPainter.capCenteredY(of: font, in: box)),
+                maxWidth: box.width,
+                alignment: .center,
+                context: context
+            )
+        }
     }
 
     /// A member the server has not sent yet: a face and a name, in the
@@ -121,8 +332,13 @@ nonisolated enum MemberRowPainter {
         context: CGContext,
         style: MessageTextStyle,
         isHovered: Bool,
+        /// Whether the glass buttons sit on this row right now, in the picture's
+        /// place — see `MemberRowActionsOverlay`. A role's popout has none.
+        showsActions: Bool = false,
         images: ImageStore,
         scale: CGFloat,
+        /// Read once per draw by the caller, for the times on the lines.
+        now: Date = .now,
         nameFace: NSFont? = nil,
         plateFrame: CGImage? = nil,
         /// One frame of this person's moving avatar, or nil for the still —
@@ -145,18 +361,22 @@ nonisolated enum MemberRowPainter {
             cornerHeight: Radius.row,
             transform: nil
         )
+        let isOffline = entry.status == .offline
+        let paintPlate = {
+            drawPlate(
+                entry,
+                shape: plateShape,
+                rect: plate,
+                context: context,
+                isHovered: isHovered,
+                images: images,
+                scale: scale,
+                plateFrame: plateFrame
+            )
+        }
 
-        // 1. The plate layer.
-        drawPlate(
-            entry,
-            shape: plateShape,
-            rect: plate,
-            context: context,
-            isHovered: isHovered,
-            images: images,
-            scale: scale,
-            plateFrame: plateFrame
-        )
+        // 1. The plate layer, first, unless the row is dimmed — see the end.
+        if !isOffline { paintPlate() }
 
         // 2. Avatar and presence.
         let avatar = MemberRowGeometry.avatarRect(in: rowFrame)
@@ -173,9 +393,27 @@ nonisolated enum MemberRowPainter {
         )
 
         // 3. Name, tag chip, activity.
+        //
+        // **What's at the row's end sets how far the words may run**: the picture
+        // and its gap, or under the pointer the buttons, which replace it —
+        // Discord's `.container:hover .trailingAsset { display: none }`.
         let textX = MemberRowGeometry.textOriginX(in: rowFrame)
-        let available = plate.maxX - textX - MemberRowGeometry.contentInset
-        let nameY = entry.activityLine != nil ? plate.midY - 15 : plate.midY - 8
+        let reserved: CGFloat = if showsActions {
+            MemberRowGeometry.actionsWidth(count: entry.actionCount)
+        } else if entry.art != nil {
+            MemberRowGeometry.artSide + MemberRowGeometry.artGap
+        } else {
+            0
+        }
+        let available = plate.maxX - textX - MemberRowGeometry.contentInset - reserved
+        let baseNameFont = nameFace ?? style.memberNameFont
+        let nameHeight = ceil(baseNameFont.ascender - baseNameFont.descender)
+        let lineFont = style.memberLineFont
+        let lineHeight = ceil(lineFont.ascender - lineFont.descender)
+        // Two lines as one block, centred on the plate; one line alone on its middle.
+        let nameY = entry.line != nil
+            ? (plate.midY - (nameHeight + lineHeight) / 2).rounded()
+            : (plate.midY - nameHeight / 2).rounded()
 
         // Room for whatever chip follows the name, reserved before the name is
         // drawn so the name truncates to leave space rather than colliding.
@@ -199,8 +437,8 @@ nonisolated enum MemberRowPainter {
                 hasBadge: chipBadge != nil
             )
         }
-        let reserved = chipWidth > 0 ? chipWidth + MemberRowGeometry.tagChipGap : 0
-        let nameWidth = max(20, available - reserved)
+        let chipRoom = chipWidth > 0 ? chipWidth + MemberRowGeometry.tagChipGap : 0
+        let nameWidth = max(20, available - chipRoom)
 
         // **The chip follows the DRAWN text, not the slot.** `drawText` returns
         // the width it actually painted; measuring the full name and clamping it
@@ -211,10 +449,9 @@ nonisolated enum MemberRowPainter {
         // role colour a server chose has to beat a colour its owner did — so a
         // styled name here is the same ink as any other, set in their face.
         // The effect itself plays on hover, over this row rather than in it.
-        let nameFont = nameFace ?? style.bodyFont
         let drawnName = TimelineRowPainter.drawText(
             entry.name,
-            font: nameFont,
+            font: baseNameFont,
             color: entry.colorValue.map { NSColor(Color(hex: $0)) }
                 ?? (entry.status == .offline ? style.tertiaryColor : style.primaryColor),
             at: CGPoint(x: textX, y: nameY),
@@ -269,7 +506,7 @@ nonisolated enum MemberRowPainter {
                 width: side,
                 height: side
             )
-            if crown.maxX <= plate.maxX - MemberRowGeometry.contentInset {
+            if crown.maxX <= plate.maxX - MemberRowGeometry.contentInset - reserved {
                 TimelineRowPainter.drawSymbol(
                     "crown.fill",
                     tint: NSColor(Palette.presenceIdle),
@@ -279,11 +516,12 @@ nonisolated enum MemberRowPainter {
             }
         }
 
-        if let line = entry.activityLine {
-            drawActivityLine(
+        if let line = entry.line {
+            drawLine(
                 line,
-                at: CGPoint(x: textX, y: plate.midY + 2),
+                at: CGPoint(x: textX, y: nameY + nameHeight),
                 maxWidth: max(20, available),
+                now: now,
                 context: context,
                 style: style,
                 images: images,
@@ -291,124 +529,147 @@ nonisolated enum MemberRowPainter {
             )
         }
 
-        // Offline members are dimmed as a whole rather than by picking a paler
-        // colour for each element, which is one operation instead of five and
-        // keeps role colours recognisable while still reading as offline.
-        if entry.status == .offline {
+        // 4. The picture, unless the buttons have taken its place.
+        if let art = entry.art, !showsActions {
+            drawArtwork(
+                art, in: MemberRowGeometry.artRect(in: rowFrame),
+                context: context, style: style, images: images, scale: scale
+            )
+        }
+
+        // **Offline dims what the row says, and not the plate behind it** —
+        // Discord's `.content.offline { opacity: .3 }`, with the nameplate outside
+        // `.content` (aad1i, Alex's screenshot 41). 45%, not its 30%: his call,
+        // because that's the pale grey he's asked to be rid of.
+        //
+        // **Erased and then painted under**, rather than a transparency layer round
+        // the row: a column of offline rows is redrawn on every scroll tick, and a
+        // layer is a row-sized bitmap each. What's already there is the row's own
+        // ink, so taking 55% of it away is one fill, and `destinationOver` puts the
+        // plate beneath what's left. The canvas is cleared before any of this.
+        if isOffline {
             context.saveGState()
             context.addPath(plateShape)
             context.clip()
-            context.setFillColor(NSColor.black.withAlphaComponent(0.35).cgColor)
+            context.setFillColor(CGColor(gray: 0, alpha: 1 - MemberRowGeometry.offlineInk))
             context.setBlendMode(.destinationOut)
             context.fill(plate)
+            context.restoreGState()
+            context.saveGState()
+            context.setBlendMode(.destinationOver)
+            paintPlate()
             context.restoreGState()
         }
     }
 
     // MARK: The line under the name
 
-    /// Discord's `ActivityStatus`, drawn: a glyph, the lead's words, a count,
-    /// then the custom status after a bullet.
-    ///
-    /// **One run of words takes what is left.** Discord gives the custom status
-    /// the words whenever it has any, so at most one of the two texts is drawn
-    /// beside the fixed pieces — the glyph, the count, the bullet and the emoji.
-    /// Those are measured first and the words truncate against the remainder,
-    /// rather than a long game title pushing the count off the row.
-    private static func drawActivityLine(
-        _ line: ActivityStatusLine,
+    /// Discord's `t_` over its `tT` (`763349`): a green glyph, the words, and how
+    /// long. **One run takes what's left**: the words truncate against the time,
+    /// so `Escape from Ta… · 2h` under the pointer still says how long.
+    private static func drawLine(
+        _ line: MemberRowLine,
         at origin: CGPoint,
         maxWidth: CGFloat,
+        now: Date,
         context: CGContext,
         style: MessageTextStyle,
         images: ImageStore,
         scale: CGFloat
     ) {
-        let font = style.metadataFont
-        let ink = style.tertiaryColor
+        let font = style.memberLineFont
         let gap = MemberRowGeometry.activityGap
         let glyphSide = MemberRowGeometry.activityGlyphSide
-        let emojiSide = MemberRowGeometry.statusEmojiSide
-        // Centred on the capitals, as the chip beside the name is: a line box's
-        // centre sits visibly low beside words with no descenders.
+        let green = NSColor(Palette.presenceOnline)
+        let ink = line.isLive ? green : style.secondaryColor
         let capCenter = origin.y + font.ascender - font.capHeight / 2
         let limit = origin.x + maxWidth
-
-        let count = line.overflow > 0 ? "+\(line.overflow)" : nil
-        let countWidth = count.map { ceil(TimelineLayoutEngine.measure($0, font: font)) } ?? 0
-        let bullet = line.hasLead && line.hasStatus ? "•" : nil
-        let bulletWidth = bullet.map { ceil(TimelineLayoutEngine.measure($0, font: font)) } ?? 0
-        // What must still fit after the lead's words.
-        var afterWords: CGFloat = 0
-        if count != nil { afterWords += gap + countWidth }
-        if bullet != nil { afterWords += gap + bulletWidth }
-        if line.statusEmoji != nil { afterWords += gap + emojiSide }
 
         var x = origin.x
         if let glyph = line.glyph {
             TimelineRowPainter.drawSymbol(
                 glyph.symbolName,
-                tint: NSColor(Palette.presenceOnline),
+                tint: green,
                 in: CGRect(x: x, y: capCenter - glyphSide / 2, width: glyphSide, height: glyphSide),
                 context: context
             )
             x += glyphSide + gap
-        }
-        if let text = line.text {
-            x += TimelineRowPainter.drawText(
-                text,
-                font: font,
-                color: ink,
-                at: CGPoint(x: x, y: origin.y),
-                maxWidth: max(0, limit - x - afterWords),
-                context: context
-            ) + gap
-        }
-        if let count {
-            // **Green once the status has the words** — Discord's own colour
-            // for it, and what keeps a bare count from reading as a stray digit.
-            TimelineRowPainter.drawText(
-                count,
-                font: font,
-                color: line.statusText != nil ? NSColor(Palette.presenceOnline) : ink,
-                at: CGPoint(x: x, y: origin.y),
-                maxWidth: countWidth + 1,
-                context: context
-            )
-            x += countWidth + gap
-        }
-        if let bullet {
-            TimelineRowPainter.drawText(
-                bullet,
-                font: font,
-                color: ink,
-                at: CGPoint(x: x, y: origin.y),
-                maxWidth: bulletWidth + 1,
-                context: context
-            )
-            x += bulletWidth + gap
-        }
-        if let emoji = line.statusEmoji {
+        } else if let emoji = line.emoji {
+            let side = MemberRowGeometry.statusEmojiSide
             TimelineRowPainter.drawEmojiInBox(
                 emoji,
-                in: CGRect(x: x, y: capCenter - emojiSide / 2, width: emojiSide, height: emojiSide),
+                in: CGRect(x: x, y: capCenter - side / 2, width: side, height: side),
                 context: context,
                 color: ink,
                 images: images,
                 scale: scale
             )
-            x += emojiSide + gap
+            x += side + gap
         }
-        if let statusText = line.statusText {
-            TimelineRowPainter.drawText(
-                statusText,
-                font: font,
-                color: ink,
-                at: CGPoint(x: x, y: origin.y),
-                maxWidth: max(0, limit - x),
-                context: context
+
+        let time = line.since.map { MemberRowLine.duration(since: $0, now: now) }
+        let tail = time.map { line.joiner + $0 }
+        let tailWidth = tail.map { ceil(TimelineLayoutEngine.measure($0, font: font)) } ?? 0
+        if let text = line.text {
+            x += TimelineRowPainter.drawText(
+                text, font: font, color: ink, at: CGPoint(x: x, y: origin.y),
+                maxWidth: max(0, limit - x - tailWidth), context: context
             )
         }
+        if let tail {
+            TimelineRowPainter.drawText(
+                tail, font: font, color: ink, at: CGPoint(x: x, y: origin.y),
+                maxWidth: tailWidth + 1, context: context
+            )
+        }
+    }
+
+    // MARK: The picture at the row's end
+
+    /// A squircle: Discord's `tx.V`, `contain` in a 4-point corner. **Only a peek**,
+    /// at the key `MemberListCoordinator.schedulePrefetch` asks for.
+    private static func drawArtwork(
+        _ art: MemberRowArt,
+        in rect: CGRect,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        let corner = MemberRowGeometry.artCorner * (rect.width / MemberRowGeometry.artSide).squareRoot()
+        let shape = CGPath(roundedRect: rect, cornerWidth: corner, cornerHeight: corner, transform: nil)
+        var picture: CGImage?
+        var placeholder: ActivityStatusLine.Glyph = .game
+        switch art {
+        case .image(let url):
+            picture = images.cached(
+                ImageStore.Key(url: url, maximumPixelSize: Int((rect.width * scale).rounded(.up))),
+                bucket: .thumbnail
+            )
+        case .placeholder(let glyph):
+            placeholder = glyph
+        }
+        if let picture {
+            context.saveGState()
+            context.addPath(shape)
+            context.clip()
+            TimelineRowPainter.drawFlipped(
+                picture, in: TimelineRowPainter.fittedRect(picture, in: rect, covering: false), context: context
+            )
+            context.restoreGState()
+            return
+        }
+        // Not here yet, or never coming: the row keeps its shape either way.
+        context.addPath(shape)
+        context.setFillColor(ThemeInk.current.lift(0.08))
+        context.fillPath()
+        let inset = rect.width * 0.27
+        TimelineRowPainter.drawSymbol(
+            placeholder.symbolName,
+            tint: style.tertiaryColor,
+            in: rect.insetBy(dx: inset, dy: inset),
+            context: context
+        )
     }
 
     // MARK: Plate
@@ -613,7 +874,20 @@ nonisolated enum MemberRowPainter {
         decorationFrame: CGImage? = nil,
         typingPhase: CGFloat? = nil
     ) {
+        // **A real hole for whatever sits in the corner**, as Discord's mask cuts
+        // one. This used to be a ring of the window's colour laid over the face,
+        // which is a dark ring on any theme or picture that isn't that colour, and
+        // a dark ring across a hovered row's plate.
+        let hole = cornerHole(of: entry, typingPhase: typingPhase, on: frame)
+        func clipToHole() {
+            guard let hole else { return }
+            context.addRect(frame.insetBy(dx: -frame.width, dy: -frame.height))
+            context.addPath(hole)
+            context.clip(using: .evenOdd)
+        }
+
         context.saveGState()
+        clipToHole()
         context.addEllipse(in: frame)
         context.clip()
         // The moving face where this is the row playing one, the decoded still
@@ -630,6 +904,8 @@ nonisolated enum MemberRowPainter {
             context.setFillColor(ThemeInk.current.surfaceRaised)
             context.fill(frame)
             context.restoreGState()
+            context.saveGState()
+            clipToHole()
             let font = NSFont.systemFont(ofSize: frame.width * 0.42, weight: .semibold)
             TimelineRowPainter.drawText(
                 entry.monogram,
@@ -643,17 +919,21 @@ nonisolated enum MemberRowPainter {
                 alignment: .center,
                 context: context
             )
+            context.restoreGState()
         }
 
         // **After the clip is gone.** A decoration is drawn around the face at
         // 1.2x, so it is the one thing on this row that must not be inside the
         // ellipse above — and it is drawn before the dot, which Discord puts
         // over everything.
+        context.saveGState()
+        clipToHole()
         TimelineRowPainter.drawDecoration(
             decorationFrame ?? decorationStill(entry, around: frame, images: images, scale: scale),
             around: frame,
             context: context
         )
+        context.restoreGState()
 
         // **The typing pill REPLACES the presence dot.** Discord swaps the two
         // rather than stacking them, and it has to: they share the same corner,
@@ -665,13 +945,53 @@ nonisolated enum MemberRowPainter {
                 phase: typingPhase,
                 context: context
             )
-        } else if entry.status != .offline, entry.status != .unknown {
-            // **No dot for offline or unknown, as Discord's member list has
-            // none** (`eo` passes no status for OFFLINE, and the avatar draws
-            // none for UNKNOWN): an offline row says so by being dimmed, and an
-            // app that never connects says nothing at all.
+        } else if hole != nil {
             drawPresenceDot(entry.status, on: frame, context: context)
         }
+    }
+
+    /// What's in the avatar's corner, and the hole it needs — nil for nothing.
+    ///
+    /// **No dot for offline or unknown, as Discord's member list has none** (`eo`
+    /// passes no status for OFFLINE, and the avatar draws none for UNKNOWN): an
+    /// offline row says so by being dimmed, and an app that never connects says
+    /// nothing at all.
+    private static func cornerHole(
+        of entry: MemberEntry,
+        typingPhase: CGFloat?,
+        on frame: CGRect
+    ) -> CGPath? {
+        if typingPhase != nil {
+            let ring = typingPillRect(on: frame).insetBy(dx: -statusCut, dy: -statusCut)
+            return CGPath(roundedRect: ring, cornerWidth: ring.height / 2, cornerHeight: ring.height / 2, transform: nil)
+        }
+        guard entry.status != .offline, entry.status != .unknown else { return nil }
+        return CGPath(ellipseIn: dotRect(on: frame).insetBy(dx: -statusCut, dy: -statusCut), transform: nil)
+    }
+
+    /// How much air there is between a status and the face it's on.
+    private static let statusCut: CGFloat = 2.5
+    /// A status dot on a 32-point face, as it measures on Alex's screenshot 43.
+    private static let dotSide: CGFloat = 11
+
+    private static func dotRect(on avatarFrame: CGRect) -> CGRect {
+        CGRect(
+            x: avatarFrame.maxX - dotSide + 2,
+            y: avatarFrame.maxY - dotSide + 2,
+            width: dotSide,
+            height: dotSide
+        )
+    }
+
+    private static func typingPillRect(on avatarFrame: CGRect) -> CGRect {
+        let height: CGFloat = 11
+        let width: CGFloat = 20
+        return CGRect(
+            x: avatarFrame.maxX - width + 2,
+            y: avatarFrame.maxY - height + 2,
+            width: width,
+            height: height
+        )
     }
 
     /// Three dots in a pill, where the presence dot would be.
@@ -691,25 +1011,7 @@ nonisolated enum MemberRowPainter {
         phase: CGFloat,
         context: CGContext
     ) {
-        let height: CGFloat = 11
-        let width: CGFloat = 20
-        let pill = CGRect(
-            x: avatarFrame.maxX - width + 2,
-            y: avatarFrame.maxY - height + 2,
-            width: width,
-            height: height
-        )
-        // The same cut-out the presence dot takes, so the pill reads as a hole
-        // in the avatar rather than a badge sitting on it.
-        let ring = pill.insetBy(dx: -2, dy: -2)
-        context.setFillColor(NSColor.windowBackgroundColor.cgColor)
-        context.addPath(CGPath(
-            roundedRect: ring,
-            cornerWidth: ring.height / 2,
-            cornerHeight: ring.height / 2,
-            transform: nil
-        ))
-        context.fillPath()
+        let pill = typingPillRect(on: avatarFrame)
 
         context.setFillColor(tint)
         context.addPath(CGPath(
@@ -775,37 +1077,33 @@ nonisolated enum MemberRowPainter {
         context: CGContext
     ) {
         guard status != .unknown else { return }
-        let side: CGFloat = 11
-        let dot = CGRect(
-            x: avatarFrame.maxX - side + 2,
-            y: avatarFrame.maxY - side + 2,
-            width: side,
-            height: side
-        )
-        let ring = dot.insetBy(dx: -2, dy: -2)
-        context.setFillColor(NSColor.windowBackgroundColor.cgColor)
-        context.fillEllipse(in: ring)
-
-        let tint = NSColor(status.tint)
+        let dot = dotRect(on: avatarFrame)
+        let tint = NSColor(status.tint).cgColor
         switch status {
         case .online:
-            context.setFillColor(tint.cgColor)
+            context.setFillColor(tint)
             context.fillEllipse(in: dot)
         case .idle:
-            context.setFillColor(tint.cgColor)
-            context.fillEllipse(in: dot)
-            context.setFillColor(NSColor.windowBackgroundColor.cgColor)
-            context.fillEllipse(in: dot.offsetBy(dx: -2.5, dy: -2.5).insetBy(dx: 1.6, dy: 1.6))
+            // A crescent and a bar are holes too, not patches of the window's
+            // colour: a plate or a hover shows through them.
+            context.saveGState()
+            context.addEllipse(in: dot)
+            context.clip()
+            context.addRect(dot)
+            context.addEllipse(in: dot.offsetBy(dx: -2.5, dy: -2.5).insetBy(dx: 1.6, dy: 1.6))
+            context.setFillColor(tint)
+            context.fillPath(using: .evenOdd)
+            context.restoreGState()
         case .doNotDisturb:
-            context.setFillColor(tint.cgColor)
-            context.fillEllipse(in: dot)
-            context.setFillColor(NSColor.windowBackgroundColor.cgColor)
-            context.fill(CGRect(
-                x: dot.minX + 2, y: dot.midY - 1.1,
-                width: dot.width - 4, height: 2.2
+            context.addEllipse(in: dot)
+            context.addPath(CGPath(
+                roundedRect: CGRect(x: dot.minX + 2, y: dot.midY - 1.1, width: dot.width - 4, height: 2.2),
+                cornerWidth: 1.1, cornerHeight: 1.1, transform: nil
             ))
+            context.setFillColor(tint)
+            context.fillPath(using: .evenOdd)
         case .offline, .invisible:
-            context.setStrokeColor(tint.cgColor)
+            context.setStrokeColor(tint)
             context.setLineWidth(2.6)
             context.strokeEllipse(in: dot.insetBy(dx: 1.3, dy: 1.3))
         case .unknown:

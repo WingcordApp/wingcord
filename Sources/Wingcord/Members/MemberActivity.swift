@@ -16,7 +16,7 @@ nonisolated struct MemberActivityBlock: Equatable, Sendable {
     /// The cards drawn: three, every one when expanded, none when hidden.
     var cards: [MemberActivityCard]
 
-    var title: String { "Activity — \(count.formatted())" }
+    var title: String { "Activity\u{A0}\u{A0}·\u{A0}\u{A0}\(count.formatted())" }
 
     /// Whether the heading's chevron does anything — Discord's: more than
     /// three to unfold, or a hidden section to bring back.
@@ -81,7 +81,7 @@ nonisolated struct MemberActivityCard: Equatable, Sendable, Identifiable {
 /// stylesheet): a card is 72 points with its margin, 8 points in from the
 /// column, padded by 8, with a 48-point picture.
 nonisolated enum MemberActivityGeometry {
-    static let headerHeight = RosterLayout.headerHeight
+    static let headerHeight = MemberSectionGeometry.height
     static let cardHeight: CGFloat = 72
     static let inset: CGFloat = 8
     static let padding: CGFloat = 8
@@ -99,18 +99,21 @@ nonisolated enum MemberActivityGeometry {
         )
     }
 
-    /// The gear and the chevron at the heading's trailing end.
+    /// The gear and the chevron at the heading's trailing end, on the eyebrow
+    /// every other section's heading sits on.
     static func gearRect(in header: CGRect, canToggle: Bool) -> CGRect {
         let side: CGFloat = 16
-        let trailing = header.maxX - MemberRowGeometry.horizontalMargin - (canToggle ? side + 4 : 0)
-        return CGRect(x: trailing - side, y: header.maxY - side - 4, width: side, height: side)
+        let eyebrow = MemberSectionGeometry.eyebrow(in: header)
+        let trailing = header.maxX - MemberSectionGeometry.inset - (canToggle ? side + 4 : 0)
+        return CGRect(x: trailing - side, y: eyebrow.midY - side / 2, width: side, height: side)
     }
 
     static func chevronRect(in header: CGRect) -> CGRect {
         let side: CGFloat = 16
+        let eyebrow = MemberSectionGeometry.eyebrow(in: header)
         return CGRect(
-            x: header.maxX - MemberRowGeometry.horizontalMargin - side,
-            y: header.maxY - side - 4,
+            x: header.maxX - MemberSectionGeometry.inset - side,
+            y: eyebrow.midY - side / 2,
             width: side,
             height: side
         )
@@ -127,26 +130,26 @@ nonisolated enum MemberActivityPainter {
         context: CGContext,
         style: MessageTextStyle
     ) {
-        let font = NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold)
-        let x = frame.minX + MemberRowGeometry.horizontalMargin + MemberRowGeometry.contentInset
-        let baseline = frame.minY + MemberRowGeometry.sectionSpacing + 8
+        // The same words as every other section's heading: `MemberRowPainter.drawHeader`.
+        let font = style.memberHeadingFont
+        let x = frame.minX + MemberSectionGeometry.inset
         let gear = MemberActivityGeometry.gearRect(in: frame, canToggle: block.canToggle)
         TimelineRowPainter.drawText(
             block.title,
             font: font,
-            color: style.tertiaryColor,
-            at: CGPoint(x: x, y: baseline),
+            color: style.secondaryColor,
+            at: CGPoint(x: x, y: TimelineRowPainter.capCenteredY(of: font, in: MemberSectionGeometry.eyebrow(in: frame))),
             maxWidth: gear.minX - 4 - x,
             context: context
         )
-        drawSymbol("gearshape.fill", in: gear, pointSize: 10, color: style.tertiaryColor, context: context)
+        drawSymbol("gearshape.fill", in: gear, pointSize: 10, color: style.secondaryColor, context: context)
         if block.canToggle {
             let chevron = block.isHidden ? "eye.slash" : block.isExpanded ? "chevron.up" : "chevron.down"
             drawSymbol(
                 chevron,
                 in: MemberActivityGeometry.chevronRect(in: frame),
                 pointSize: 10,
-                color: style.tertiaryColor,
+                color: style.secondaryColor,
                 context: context
             )
         }

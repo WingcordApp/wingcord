@@ -213,6 +213,13 @@ struct MiniProfileCard: View {
             if profile.isProfilePrivate { PrivateProfileBanner() }
             banner
             identity
+            // Discord's `ep` (`931481`), straight under who it's from: on the
+            // popout and on the column beside a direct message alike.
+            if profile.relationship == .incomingRequest, !profile.isSelf {
+                ProfileFriendRequestBlock(userID: profile.userID, name: profile.displayName)
+                    .padding(.horizontal, Spacing.margin)
+                    .padding(.bottom, Spacing.snug)
+            }
             if profile.isPartlyUnavailable, !profile.isLoading {
                 PartialProfileNotice(retry: nil)
                     .padding(.horizontal, Spacing.margin)
@@ -392,6 +399,9 @@ struct MiniProfileCard: View {
                         },
                         isPresented: $isMenuOpen
                     )
+                    // This sits over the card, outside its ground's environment,
+                    // and it has to be outside the popover's modifier to reach it.
+                    .environment(\.profileFlyoutScheme, ground.wantsDarkInk ? .light : .dark)
             }
         }
         .clipShape(.rect(cornerRadius: corner, style: .continuous))

@@ -96,6 +96,9 @@ struct FriendRequestRow: View {
                         FlagChip(text: "Stranger", tint: Palette.mutedBadge)
                     }
                 }
+                if request.isIncoming {
+                    FriendRequestNoteLine(userID: request.id)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 

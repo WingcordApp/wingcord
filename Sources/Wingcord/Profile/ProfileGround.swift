@@ -457,6 +457,8 @@ struct ProfileGroundFill: ViewModifier {
         content
             .background { fill }
             .environment(\.colorScheme, ground.wantsDarkInk ? .light : .dark)
+            // What this card's flyouts wear: see `profileFlyoutAppearance()`.
+            .environment(\.profileFlyoutScheme, ground.wantsDarkInk ? .light : .dark)
     }
 
     @ViewBuilder

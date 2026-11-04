@@ -20,7 +20,17 @@ final class MemberListCanvas: NSView {
     var style: MessageTextStyle
 
     private var hoveredRow: Int?
+    /// Rows past this are somebody else's to draw for now: see `RosterFoldAnimator`.
+    var drawingLimit: CGFloat? {
+        didSet {
+            guard drawingLimit != oldValue else { return }
+            needsDisplay = true
+        }
+    }
     private var trackingArea: NSTrackingArea?
+    /// Whether the pointer is over the column at all, which is what sets Active
+    /// Now's lobes dancing.
+    private var isPointerInside = false
     /// See `apply(isCovered:)`.
     private var isCovered = false
 
@@ -31,7 +41,37 @@ final class MemberListCanvas: NSView {
             hoveredRow = nil
             invalidateRow(previous)
             updatePlatePlayback()
+            scheduleHoverReport()
         }
+    }
+
+    /// Whether a row under the pointer carries the glass buttons. A role's popout
+    /// draws these rows with none.
+    var showsRowActions = false
+
+    /// The row that stays lit whatever the pointer does: the one whose card or menu
+    /// is open, or whose buttons the pointer has moved onto — Discord's `.active`.
+    var pinnedUserID: UserID? {
+        didSet {
+            guard pinnedUserID != oldValue else { return }
+            let previous = pinnedRow
+            resolvePinnedRow()
+            invalidateRow(previous)
+            invalidateRow(pinnedRow)
+            scheduleHoverReport()
+        }
+    }
+    private var pinnedRow: Int?
+
+    private func resolvePinnedRow() {
+        pinnedRow = pinnedUserID.flatMap { userID in
+            roster.members.first { $0.value.userID == userID }?.key
+        }
+    }
+
+    /// Whether a row draws as being pointed at.
+    private func isRowLit(_ index: Int) -> Bool {
+        index == pinnedRow || (index == hoveredRow && !isScrolling)
     }
 
     /// Whether a nameplate is allowed to move.
@@ -43,6 +83,7 @@ final class MemberListCanvas: NSView {
         didSet {
             guard animatesPlate != oldValue else { return }
             updatePlatePlayback()
+            refreshDance()
         }
     }
 
@@ -57,6 +98,14 @@ final class MemberListCanvas: NSView {
     /// A right-click on a person. Raises the actions rather than the card.
     var onOpenMenu: ((UserID, CGRect) -> Void)?
     var onWidthChange: ((CGFloat) -> Void)?
+    /// A section's heading clicked: fold it, or bring it back.
+    var onToggleSection: ((MemberSectionKey) -> Void)?
+    /// The row the buttons belong on changed.
+    var onHoverRow: ((MemberRowHover?) -> Void)?
+    /// Which rooms' headings carry a button now.
+    var onVoiceButtons: (([MemberVoiceButton]) -> Void)?
+    /// A room's name clicked.
+    var onOpenRoom: ((ChannelID) -> Void)?
     /// An Activity card clicked: its popout, beside it.
     var onOpenActivity: ((String, CGRect) -> Void)?
     /// The Activity heading clicked: fold, unfold, or bring back.
@@ -112,6 +161,10 @@ final class MemberListCanvas: NSView {
         liveClock?.invalidate()
         liveClock = nil
         onHoveredRowChange = nil
+        durationClock?.invalidate()
+        durationClock = nil
+        danceClock?.invalidate()
+        danceClock = nil
         plateTask?.cancel()
         plateTask = nil
         plateFilm = nil
@@ -127,8 +180,12 @@ final class MemberListCanvas: NSView {
     @discardableResult
     func apply(roster: Roster) -> CGFloat {
         self.roster = roster
-        layout = RosterLayout(roster)
+        layout = RosterLayout(roster, separatesFirst: activity != nil)
         if let hoveredRow, row(at: hoveredRow)?.userID == nil { self.hoveredRow = nil }
+        resolvePinnedRow()
+        scheduleHoverReport()
+        refreshDurationClock()
+        refreshDance()
         // Somebody may have started or stopped typing in this rebuild, which is
         // the only thing here that moves without the pointer.
         defer { refreshClock() }
@@ -161,7 +218,12 @@ final class MemberListCanvas: NSView {
     func apply(activity: MemberActivityBlock?) -> CGFloat {
         guard activity != self.activity else { return contentHeight }
         let previousHeight = activityHeight
+        let hadActivity = self.activity != nil
         self.activity = activity
+        // The first heading under it has a hairline; with nothing above, it doesn't.
+        if hadActivity != (activity != nil) {
+            layout = RosterLayout(roster, separatesFirst: activity != nil)
+        }
         if let hoveredCard, activity?.cards.indices.contains(hoveredCard) != true { self.hoveredCard = nil }
         if previousHeight != activityHeight {
             needsDisplay = true
@@ -250,6 +312,9 @@ final class MemberListCanvas: NSView {
         if bounds.origin != newBounds.origin {
             setBoundsOrigin(newBounds.origin)
             needsDisplay = true
+            // The buttons are placed in the viewport's space, and a row that stays
+            // lit through a scroll moves within it.
+            scheduleHoverReport()
         }
     }
 
@@ -282,24 +347,34 @@ final class MemberListCanvas: NSView {
         if let activity, dirtyRect.minY < activityHeight {
             drawActivity(activity, in: dirtyRect, context: context, scale: scale)
         }
+        // Under the rows, a room's wash and what it says at its foot.
+        for position in layout.sections.indices {
+            guard case .voiceGroup(let group) = layout.sections[position].kind else { continue }
+            let frame = layout.sectionFrame(position, width: bounds.width).offsetBy(dx: 0, dy: activityHeight)
+            guard frame.intersects(dirtyRect), frame.minY < drawingLimit ?? .infinity else { continue }
+            MemberRowPainter.drawVoiceGroupGround(group, in: frame, context: context, style: style)
+        }
         guard var index = rowIndex(at: max(activityHeight, dirtyRect.minY)) else { return }
         // Read once per draw rather than per row: it is a clock read, and every
         // row would otherwise ask the same question and get the same answer.
         let phase = gradientPhase
+        let now = Date()
 
         while let row = row(at: index) {
             let frame = rowFrame(at: index)
-            guard frame.minY < dirtyRect.maxY else { break }
+            guard frame.minY < dirtyRect.maxY, frame.minY < drawingLimit ?? .infinity else { break }
             if frame.intersects(dirtyRect) {
                 switch row {
                 case .header(let section):
                     MemberRowPainter.drawHeader(
                         section,
                         in: frame,
+                        isSeparated: layout.isSeparated(layout.sectionIndex(containing: index)),
                         context: context,
                         style: style,
                         images: ImageStore.shared,
-                        scale: scale
+                        scale: scale,
+                        dimmedLobe: section.glyph == .activeNow ? dimmedLobe : nil
                     )
                 case .placeholder:
                     MemberRowPainter.drawPlaceholder(index: index, in: frame, context: context)
@@ -309,9 +384,11 @@ final class MemberListCanvas: NSView {
                         in: frame,
                         context: context,
                         style: style,
-                        isHovered: hoveredRow == index && !isScrolling,
+                        isHovered: isRowLit(index),
+                        showsActions: showsRowActions && isRowLit(index),
                         images: ImageStore.shared,
                         scale: scale,
+                        now: now,
                         // Resolved here because the registry is main-actor
                         // state; the lookup is a dictionary hit after the first
                         // row that asks for a given face.
@@ -334,6 +411,37 @@ final class MemberListCanvas: NSView {
             }
             index += 1
         }
+    }
+
+    /// How tall everything under the heading at this row is. See `RosterLayout`.
+    func bodyHeight(ofHeadingAt index: Int) -> CGFloat {
+        layout.bodyHeight(ofSectionAt: layout.sectionIndex(containing: index))
+    }
+
+    /// What's in a stretch of the list, as a picture, whether it's on screen or not:
+    /// the rows are arithmetic, and `draw` will draw any of them.
+    func renderedImage(of rect: CGRect) -> CGImage? {
+        let scale = window?.backingScaleFactor ?? 2
+        let width = Int((rect.width * scale).rounded(.up))
+        let height = Int((rect.height * scale).rounded(.up))
+        guard width > 0, height > 0,
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                  space: space,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+              )
+        else { return nil }
+        context.translateBy(x: -rect.minX * scale, y: rect.maxY * scale)
+        context.scaleBy(x: scale, y: -scale)
+        let previous = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        let limit = drawingLimit
+        drawingLimit = nil
+        draw(rect)
+        drawingLimit = limit
+        NSGraphicsContext.current = previous
+        return context.makeImage()
     }
 
     // MARK: The plate under the pointer
@@ -648,11 +756,21 @@ final class MemberListCanvas: NSView {
     func apply(isCovered: Bool) {
         guard self.isCovered != isCovered else { return }
         self.isCovered = isCovered
+        refreshDance()
         guard isCovered else { return }
         clearHover()
     }
 
+    override func mouseEntered(with event: NSEvent) {
+        isPointerInside = true
+        refreshDance()
+    }
+
     override func mouseMoved(with event: NSEvent) {
+        if !isPointerInside {
+            isPointerInside = true
+            refreshDance()
+        }
         guard !isScrolling, !isCovered else { return }
         let point = convert(event.locationInWindow, from: nil)
         // The Activity section first: it sits above the roster's rows.
@@ -666,7 +784,15 @@ final class MemberListCanvas: NSView {
             if let card { setNeedsDisplay(activityCardFrame(at: card)) }
         }
         let index = bounds.contains(point) && point.y >= activityHeight ? rowIndex(at: point.y) : nil
-        let hoverable = index.flatMap { row(at: $0)?.userID != nil ? $0 : nil }
+        let hoverable = index.flatMap { candidate in
+            // `rowIndex` clamps, so the air under the last row answers with it.
+            row(at: candidate)?.userID != nil && rowFrame(at: candidate).contains(point) ? candidate : nil
+        }
+        let room = roomContaining(point)
+        if room != hoveredRoom {
+            hoveredRoom = room
+            scheduleHoverReport()
+        }
         guard hoverable != hoveredRow else { return }
         let previous = hoveredRow
         hoveredRow = hoverable
@@ -674,9 +800,21 @@ final class MemberListCanvas: NSView {
         invalidateRow(hoverable)
         updatePlatePlayback()
         onHoveredRowChange?()
+        scheduleHoverReport()
+    }
+
+    /// The room whose band a point is in.
+    private func roomContaining(_ point: CGPoint) -> ChannelID? {
+        guard point.y >= activityHeight, let index = rowIndex(at: point.y) else { return nil }
+        let position = layout.sectionIndex(containing: index)
+        guard case .voiceGroup(let group) = layout.sections[position].kind else { return nil }
+        let frame = layout.sectionFrame(position, width: bounds.width).offsetBy(dx: 0, dy: activityHeight)
+        return frame.contains(point) ? group.channelID : nil
     }
 
     override func mouseExited(with event: NSEvent) {
+        isPointerInside = false
+        refreshDance()
         clearHover()
     }
 
@@ -687,6 +825,10 @@ final class MemberListCanvas: NSView {
             hoveredCard = nil
             setNeedsDisplay(activityCardFrame(at: previous))
         }
+        if hoveredRoom != nil {
+            hoveredRoom = nil
+            scheduleHoverReport()
+        }
         guard hoveredRow != nil else { return }
         let previous = hoveredRow
         hoveredRow = nil
@@ -696,6 +838,146 @@ final class MemberListCanvas: NSView {
         // is the allocation most likely to have cost the list its pictures, and
         // the pointer going away is the last moment anything asks.
         onHoveredRowChange?()
+        scheduleHoverReport()
+    }
+
+    // MARK: The buttons on the hovered row
+
+    private var lastReportedHover: MemberRowHover?
+    private var isHoverReportPending = false
+    /// The room the pointer is in.
+    private var hoveredRoom: ChannelID?
+    private var lastVoiceButtons: [MemberVoiceButton] = []
+
+    /// Tells the column which row the buttons belong on — **on the next turn of the
+    /// run loop, never now.** Half the things that move it arrive from
+    /// `updateNSView`, and a representable never reports state from there
+    /// (`INVARIANTS.md`). Several in a row come out as one.
+    private func scheduleHoverReport() {
+        guard onHoverRow != nil, !isHoverReportPending else { return }
+        isHoverReportPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isHoverReportPending = false
+            self.reportHover()
+        }
+    }
+
+    private func reportHover() {
+        var hover: MemberRowHover?
+        if showsRowActions,
+           let index = pinnedRow ?? (isScrolling ? nil : hoveredRow),
+           let entry = roster.members[index]
+        {
+            let origin = enclosingScrollView?.contentView.bounds.origin ?? .zero
+            hover = MemberRowHover(
+                userID: entry.userID,
+                rowFrame: rowFrame(at: index).offsetBy(dx: -origin.x, dy: -origin.y),
+                isReader: entry.isReader,
+                joinableVoiceChannelID: entry.joinableVoiceChannelID
+            )
+        }
+        if hover != lastReportedHover {
+            lastReportedHover = hover
+            onHoverRow?(hover)
+        }
+        reportVoiceButtons()
+    }
+
+    /// A room's heading has its button while the pointer's in the room, and the
+    /// reader's own room always has its Disconnect: Discord's `.joinButton`.
+    private func reportVoiceButtons() {
+        guard let onVoiceButtons else { return }
+        var buttons: [MemberVoiceButton] = []
+        if showsRowActions {
+            let origin = enclosingScrollView?.contentView.bounds.origin ?? .zero
+            for index in visibleRowRange() {
+                guard case .header(let section)? = row(at: index),
+                      case .voiceGroup(let group) = section.kind,
+                      group.isReaderIn || (group.canJoin && group.channelID == hoveredRoom)
+                else { continue }
+                let heading = rowFrame(at: index).offsetBy(dx: -origin.x, dy: -origin.y)
+                buttons.append(MemberVoiceButton(
+                    channelID: group.channelID,
+                    frame: MemberVoiceGroupGeometry.eyebrow(in: heading),
+                    isReaderIn: group.isReaderIn,
+                    canJoin: group.canJoin
+                ))
+            }
+        }
+        guard buttons != lastVoiceButtons else { return }
+        lastVoiceButtons = buttons
+        onVoiceButtons(buttons)
+    }
+
+    // MARK: The clocks a row draws
+
+    /// Moves the times on the lines along — `· 2h` — and only while a row has one:
+    /// `INVARIANTS.md`'s rule about clocks, subscribed while needed.
+    ///
+    /// **Twice a minute, because the shortest thing it says is a minute**, and the
+    /// rows it repaints are the few on screen with a time on them.
+    private var durationClock: Timer?
+
+    private func refreshDurationClock() {
+        let wanted = roster.members.values.contains { $0.line?.since != nil }
+        if wanted, durationClock == nil {
+            let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.tickDurations() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            durationClock = timer
+        } else if !wanted {
+            durationClock?.invalidate()
+            durationClock = nil
+        }
+    }
+
+    private func tickDurations() {
+        guard window != nil else { return }
+        for index in visibleRowRange() where roster.members[index]?.line?.since != nil {
+            invalidateRow(index)
+        }
+    }
+
+    // MARK: Active Now's lobes
+
+    /// Which lobe is dim right now.
+    private var dimmedLobe: Int?
+    private var danceClock: Timer?
+    private var danceStep = 0
+
+    /// Discord's little dance on its Active Now glyph while the pointer is in the
+    /// list (`tU`, `763349`). Off under Reduce Motion, and stopped when nothing can
+    /// see it — the clock rule again.
+    private func refreshDance() {
+        let wanted = isPointerInside && animatesPlate && !isCovered
+            && roster.sections.contains { $0.glyph == .activeNow }
+        if wanted, danceClock == nil {
+            danceStep = 0
+            let timer = Timer(timeInterval: MemberSectionGlyphs.danceInterval, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.tickDance() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            danceClock = timer
+        } else if !wanted, danceClock != nil {
+            danceClock?.invalidate()
+            danceClock = nil
+            setDimmedLobe(nil)
+        }
+    }
+
+    private func tickDance() {
+        danceStep = (danceStep + 1) % MemberSectionGlyphs.danceSteps.count
+        setDimmedLobe(MemberSectionGlyphs.danceSteps[danceStep])
+    }
+
+    private func setDimmedLobe(_ lobe: Int?) {
+        guard lobe != dimmedLobe else { return }
+        dimmedLobe = lobe
+        guard let heading = roster.sections.first(where: { $0.glyph == .activeNow }) else { return }
+        // The glyph's box, not the whole heading: this runs seven times a second.
+        setNeedsDisplay(MemberSectionGeometry.glyphRect(in: rowFrame(at: heading.index)))
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -712,9 +994,21 @@ final class MemberListCanvas: NSView {
             }
             return
         }
-        guard let index = rowIndex(at: point.y),
-              let userID = row(at: index)?.userID
+        // `rowIndex` clamps, so the air under the last row answers with it.
+        guard let index = rowIndex(at: point.y), rowFrame(at: index).contains(point),
+              let row = row(at: index)
         else { return }
+        if case .header(let section) = row {
+            if section.canCollapse {
+                onToggleSection?(section.key)
+            } else if case .voiceGroup(let group) = section.kind,
+                      point.x >= MemberRowPainter.voiceGroupNameX(in: rowFrame(at: index))
+            {
+                onOpenRoom?(group.channelID)
+            }
+            return
+        }
+        guard let userID = row.userID else { return }
         // The profile card is anchored to the ROW that opened it, so it appears
         // beside that person rather than at the pointer — a card that follows
         // the click reads as a menu.
@@ -741,7 +1035,7 @@ final class MemberListCanvas: NSView {
             super.rightMouseDown(with: event)
             return
         }
-        guard let index = rowIndex(at: point.y),
+        guard let index = rowIndex(at: point.y), rowFrame(at: index).contains(point),
               let userID = row(at: index)?.userID
         else {
             super.rightMouseDown(with: event)
@@ -752,13 +1046,24 @@ final class MemberListCanvas: NSView {
 
     override func accessibilityChildren() -> [Any]? {
         activityAccessibilityChildren() + visibleRowRange().compactMap { index -> NSAccessibilityElement? in
+            if case .header(let section)? = row(at: index) {
+                let element = NSAccessibilityElement()
+                element.setAccessibilityRole(.button)
+                let name = section.label ?? section.key.storageKey
+                element.setAccessibilityLabel(
+                    section.canCollapse ? "\(name), \(section.isCollapsed ? "collapsed" : "expanded")" : name
+                )
+                element.setAccessibilityParent(self)
+                element.setAccessibilityFrameInParentSpace(rowFrame(at: index))
+                return element
+            }
             guard let entry = roster.members[index] else { return nil }
             let element = NSAccessibilityElement()
             element.setAccessibilityRole(.button)
             var label = entry.name
             if entry.isBot { label += ", app" }
             label += ", \(entry.status.label)"
-            if let line = entry.activityLine { label += ", \(line.spokenText)" }
+            if let line = entry.line, !line.spoken.isEmpty { label += ", \(line.spoken)" }
             element.setAccessibilityLabel(label)
             element.setAccessibilityParent(self)
             element.setAccessibilityFrameInParentSpace(rowFrame(at: index))

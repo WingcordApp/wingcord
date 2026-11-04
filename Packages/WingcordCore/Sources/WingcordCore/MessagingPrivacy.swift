@@ -242,8 +242,19 @@ public struct MessagingPrivacy: Hashable, Sendable {
     public var friendSources: FriendSourceFlags
     /// "Show personalized messages" — `hide_friend_request_notes`, inverted.
     public var showsFriendRequestNotes: Bool
+    /// Whether the account has ever said. **Unset isn't "on"**: Discord falls back
+    /// to hiding them from an account not cleared for age-restricted content
+    /// (`420825`, `840387`), so an absent field isn't the same answer as a
+    /// present one. See `resolvedShowsFriendRequestNotes(isNSFWAllowed:)`.
+    public var hasFriendRequestNotesSetting = false
     /// "Messaging in Connected Games".
     public var allowsGameFriendDirectMessages: Bool
+
+    /// Discord's `s()` (`420825`): what the account said, else hidden only for an
+    /// account known not to be cleared for age-restricted content.
+    public func resolvedShowsFriendRequestNotes(isNSFWAllowed: Bool?) -> Bool {
+        hasFriendRequestNotesSetting ? showsFriendRequestNotes : isNSFWAllowed != false
+    }
 
     public init(
         explicit: ContentFilter = ContentFilter(),

@@ -786,6 +786,7 @@ enum DemoFixtures {
         DemoOverlayFixtures.populate()
         DemoBadges.populate(model, me: me)
         populateInvokedCommands(model, person: userIDs[1])
+        populateRoster(model, guildID: firstGuild, me: me)
         // **Nitro, as its own badges say** ("Nitro · Gold"), so every part of
         // the profile editor can be tried. `--demo-free` shows the account
         // without it — the locks, the notes, a server profile that is only a
@@ -866,6 +867,11 @@ enum DemoFixtures {
         if userIDs.count > friends.count + 2 {
             relationships[userIDs[friends.count]] = .incomingRequest
             relationships[userIDs[friends.count + 1]] = .outgoingRequest
+            // A note on the request, so "View note" has something to reveal.
+            model.relationshipFacts[userIDs[friends.count]] = RelationshipFacts(
+                since: Date.now.addingTimeInterval(-3_600),
+                note: "hey! we played together in the Iris tournament, let's be friends"
+            )
         }
         model.relationships = relationships
 
@@ -1705,7 +1711,7 @@ enum DemoFixtures {
     /// The list Discord's server would send for a demo server: online people
     /// under their hoisted role, everyone else online under Online, then
     /// Offline, each by name. The demo has no server, so it stands in for one.
-    private static func memberList(
+    static func memberList(
         members: [UserID: Member],
         users: [UserID: User],
         presences: [UserID: Presence],
@@ -2433,13 +2439,13 @@ enum DemoFixtures {
         }
     }
 
-    private struct RoleSpec {
+    struct RoleSpec {
         var name: String
         var color: UInt32
         var hoisted: Bool
     }
 
-    private static let roleSpecs: [RoleSpec] = [
+    static let roleSpecs: [RoleSpec] = [
         RoleSpec(name: "Main Dev", color: 0xE67E22, hoisted: true),
         RoleSpec(name: "Admin", color: 0xE91E63, hoisted: true),
         RoleSpec(name: "Contributor", color: 0x2ECC71, hoisted: true),

@@ -79,7 +79,7 @@ struct RosterTests {
         let model = model()
         model.memberLists[MemberListKey(guildID: guild, listID: "everyone")] = firstPage()
         let roster = model.roster
-        #expect(roster.sections.map(\.label) == ["Level 20 — 101", "Online — 700"])
+        #expect(roster.sections.map(\.label) == ["Level 20 · 101", "Online · 700"])
         #expect(roster.sections.map(\.index) == [0, 102])
         #expect(roster.rowCount == 102 + 701)
     }
@@ -101,7 +101,7 @@ struct RosterTests {
             Issue.record("row 102 is the Online heading")
             return
         }
-        #expect(online.label == "Online — 700")
+        #expect(online.label == "Online · 700")
     }
 
     @Test("Before the server answers, the list is one unnamed heading")
@@ -137,21 +137,33 @@ struct RosterTests {
         let model = model()
         model.memberLists[MemberListKey(guildID: guild, listID: "everyone")] = firstPage()
         let layout = RosterLayout(model.roster)
-        let header = RosterLayout.headerHeight
+        let first = MemberSectionGeometry.height
+        let separated = MemberSectionGeometry.separatedHeight
         let member = RosterLayout.memberHeight
 
-        #expect(layout.contentHeight == 2 * header + 801 * member)
+        #expect(layout.contentHeight == first + separated + 801 * member)
         for index in [0, 1, 2, 101, 102, 103, 802] {
             let frame = layout.frame(at: index, width: 240)
             #expect(layout.index(at: frame.midY) == index, "row \(index)")
         }
-        #expect(layout.frame(at: 102, width: 240).minY == header + 101 * member)
-        #expect(layout.frame(at: 102, width: 240).height == header)
+        #expect(layout.frame(at: 102, width: 240).minY == first + 101 * member)
+        #expect(layout.frame(at: 102, width: 240).height == separated)
         #expect(layout.index(at: -40) == 0)
         #expect(layout.index(at: layout.contentHeight + 40) == 802)
     }
 
-    @Test("A heading with nobody under it is still one row")
+    /// Discord's own measurements (`nd`, `763349`), checked against Alex's image 41.
+    @Test("A row is 50, a heading 40, and 56 with its hairline")
+    func discordsMeasurements() {
+        #expect(RosterLayout.memberHeight == 50)
+        #expect(MemberSectionGeometry.height == 40)
+        #expect(MemberSectionGeometry.separatedHeight == 56)
+        #expect(MemberRowGeometry.avatarSide == 32)
+        #expect(MemberRowGeometry.artSide == 32)
+        #expect(MemberRowGeometry.plateRect(in: CGRect(x: 0, y: 0, width: 288, height: 50)).height == 48)
+    }
+
+    @Test("A group with nobody in it has no heading")
     func emptyGroup() {
         let model = model()
         var list = MemberList()
@@ -160,9 +172,11 @@ struct RosterTests {
             MemberList.Group(id: .online, count: 2),
         ])
         model.memberLists[MemberListKey(guildID: guild, listID: "everyone")] = list
-        let layout = RosterLayout(model.roster)
-        #expect(layout.rowCount == 4)
-        #expect(layout.index(at: RosterLayout.headerHeight + 1) == 1)
-        #expect(layout.index(at: 2 * RosterLayout.headerHeight + 1) == 2)
+        let roster = model.roster
+        #expect(roster.sections.map(\.key) == [.online])
+        #expect(RosterLayout(roster).rowCount == 3)
+        // And the list's own row numbers still come out right behind it.
+        #expect(roster.serverRow(forView: 0) == 1)
+        #expect(roster.serverRow(forView: 1) == 2)
     }
 }

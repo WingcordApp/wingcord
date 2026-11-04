@@ -613,6 +613,7 @@ struct UserMenuPopover: ViewModifier {
             )
             .environment(model)
                 .presentationBackground(.clear)
+                .profileFlyoutAppearance()
         }
     }
 }

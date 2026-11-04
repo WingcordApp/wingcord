@@ -40,7 +40,7 @@ struct ProfileScopeSwitcher: View {
             // The system popover's own glass, untouched — see
             // `ServerTagChooser` for why clearing it and painting a SwiftUI
             // glass on the content renders an opaque slab instead.
-            .popover(isPresented: $isOpen, arrowEdge: .bottom) { list }
+            .popover(isPresented: $isOpen, arrowEdge: .bottom) { list.profileFlyoutAppearance() }
     }
 
     // MARK: The trigger

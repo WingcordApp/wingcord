@@ -38,6 +38,9 @@ public struct VoiceState: Hashable, Sendable, Identifiable {
     /// and a `Bool` cannot order it. It is also how a request is *withdrawn* —
     /// the field is set to null rather than a second field being set.
     public var requestToSpeakAt: Date?
+    /// When they joined the room: the clock a voice group draws for somebody with
+    /// nothing else going on (`tT`, `763349`).
+    public var connectedAt: Date?
 
     public var id: UserID { userID }
 
@@ -53,8 +56,10 @@ public struct VoiceState: Hashable, Sendable, Identifiable {
         isStreaming: Bool = false,
         isCameraOn: Bool = false,
         isSuppressed: Bool = false,
-        requestToSpeakAt: Date? = nil
+        requestToSpeakAt: Date? = nil,
+        connectedAt: Date? = nil
     ) {
+        self.connectedAt = connectedAt
         self.userID = userID
         self.channelID = channelID
         self.guildID = guildID

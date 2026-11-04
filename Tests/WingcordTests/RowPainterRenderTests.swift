@@ -36,7 +36,7 @@ struct RowPainterRenderTests {
         name: String = "Blåhaj",
         colorValue: UInt32? = 0xE67E22,
         status: PresenceStatus = .online,
-        activityLine: ActivityStatusLine? = nil,
+        line: MemberRowLine? = nil,
         isBot: Bool = false,
         tag: String? = nil
     ) -> MemberEntry {
@@ -49,7 +49,7 @@ struct RowPainterRenderTests {
             decorationURL: nil,
             status: status,
             isOnMobile: false,
-            activityLine: activityLine,
+            line: line,
             isBot: isBot,
             tag: tag,
             nameplateURL: nil
@@ -98,16 +98,16 @@ struct RowPainterRenderTests {
 
     @Test("A two-line member row paints more than a one-line one")
     func activityLineAddsInk() {
-        let plain = inkFraction(height: 46) { context, frame in
+        let plain = inkFraction(height: 50) { context, frame in
             MemberRowPainter.drawMember(
                 self.entry(),
                 in: frame, context: context, style: self.style,
                 isHovered: false, images: ImageStore.shared, scale: 1
             )
         }
-        let withSubtitle = inkFraction(height: 46) { context, frame in
+        let withSubtitle = inkFraction(height: 50) { context, frame in
             MemberRowPainter.drawMember(
-                self.entry(activityLine: ActivityStatusLine(glyph: .game, text: "Xcode")),
+                self.entry(line: MemberRowLine(glyph: .game, text: "Xcode", isLive: true)),
                 in: frame, context: context, style: self.style,
                 isHovered: false, images: ImageStore.shared, scale: 1
             )
@@ -117,18 +117,20 @@ struct RowPainterRenderTests {
 
     @Test("A section header paints something")
     func headerDrawsInk() {
-        let ink = inkFraction(height: 34) { context, frame in
+        let ink = inkFraction(height: 40) { context, frame in
             MemberRowPainter.drawHeader(
                 RosterSection(
-                    label: "Main Dev — 3",
+                    key: .role(RoleID(rawValue: 1)),
+                    title: "Main Dev",
+                    countText: "3",
                     colorValue: 0xE67E22,
                     // No mark on this role, which is the common case — a heading
                     // that has one shifts its label right rather than growing.
-                    iconURL: nil,
                     index: 0,
                     count: 3
                 ),
                 in: frame,
+                isSeparated: false,
                 context: context,
                 style: self.style,
                 images: ImageStore.shared,
@@ -166,14 +168,14 @@ struct RowPainterRenderTests {
     /// paints nothing is a blank column, which reads as an empty server.
     @Test("An unnamed heading and a placeholder row paint something")
     func placeholdersDrawInk() {
-        let heading = inkFraction(height: 34) { context, frame in
+        let heading = inkFraction(height: 40) { context, frame in
             MemberRowPainter.drawHeader(
-                RosterSection(label: nil, index: 0, count: 0),
-                in: frame, context: context, style: self.style,
+                RosterSection(key: .unknown, index: 0, count: 0),
+                in: frame, isSeparated: false, context: context, style: self.style,
                 images: ImageStore.shared, scale: 2
             )
         }
-        let row = inkFraction(height: 46) { context, frame in
+        let row = inkFraction(height: 50) { context, frame in
             MemberRowPainter.drawPlaceholder(index: 3, in: frame, context: context)
         }
         #expect(heading > 0.001)

@@ -220,6 +220,7 @@ private struct CustomStatusEditor: View {
                         onPickGIF: { _ in }
                     )
                     .presentationBackground(.clear)
+                    .profileFlyoutAppearance()
                 }
 
                 TextField(prompt, text: $text)

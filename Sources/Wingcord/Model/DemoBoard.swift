@@ -214,7 +214,7 @@ extension DemoFixtures {
     /// Two linked accounts, so the Connections dock has marks to magnify and
     /// facts to spell out. The metadata below is `connected_accounts[].metadata`'s
     /// own shape — a Steam join date and a game count, Reddit karma.
-    private static var demoConnections: [ConnectedAccount] {
+    static var demoConnections: [ConnectedAccount] {
         [
             ConnectedAccount(
                 id: "76561199847664494",
@@ -285,7 +285,7 @@ extension DemoFixtures {
     static let endfield = ApplicationID(rawValue: 1_461_154_307_171_811_401)
     private static let endfieldApplication = ApplicationID(rawValue: 1_496_037_472_226_906_183)
     private static let zenless = ApplicationID(rawValue: 1_257_819_671_114_289_184)
-    private static let wuthering = ApplicationID(rawValue: 1_247_227_126_416_146_462)
+    static let wuthering = ApplicationID(rawValue: 1_247_227_126_416_146_462)
     static let battlefield = ApplicationID(rawValue: 1_425_690_433_018_925_056)
 
     private static func website(_ url: String, _ category: GameLinkCategory) -> GameWebsite {

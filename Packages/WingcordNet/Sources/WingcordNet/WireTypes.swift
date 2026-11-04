@@ -47,6 +47,9 @@ struct UserDTO: Decodable, Sendable {
     /// Which age group Discord has placed the account in. The reader's own
     /// object only, like `premium_type`. See `AgeGroup`.
     var age_verification_status: Int?
+    /// Whether the account is cleared for age-restricted content: what a friend
+    /// request's note falls back on. The reader's own object only.
+    var nsfw_allowed: Bool?
     // **Only ever populated by `GET /users/@me`.** Every other route that
     // carries a user carries a *public* one, so these are nil for everybody
     // else and that is not a failure to decode — see `AccountDetails`.
@@ -62,7 +65,8 @@ struct UserDTO: Decodable, Sendable {
             premiumType: premium_type,
             ageVerificationStatus: age_verification_status,
             verification: accountVerification,
-            typingIndicatorStyle: typing_indicator_style.map(\.domain).flatMap { $0.isPlain ? nil : $0 }
+            typingIndicatorStyle: typing_indicator_style.map(\.domain).flatMap { $0.isPlain ? nil : $0 },
+            isNSFWAllowed: nsfw_allowed
         )
     }
 

@@ -98,6 +98,7 @@ private struct ProfileFlyoutAnchor: ViewModifier {
                     .environment(model)
                     .environment(editor)
                     .environment(flyouts)
+                    .profileFlyoutAppearance()
             }
         } else {
             content

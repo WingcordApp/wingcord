@@ -563,13 +563,16 @@ struct RelationshipDTO: Decodable, Sendable {
     /// They share no mutual friend and no small mutual server with the reader.
     /// Ordinary, and deliberately distinct from spam.
     var stranger_request: Bool?
+    /// What they wrote with their request. See `RelationshipFacts.note`.
+    var note: String?
 
-    /// The three facts above, or nil when there is nothing remarkable to store.
+    /// The facts above, or nil when there is nothing remarkable to store.
     var facts: RelationshipFacts? {
         let facts = RelationshipFacts(
             since: since,
             isSpam: is_spam_request ?? false,
-            isStranger: stranger_request ?? false
+            isStranger: stranger_request ?? false,
+            note: note.flatMap { $0.isEmpty ? nil : $0 }
         )
         return facts.isNoteworthy ? facts : nil
     }

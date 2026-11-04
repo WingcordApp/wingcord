@@ -146,15 +146,9 @@ struct BadgeRow: View {
                             nextPanel = nil
                             panel()
                         }
+                        // In the profile's room, glass and ink together.
+                        .profileFlyoutAppearance()
                     }
-                    // **A presentation paints the APP's material, not the
-                    // card's**, and it inherits the card's environment on the
-                    // way out — so a flyout raised from a light profile came up
-                    // on this app's near-black popover with the card's dark ink
-                    // on it, unreadable. Anything that escapes a themed surface
-                    // into a window of its own has to restate the scheme it is
-                    // actually drawn against — the app's.
-                    .appColorScheme()
                     .accessibilityLabel(Text(badge.label))
                     .accessibilityAddTraits(tenure == nil && userID == nil ? [] : .isButton)
             }
@@ -195,9 +189,8 @@ struct BadgeRow: View {
 
     /// The directory or the customizer, switching in place.
     ///
-    /// **In the scheme of the window it opens in**, as a badge's own card is:
-    /// from a light profile it drew dark words on the app's dark glass. On the
-    /// panel and not the row, whose "+N" and pencil sit on the card's own ground.
+    /// **In the profile's room**, as a badge's own card is. On the panel and not
+    /// the row, whose "+N" and pencil sit on the card's own ground.
     private func badgePanel(_ panel: Binding<BadgePanel>, userID: UserID) -> some View {
         Group {
             switch panel.wrappedValue {
@@ -211,7 +204,7 @@ struct BadgeRow: View {
                 }
             }
         }
-        .appColorScheme()
+        .profileFlyoutAppearance()
     }
 
     /// Opens the directory on `badge` — or, with no person behind the row,
@@ -759,7 +752,7 @@ private struct MutualCountButton<List: View>: View {
                 // The list carries the material; the popover must carry none,
                 // or two are stacked and the result reads as frost.
                 .presentationBackground(.clear)
-                .appColorScheme()
+                .profileFlyoutAppearance()
         }
     }
 }
@@ -1234,6 +1227,7 @@ struct RoleAddChip: View {
                 isPicking = false
                 add(roleID)
             }
+            .profileFlyoutAppearance()
         }
     }
 }

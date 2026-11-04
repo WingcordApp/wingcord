@@ -32,17 +32,43 @@ public struct RelationshipFacts: Hashable, Sendable {
     /// is ordinary — somebody who found the reader by username — and Discord
     /// marks it so the reader can weigh it, not so it can be hidden.
     public var isStranger: Bool
+    /// What they wrote with their request — `note` on the relationship.
+    ///
+    /// **Not the reader's private note about somebody**, which is a different
+    /// store on a different route. Covered until the reader asks to see it, and
+    /// absent altogether where they turned these off: see
+    /// `AppModel.friendRequestNote(of:)`.
+    public var note: String?
 
-    public init(since: Date? = nil, isSpam: Bool = false, isStranger: Bool = false) {
+    public init(since: Date? = nil, isSpam: Bool = false, isStranger: Bool = false, note: String? = nil) {
         self.since = since
         self.isSpam = isSpam
         self.isStranger = isStranger
+        self.note = note
     }
 
     /// Whether this is worth storing at all. A relationship with nothing
     /// remarkable about it does not earn a row in the table — see
     /// `SessionSnapshot.relationshipFacts`.
-    public var isNoteworthy: Bool { since != nil || isSpam || isStranger }
+    public var isNoteworthy: Bool { since != nil || isSpam || isStranger || note != nil }
+}
+
+/// What may be sent as a friend request's note — Discord's rules (`237309`).
+public enum FriendRequestNote {
+    /// `XG`, and the counter the field draws against it.
+    public static let maximumLength = 120
+
+    /// The note as it goes on the wire: newlines become spaces, the ends are
+    /// trimmed, and nothing left means no note at all. Nil too for one over the
+    /// limit, which the server would refuse.
+    public static func cleaned(_ raw: String) -> String? {
+        guard raw.count <= maximumLength else { return nil }
+        let cleaned = raw
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? nil : cleaned
+    }
 }
 
 /// One friend request, resolved for drawing.

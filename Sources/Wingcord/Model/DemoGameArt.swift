@@ -9,25 +9,35 @@ enum DemoGameArt {
     typealias RGB = (Double, Double, Double)
 
     static func cover(symbol: String, top: RGB, bottom: RGB, name: String) -> URL? {
+        art(symbol: symbol, top: top, bottom: bottom, file: "\(name)-cover", size: NSSize(width: 300, height: 400), glyph: 150, lift: 20)
+    }
+
+    /// A square of the same: a game's icon, or a role's.
+    static func tile(symbol: String, top: RGB, bottom: RGB, name: String) -> URL? {
+        art(symbol: symbol, top: top, bottom: bottom, file: "\(name)-tile", size: NSSize(width: 128, height: 128), glyph: 72, lift: 0)
+    }
+
+    private static func art(
+        symbol: String, top: RGB, bottom: RGB, file name: String, size: NSSize, glyph glyphSize: CGFloat, lift: CGFloat
+    ) -> URL? {
         let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Wingcord Demo Games", isDirectory: true)
-        let file = folder.appendingPathComponent("\(name)-cover.png")
+        let file = folder.appendingPathComponent("\(name).png")
         if FileManager.default.fileExists(atPath: file.path(percentEncoded: false)) { return file }
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let size = NSSize(width: 300, height: 400)
         let image = NSImage(size: size, flipped: false) { rect in
             let colour = { (rgb: RGB) in NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1) }
             NSGradient(starting: colour(top), ending: colour(bottom))?.draw(in: rect, angle: -90)
-            let configuration = NSImage.SymbolConfiguration(pointSize: 150, weight: .bold)
+            let configuration = NSImage.SymbolConfiguration(pointSize: glyphSize, weight: .bold)
                 .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor.black.withAlphaComponent(0.55)]))
             if let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
                 .withSymbolConfiguration(configuration) {
-                let glyphSize = glyph.size
+                let drawn = glyph.size
                 glyph.draw(in: NSRect(
-                    x: (rect.width - glyphSize.width) / 2,
-                    y: (rect.height - glyphSize.height) / 2 - 20,
-                    width: glyphSize.width,
-                    height: glyphSize.height
+                    x: (rect.width - drawn.width) / 2,
+                    y: (rect.height - drawn.height) / 2 - lift,
+                    width: drawn.width,
+                    height: drawn.height
                 ))
             }
             return true

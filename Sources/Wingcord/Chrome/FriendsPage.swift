@@ -219,6 +219,9 @@ private struct FriendRow: View {
                     .font(.system(.callout))
                     .foregroundStyle(Ink.secondary)
                     .lineLimit(1)
+                if row.relationship == .incomingRequest {
+                    FriendRequestNoteLine(userID: row.id)
+                }
             }
             Spacer(minLength: 0)
             actions

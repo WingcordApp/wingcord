@@ -16,6 +16,8 @@ public struct CurrentAccount: Sendable {
     public var verification: AccountVerification?
     /// The custom typing indicator the account wears; nil for the plain one.
     public var typingIndicatorStyle: TypingIndicatorStyle?
+    /// Cleared for age-restricted content, where the answer said.
+    public var isNSFWAllowed: Bool?
 }
 
 extension DiscordREST {

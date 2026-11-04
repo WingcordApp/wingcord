@@ -16,7 +16,7 @@ struct MemberListAnchorTests {
     private func entry(_ id: UInt64) -> MemberEntry {
         MemberEntry(
             userID: UserID(rawValue: id), name: "member \(id)", monogram: "M",
-            status: .online, isOnMobile: false, activityLine: nil, isBot: false
+            status: .online, isOnMobile: false, isBot: false
         )
     }
 
@@ -25,8 +25,8 @@ struct MemberListAnchorTests {
     private func roster(leading: Int, count: Int = 400, loaded: ClosedRange<Int>, firstID: UInt64 = 1000) -> Roster {
         var roster = Roster(identity: "1:everyone", sections: [], members: [:], rowCount: 0)
         roster.sections = [
-            RosterSection(label: "Staff — \(leading)", index: 0, count: leading),
-            RosterSection(label: "Online — \(count)", index: leading + 1, count: count),
+            RosterSection(key: .role(RoleID(rawValue: 7)), title: "Staff", countText: "\(leading)", index: 0, count: leading),
+            RosterSection(key: .online, title: "Online", countText: "\(count)", index: leading + 1, count: count),
         ]
         roster.rowCount = leading + 1 + count + 1
         for row in loaded {
