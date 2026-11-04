@@ -113,6 +113,10 @@ nonisolated struct ThemeInk: @unchecked Sendable {
 
     /// What words sit on, anywhere but the reader's own bubble.
     let plates: TextPlateInk
+    /// The same in the other room, for prose on a surface that isn't in the
+    /// theme's: a pale profile in a dark app. The theme's accent on the house's
+    /// neutral ground. See `plates(isLight:)`.
+    private let otherRoomPlates: TextPlateInk
     /// Where a picture will be, while it loads: `surfaceRaised` at half.
     let placeholderFill: CGColor
 
@@ -187,17 +191,13 @@ nonisolated struct ThemeInk: @unchecked Sendable {
         self.isLight = isLight
         let placeholder = raised.copy(alpha: 0.5) ?? raised
         placeholderFill = placeholder
-        plates = TextPlateInk(
-            quoteRule: Self.lift(0.26, isLight: isLight),
-            codeFill: accent.copy(alpha: isLight ? 0.06 : 0.08) ?? accent,
-            codeBorder: Self.lift(0.12, isLight: isLight),
-            mentionFill: accent.copy(alpha: isLight ? 0.15 : 0.24) ?? accent,
-            mentionHoverFill: accent,
-            timestampFill: Self.lift(0.10, isLight: isLight),
-            spoilerHidden: Self.blend(colors.canvas, toward: isLight ? 0 : 0xFF_FF_FF, by: isLight ? 0.34 : 0.22),
-            spoilerHiddenHover: Self.blend(colors.canvas, toward: isLight ? 0 : 0xFF_FF_FF, by: isLight ? 0.40 : 0.28),
-            spoilerRevealed: Self.lift(0.08, isLight: isLight),
-            emojiPlaceholder: placeholder
+        plates = Self.roomPlates(canvas: colors.canvas, isLight: isLight, accent: accent, placeholder: placeholder)
+        otherRoomPlates = Self.roomPlates(
+            canvas: (isLight ? ThemeColors.trueBlack : ThemeColors.porcelain).canvas,
+            isLight: !isLight,
+            accent: accent,
+            // The theme's raised surface would be a dark blot on a pale card.
+            placeholder: Self.lift(0.10, isLight: !isLight)
         )
 
         let bubble = InkContrast.legible(Self.packed(accent), on: 0xFF_FF_FF)
@@ -219,6 +219,29 @@ nonisolated struct ThemeInk: @unchecked Sendable {
         otherBubble = Self.lift(0.12, isLight: isLight)
         otherBubbleHover = Self.lift(0.16, isLight: isLight)
         mentionedBubbleTint = CGColor(srgbRed: 0.98, green: 0.80, blue: 0.08, alpha: isLight ? 0.22 : 0.16)
+    }
+
+    /// What words sit on in a room with this ground.
+    private static func roomPlates(
+        canvas: UInt32, isLight: Bool, accent: CGColor, placeholder: CGColor
+    ) -> TextPlateInk {
+        TextPlateInk(
+            quoteRule: lift(0.26, isLight: isLight),
+            codeFill: accent.copy(alpha: isLight ? 0.06 : 0.08) ?? accent,
+            codeBorder: lift(0.12, isLight: isLight),
+            mentionFill: accent.copy(alpha: isLight ? 0.15 : 0.24) ?? accent,
+            mentionHoverFill: accent,
+            timestampFill: lift(0.10, isLight: isLight),
+            spoilerHidden: blend(canvas, toward: isLight ? 0 : 0xFF_FF_FF, by: isLight ? 0.34 : 0.22),
+            spoilerHiddenHover: blend(canvas, toward: isLight ? 0 : 0xFF_FF_FF, by: isLight ? 0.40 : 0.28),
+            spoilerRevealed: lift(0.08, isLight: isLight),
+            emojiPlaceholder: placeholder
+        )
+    }
+
+    /// What words sit on in a surface that is light or dark on its own account.
+    func plates(isLight wanted: Bool) -> TextPlateInk {
+        wanted == isLight ? plates : otherRoomPlates
     }
 
     private static func white(_ alpha: CGFloat) -> CGColor {

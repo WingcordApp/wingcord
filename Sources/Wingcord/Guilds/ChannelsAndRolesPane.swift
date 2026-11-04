@@ -135,8 +135,6 @@ struct ChannelsAndRolesPane: View, Equatable {
                 channelCount: presentation.channelCount,
                 isSaving: presentation.isSaving
             )
-            .surfaceColumn(Proportions.surfaceColumnWide)
-            .padding(.bottom, Spacing.base)
         }
         // **One measurement, guarded and unanimated.** The aside is dropped
         // below the questions rather than squeezed beside them once the column
@@ -180,7 +178,11 @@ struct ChannelsAndRolesPane: View, Equatable {
 
 // MARK: - The bar
 
-/// The page's one piece of floating chrome.
+/// The page's one piece of floating chrome, on the toolbar row: the tabs at its
+/// leading end, the page's name in the middle where every page's is, and the search
+/// at its trailing end while there's a list to search (Alex, 2026-11-04: "the picker
+/// in the top left, and a native search bar which appears on browsing channels in
+/// the top right").
 ///
 /// **The tabs are the system's capsule segmented control** (`SegmentedPicker`,
 /// INVARIANTS "The system's own segmented control"), which brings its own
@@ -198,29 +200,35 @@ private struct ChannelsAndRolesBar: View {
 
     @Environment(\.motion) private var motion
 
+    private static let searchWidth: CGFloat = 240
+
     var body: some View {
-        HStack(spacing: Spacing.base) {
+        PageHeaderBar {
             if showsTabs {
                 SegmentedPicker(options: tabs, selection: $tab)
                     .fixedSize()
             }
+        } center: {
+            HeaderTitleCapsule()
+        } trailing: {
             GlassEffectContainer(spacing: Spacing.base) {
                 HStack(spacing: Spacing.base) {
-                    if showsSearch {
-                        ChannelSearchField(query: $query)
-                    }
                     if isSaving {
                         ProgressView()
                             .controlSize(.small)
                             .padding(.horizontal, Spacing.base)
-                            .frame(height: Metrics.control + Spacing.base)
+                            .frame(height: SearchField.height)
                             .glassEffect(.regular, in: .capsule)
                             .transition(.materialize)
                             .accessibilityLabel("Saving your answers")
                     }
+                    if showsSearch {
+                        SearchField(prompt: "Search channels", text: $query)
+                            .frame(width: Self.searchWidth)
+                            .transition(.materialize(from: .trailing, blurring: false))
+                    }
                 }
             }
-            Spacer(minLength: 0)
         }
         .animation(motion.glassMorph, value: showsSearch)
         .animation(motion.glassMorph, value: isSaving)
@@ -231,46 +239,6 @@ private struct ChannelsAndRolesBar: View {
             .init(.customize, "Customize"),
             .init(.browse, channelCount > 0 ? "Browse Channels \(channelCount)" : "Browse Channels"),
         ]
-    }
-}
-
-/// The search field.
-///
-/// The glyph and the field are **inside** the glass view's content, which is
-/// what §4 rule 4 requires: anything that must sit over glass goes in before the
-/// modifier, because an overlay attached outside draws underneath.
-private struct ChannelSearchField: View {
-    @Binding var query: String
-
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        HStack(spacing: Spacing.tight) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(.caption, weight: .medium))
-                .foregroundStyle(Ink.tertiary)
-            TextField("Search channels", text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(.callout))
-                .foregroundStyle(Ink.primary)
-                .focused($isFocused)
-                .onSubmit { isFocused = false }
-            if !query.isEmpty {
-                Button {
-                    query = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(.caption))
-                        .foregroundStyle(Ink.tertiary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, Spacing.snug)
-        .frame(width: 200, height: Metrics.control + Spacing.base)
-        .glassEffect(.regular, in: .capsule)
-        .transition(.materialize)
     }
 }
 
@@ -375,11 +343,12 @@ private struct MyProfileAside: View {
                     }
 
                     if let bio = me.bio {
-                        Text(bio)
-                            .font(.system(.callout))
-                            .foregroundStyle(Ink.secondary)
-                            .lineLimit(6)
-                            .fixedSize(horizontal: false, vertical: true)
+                        ProseText(
+                            markdown: bio,
+                            font: .system(.callout),
+                            color: InkColor.secondary
+                        )
+                        .lineLimit(6)
                     }
 
                     if !me.roles.isEmpty {

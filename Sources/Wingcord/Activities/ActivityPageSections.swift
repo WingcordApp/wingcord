@@ -30,6 +30,7 @@ struct AppOverviewSection: View {
     var markdown: String
 
     @Environment(\.motion) private var motion
+    @Environment(AppModel.self) private var model: AppModel?
     @State private var isExpanded = false
 
     /// How tall the collapsed measure is. Roughly eight lines of subheadline,
@@ -45,7 +46,8 @@ struct AppOverviewSection: View {
                 // `ProseText` wants a concrete `Color`; `Ink` is a hierarchical
                 // style. `InkColor` is the same ramp as colours.
                 color: InkColor.secondary,
-                emojiSide: 16
+                emojiSide: 16,
+                onLink: model.map { model in { model.openLink($0) } }
             )
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(maxHeight: isExpanded ? nil : Self.collapsedHeight, alignment: .top)

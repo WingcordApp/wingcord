@@ -62,7 +62,8 @@ struct EventCard: View {
                         font: .subheadline,
                         color: InkColor.secondary,
                         mentions: model.mentionContext(),
-                        onLink: { model.openLinkFromEvents($0) }
+                        onLink: { model.openLinkFromEvents($0) },
+                        isSelectable: false
                     )
                     .lineLimit(3)
                     .padding(.top, Spacing.base)
@@ -165,7 +166,8 @@ struct EventPlaceLabel: View {
                     font: .subheadline,
                     color: InkColor.primary,
                     mentions: model.mentionContext(),
-                    onLink: { model.openLinkFromEvents($0) }
+                    onLink: { model.openLinkFromEvents($0) },
+                    isSelectable: false
                 )
                 .lineLimit(1)
             }

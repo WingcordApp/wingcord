@@ -1544,12 +1544,6 @@ enum RoleChipFit {
 struct FlowLayout: Layout {
     var spacing: CGFloat = 4
 
-    /// The horizontal gap before a subview: its own `FlowGap` where it set one,
-    /// the flow's spacing otherwise.
-    private func gap(before index: Int, in subviews: Subviews) -> CGFloat {
-        subviews[index][FlowGap.self] ?? spacing
-    }
-
     struct Cache {
         /// What each subview wants, measured once.
         var ideal: [CGSize]
@@ -1602,15 +1596,14 @@ struct FlowLayout: Layout {
         var rowHeight: CGFloat = 0
         var total = CGSize.zero
 
-        for (index, size) in cache.sizes.enumerated() {
-            let gap = gap(before: index, in: subviews)
-            if rowWidth > 0, rowWidth + gap + size.width > width {
+        for size in cache.sizes {
+            if rowWidth > 0, rowWidth + spacing + size.width > width {
                 total.width = max(total.width, rowWidth)
                 total.height += rowHeight + spacing
                 rowWidth = size.width
                 rowHeight = size.height
             } else {
-                rowWidth += rowWidth > 0 ? gap + size.width : size.width
+                rowWidth += rowWidth > 0 ? spacing + size.width : size.width
                 rowHeight = max(rowHeight, size.height)
             }
         }
@@ -1639,13 +1632,12 @@ struct FlowLayout: Layout {
         for (index, subview) in subviews.enumerated() {
             let size = cache.sizes[index]
             if x > bounds.minX {
-                let gap = gap(before: index, in: subviews)
-                if x + gap + size.width > bounds.maxX {
+                if x + spacing + size.width > bounds.maxX {
                     x = bounds.minX
                     y += rowHeight + spacing
                     rowHeight = 0
                 } else {
-                    x += gap
+                    x += spacing
                 }
             }
             // Proposed the size it was measured at, which for an over-wide
@@ -1656,13 +1648,6 @@ struct FlowLayout: Layout {
             rowHeight = max(rowHeight, size.height)
         }
     }
-}
-
-/// The gap before one item of a `FlowLayout` where it is not the flow's own
-/// spacing. Prose sets zero between two pieces that touched in what was
-/// written — four custom emoji typed as one picture stay one picture.
-nonisolated struct FlowGap: LayoutValueKey {
-    static let defaultValue: CGFloat? = nil
 }
 
 /// The avatar as a profile draws it: a **hole in the artwork**, not a ring on

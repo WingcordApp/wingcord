@@ -173,11 +173,16 @@ struct SampleProfileCard: View {
     private var bio: some View {
         if let bio = profile.bio, !bio.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                Text(bio)
-                    .font(.system(.subheadline))
-                    .foregroundStyle(InkColor.primary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                // Prose, not `Text`: somebody's `||spoiler||` and `<:emoji:id>` would
+                // otherwise show as the characters they typed. A preview, so nothing
+                // in it is selected or opened.
+                ProseText(
+                    markdown: bio,
+                    font: .system(.subheadline),
+                    color: InkColor.primary,
+                    isSelectable: false
+                )
+                .lineLimit(2)
                 Text("…")
                     .font(.system(.subheadline))
                     .foregroundStyle(InkColor.primary)

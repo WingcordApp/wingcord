@@ -243,6 +243,7 @@ struct MiniProfileCard: View {
                             font: .system(.caption),
                             color: InkColor.secondary,
                             emojiSide: 16,
+                            mentions: model.mentionContext(),
                             onEmoji: openEmoji ?? { inspectedEmoji = $0 },
                             onLink: openLink,
                             animates: animates

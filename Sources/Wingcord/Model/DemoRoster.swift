@@ -92,6 +92,9 @@ extension DemoFixtures {
         // **A pale profile**, so a profile's flyouts can be seen turning with it:
         // the pink of Alex's image 48.
         if let ray = who("Jay"), let user = model.users[ray] {
+            let bioChannel = model.channelIndex.channelIDs(inGuild: guildID).first {
+                model.channelIndex[$0]?.kind == .text
+            }
             model.users[ray] = User(
                 id: user.id,
                 username: user.username,
@@ -104,7 +107,15 @@ extension DemoFixtures {
                 decoration: UserDecoration(
                     nameplate: user.decoration?.nameplate,
                     displayNameStyle: user.decoration?.displayNameStyle,
-                    bio: "serpent is lord, and this profile is pink",
+                    // **One of everything prose can hold**, so selection, spoilers and
+                    // what a click does can all be tried in one place.
+                    bio: "serpent is **lord**, and this profile is *pink*. "
+                        + "Don't tell anyone: ||the serpent is actually a very long noodle "
+                        + "and everybody here has known for years||.\n"
+                        + "Ask <@\(who("Bram")?.rawValue ?? 0)> or see <#\(bioChannel?.rawValue ?? 0)> "
+                        + "or https://example.com/iris or [the guide](https://example.com/guide).\n"
+                        + "> quoted, because somebody said it\n"
+                        + "Back on <t:1798761600:D>. `inline code` and <:x_shaq:1122960370512957560>, 🐍",
                     themeColorValues: [0xF8_D3_EA, 0xFF_9B_D8],
                     // Nobody's directory answers in `--demo` but the reader's, so
                     // this is a Nitro badge's card before Discord has said anything.

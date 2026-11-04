@@ -238,6 +238,35 @@ nonisolated extension MessageText {
         )
     }
 
+    /// The words up to `length` and an ellipsis after them: what text clamped to a
+    /// number of lines draws. Every range is cut to what is left.
+    func truncated(to length: Int, ellipsis attributes: [NSAttributedString.Key: Any]) -> MessageText {
+        let end = min(max(0, length), attributed.length)
+        let cut = NSMutableAttributedString(
+            attributedString: attributed.attributedSubstring(from: NSRange(location: 0, length: end))
+        )
+        cut.append(NSAttributedString(string: "\u{2026}", attributes: attributes))
+        func clipped(_ range: NSRange) -> NSRange? {
+            guard range.location < end else { return nil }
+            return NSRange(location: range.location, length: min(range.length, end - range.location))
+        }
+        return MessageText(
+            attributed: cut,
+            inlineEmoji: inlineEmoji.filter { $0.key < end },
+            inlineSymbols: inlineSymbols.filter { $0.key < end },
+            links: links.compactMap { run in clipped(run.range).map { LinkRun(range: $0, target: run.target) } },
+            spoilers: spoilers.compactMap(clipped),
+            plates: plates.compactMap { plate in
+                clipped(plate.range).map { Plate(range: $0, kind: plate.kind, padding: plate.padding) }
+            },
+            quotes: quotes.compactMap(clipped),
+            codeBlocks: codeBlocks.compactMap(clipped),
+            plainLabel: plainLabel,
+            overlines: overlines.compactMap(clipped),
+            awaitsHighlighting: awaitsHighlighting
+        )
+    }
+
     /// The same words with Discord's "(edited)" after the last of them.
     ///
     /// **In the words, not beside them**, so it wraps where they wrap: on the

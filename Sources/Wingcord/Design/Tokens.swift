@@ -602,17 +602,12 @@ nonisolated enum Metrics {
     /// The widest discovery's own column is drawn.
     ///
     /// **Derived from the grid rather than chosen: four cards at their own
-    /// minimum with the grid's own gaps.** It is wider than every other surface
-    /// here for one reason — the bar above it centres a six-segment strip with
-    /// the search field beside it, and that strip measures 670 points. At the
-    /// 940 the server pages use there is no arrangement that centres the strip
-    /// *and* keeps the field on its line; at this measure there is.
+    /// minimum with the grid's own gaps.**
     static let discoveryColumn: CGFloat =
         discoveryCardWidth * 4 + Spacing.margin * 3
-    /// The search field on discovery's bar. Fixed rather than flexible: the
-    /// strip beside it is centred against a spacer of exactly this width, and a
-    /// field that grew would slide the strip off the midline.
-    static let discoverySearchField: CGFloat = 200
+    /// The search field on discovery's bar, once it has opened. The same width as
+    /// the search it opens like in servers and conversations.
+    static let discoverySearchField: CGFloat = 240
 
     // MARK: Activities
 

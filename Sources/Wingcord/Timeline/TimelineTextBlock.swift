@@ -200,6 +200,13 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
         text.editedMark.flatMap { selectionRects(for: $0.range).first }
     }
 
+    /// Where line `line`'s characters end, or nil past the last line.
+    func endOfLine(_ line: Int) -> Int? {
+        guard lineBoxes.indices.contains(line) else { return nil }
+        let range = lineBoxes[line].range
+        return range.location + range.length
+    }
+
     /// Where the character at `index` sits on its line's baseline, in the
     /// block's own coordinates — what Look Up draws its lit copy of the
     /// words from. Nil past the last line.

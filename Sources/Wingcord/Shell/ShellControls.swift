@@ -20,6 +20,9 @@ struct HeaderCircleButton: View {
     var systemImage: String
     var label: String
     var isActive = false
+    /// Its diameter. The header's own by default; on a row with a segmented strip,
+    /// the strip's, since controls side by side share one height.
+    var side: CGFloat = ShellMetrics.headerControl
     var action: () -> Void
 
     var body: some View {
@@ -27,7 +30,7 @@ struct HeaderCircleButton: View {
             Image(systemName: systemImage)
                 .font(.system(size: ShellMetrics.headerGlyph, weight: .medium))
                 .foregroundStyle(InkColor.solid)
-                .frame(width: ShellMetrics.headerControl, height: ShellMetrics.headerControl)
+                .frame(width: side, height: side)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)

@@ -336,14 +336,12 @@ enum DemoFixtures {
                 model.derivedPalettes[url] = [0xC9_9C_8A, 0x2B_35_39]
             }
         }
-        // **A bio that cannot be broken at a space**, because that is the whole
-        // of a defect that survived several sessions: `ProseSegment` splits on
-        // spaces and nothing else, so a long URL or a sentence of Chinese
-        // reaches the flow layout as one segment six hundred points wide. The
-        // layout used to report that upward and the card was then placed around
-        // a box it did not have — drifting left, with a blank strip down its
-        // right-hand side. A branch nothing on screen exercises is a branch that
-        // breaks silently, so one fixture profile carries both shapes.
+        // **A bio that cannot be broken at a space**, because that was the whole
+        // of a defect that survived several sessions, when prose was a flow of
+        // words: a long URL or a sentence of Chinese was one word six hundred
+        // points wide, and the card was placed around a box it did not have. A
+        // branch nothing on screen exercises is a branch that breaks silently, so
+        // one fixture profile carries both shapes.
         let unbreakableID = userIDs[3]
         if let user = users[unbreakableID] {
             users[unbreakableID] = User(

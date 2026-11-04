@@ -9,12 +9,11 @@ import WingcordCore
 /// opaque ground, so they are `.structuralSurface()` with a hairline. Glass over
 /// an opaque fill is §4 rule 3 and renders as a flat panel.
 ///
-/// **The bar is three rows and each one is centred on the same midline.** The
-/// tab picker sits directly above the heading strip, the search field rides the
-/// heading strip's own line at its trailing end, and a third row appears only
-/// while there is something to filter. Both pickers are the system's
-/// `NSSegmentedControl` — §1 — which brings its own material, so neither is
-/// inside a `GlassEffectContainer` and neither carries a `.glassEffect`.
+/// **The bar is the toolbar row** (Alex, 2026-11-04): Servers/Apps at its leading
+/// end, the headings on the page's midline, and the inbox, search and the way out at
+/// its trailing end. It used to be three rows, 140 points of them. Both pickers are
+/// the system's `NSSegmentedControl` — §1 — which brings its own material, so neither
+/// is inside a `GlassEffectContainer` and neither carries a `.glassEffect`.
 struct DiscoveryPane: View {
     /// A binding for the same reason `query` is one: a stored closure is a
     /// non-`Sendable` function value where the control's own binding wants a
@@ -121,12 +120,7 @@ struct DiscoveryPane: View {
         .softScrollEdgesVertical()
         .readingSurface()
         .floatingTopBar {
-            VStack(spacing: Spacing.snug) {
-                DiscoveryTabRow(tab: $tab, dismiss: dismiss)
-                DiscoveryHeadingRow(query: $query) { middle }
-            }
-            .surfaceColumn(Self.measure)
-            .padding(.bottom, Spacing.base)
+            DiscoveryToolbar(tab: $tab, query: $query, dismiss: dismiss) { middle }
         }
         .animation(motion.standard, value: tab)
         .animation(motion.standard, value: showsFilters)
@@ -273,87 +267,132 @@ struct DiscoveryPane: View {
     }
 }
 
-// MARK: - The bar's first row
+// MARK: - The toolbar row
 
-/// Servers ↔ Apps, on the column's midline, with the one way out at its end.
+/// Servers ↔ Apps, the headings, then the inbox, search and the way out.
 ///
-/// **Centred rather than parked at the leading edge**, so it sits directly over
-/// the heading strip below it and the two read as one control stack rather than
-/// as a toolbar with a strip under it. The close button is an overlay rather
-/// than a stack member for exactly that reason: a sibling in the row would push
-/// the picker off the midline by its own width.
-private struct DiscoveryTabRow: View {
+/// **The headings drop to a row of their own only where one row can't hold them**,
+/// which `HeaderBarLayout` decides with the open field's width reserved, so nothing
+/// moves when the field opens.
+private struct DiscoveryToolbar<Middle: View>: View {
     @Binding var tab: DiscoveryState.Tab
+    @Binding var query: String
     var dismiss: () -> Void
+    /// The BUILT view, not the builder — an escaping `@ViewBuilder` stored on a
+    /// view keeps a closure per instance and stops SwiftUI seeing the content as
+    /// structurally stable across updates.
+    @ViewBuilder var middle: Middle
+
+    /// Whether the field has the keyboard, in which case Escape is the field's.
+    @State private var isSearchFocused = false
+
+    private static var trailingAtWidest: CGFloat {
+        Metrics.discoverySearchField + 2 * (SearchField.height + Spacing.base)
+    }
 
     var body: some View {
-        SegmentedPicker(
-            options: DiscoveryState.Tab.allCases.map {
-                SegmentedPicker.Option($0, $0.title)
-            },
-            selection: $tab
-        )
-        .fixedSize()
-        .frame(maxWidth: .infinity)
-        .overlay(alignment: .trailing) {
-            Button(action: dismiss) {
-                Image(systemName: "xmark")
-                    .font(Typeface.controlGlyph)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
+        PageHeaderBar(wrapsCenter: true, reservedTrailing: Self.trailingAtWidest) {
+            SegmentedPicker(
+                options: DiscoveryState.Tab.allCases.map {
+                    SegmentedPicker.Option($0, $0.title)
+                },
+                selection: $tab
+            )
+            .fixedSize()
+        } center: {
+            middle
+        } trailing: {
+            HStack(spacing: Spacing.base) {
+                DiscoveryInboxButton()
+                DiscoverySearch(query: $query, isFocused: $isSearchFocused)
+                HeaderCircleButton(
+                    systemImage: "xmark",
+                    label: "Close discovery",
+                    side: SearchField.height,
+                    action: dismiss
+                )
+                .keyboardShortcut(isSearchFocused ? nil : .cancelAction)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(Ink.secondary)
-            .frame(height: Metrics.control + Spacing.base)
-            .padding(.horizontal, Spacing.base)
-            .glassEffect(.regular.interactive(), in: .capsule)
-            .keyboardShortcut(.cancelAction)
-            .accessibilityLabel(Text("Close discovery"))
         }
     }
 }
 
-// MARK: - The bar's second row
-
-/// The heading strip on the midline, the search field at the trailing end.
-///
-/// **Two arrangements, and the wide one is measured rather than hoped for.**
-/// The app strip is 670 points across at its six headings; centring it with the
-/// field beside it costs the field's width twice, so the row needs
-/// `670 + 2 × (200 + 12)` = 1,094 points and `Metrics.discoveryColumn` is sized
-/// to give it that. Where the window is narrower than that, `ViewThatFits`
-/// takes the second arrangement: the field moves to its own line above and the
-/// strip keeps the midline, which is the half of this that was asked for.
-private struct DiscoveryHeadingRow<Headings: View>: View {
-    @Binding var query: String
-    /// The BUILT view, not the builder — an escaping `@ViewBuilder` stored on a
-    /// view keeps a closure per instance and stops SwiftUI seeing the content as
-    /// structurally stable across updates.
-    @ViewBuilder var headings: Headings
+/// The inbox, as it is on every other page.
+private struct DiscoveryInboxButton: View {
+    @Environment(AppModel.self) private var model
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: Spacing.snug) {
-                // The counterweight. A spacer of the field's own width is what
-                // puts the strip on the column's midline rather than on the
-                // midline of what is left over.
-                Color.clear
-                    .frame(width: Metrics.discoverySearchField, height: 0)
-                Spacer(minLength: Spacing.snug)
-                headings
-                Spacer(minLength: Spacing.snug)
-                field
-            }
-            VStack(spacing: Spacing.base) {
-                field.frame(maxWidth: .infinity, alignment: .trailing)
-                headings
-            }
+        HeaderCircleButton(
+            systemImage: "tray",
+            label: "Inbox",
+            isActive: model.isInboxShown,
+            side: SearchField.height
+        ) {
+            model.toggleInbox()
+        }
+        .popover(isPresented: Binding(
+            get: { model.isInboxShown },
+            set: { if !$0, model.isInboxShown { model.toggleInbox() } }
+        ), arrowEdge: .bottom) {
+            InboxFlyout()
         }
     }
+}
 
-    private var field: some View {
-        DiscoverySearchField(query: $query)
-            .frame(width: Metrics.discoverySearchField)
+// MARK: - The search
+
+/// A circle that opens into the native field, as search does in servers and
+/// conversations: the same morph, with this page's own list behind it.
+///
+/// **Stays open while it holds words**, whatever has the keyboard, since a field
+/// that hid a live search would leave the grid filtered by something nobody can see.
+private struct DiscoverySearch: View {
+    /// **A binding, not a value plus a setter.** A stored closure property is a
+    /// non-`Sendable` function value where the field wants a main-actor isolated
+    /// one. Built one level up, where the store is.
+    @Binding var query: String
+    @Binding var isFocused: Bool
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
+    @State private var isOpen = false
+
+    private var showsField: Bool { isOpen || !query.isEmpty }
+
+    var body: some View {
+        Group {
+            if showsField {
+                SearchField(
+                    text: $query,
+                    takesFocus: true,
+                    onCancel: close,
+                    onEndEditing: endEditing
+                )
+                .frame(width: Metrics.discoverySearchField)
+                .transition(.materialize(from: .trailing, blurring: false))
+                .onAppear { isFocused = true }
+            } else {
+                HeaderCircleButton(systemImage: "magnifyingglass", label: "Search", side: SearchField.height) {
+                    isOpen = true
+                }
+                .transition(.materialize(from: .trailing, blurring: false))
+            }
+        }
+        .animation(motion.glassMorph, value: showsField)
+        // ⌘F.
+        .onChange(of: model.searchFocusRequest) { isOpen = true }
+    }
+
+    /// Escape: the words go, then the field.
+    private func close() {
+        query = ""
+        isOpen = false
+        isFocused = false
+    }
+
+    private func endEditing() {
+        isFocused = false
+        if query.isEmpty { isOpen = false }
     }
 }
 
@@ -381,7 +420,7 @@ private struct DiscoveryFilters: View {
             if !buckets.isEmpty {
                 Text("Show")
                     .font(Typeface.rowSubtitle)
-                    .foregroundStyle(Ink.tertiary)
+                    .foregroundStyle(Ink.secondary)
                 Menu {
                     ForEach(buckets) { bucket in
                         Button {
@@ -421,69 +460,23 @@ private struct DiscoveryFilters: View {
 }
 
 /// One filter menu's label: what is selected, and a mark saying it can change.
+///
+/// **A glass capsule as tall as the strip it stands in for**, on a row of them.
 private struct FilterMenuLabel: View {
     var title: String
 
     var body: some View {
         HStack(spacing: Spacing.tight) {
             Text(title)
-                .font(.system(.caption, weight: .medium))
+                .font(.system(.body, weight: .medium))
                 .foregroundStyle(Ink.primary)
                 .lineLimit(1)
             Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(Ink.tertiary)
-        }
-        .padding(.horizontal, Spacing.base)
-        .padding(.vertical, 5)
-        .background(Palette.surfaceRaised, in: .capsule)
-        .overlay { Capsule().strokeBorder(Palette.edge) }
-    }
-}
-
-// MARK: - The field
-
-/// The field, in the app's own shape.
-///
-/// A capsule over `Palette.surfaceRaised` with a still-life specular edge —
-/// the same field the forum board and the forward sheet carry. It never moves,
-/// so it catches no travelling specular highlight of its own, and without the
-/// edge it is a slightly lighter region on a near-black ground rather than a
-/// field.
-private struct DiscoverySearchField: View {
-    /// **A binding, not a value plus a setter.** A stored closure property is a
-    /// non-`Sendable` function value where `TextField` wants a main-actor
-    /// isolated one — the quick switcher's field has the same note. Built one
-    /// level up, where the store is.
-    @Binding var query: String
-
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        HStack(spacing: Spacing.base) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Ink.tertiary)
-            TextField("Search", text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(.body))
-                .focused($isFocused)
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(.caption))
-                        .foregroundStyle(Ink.tertiary)
-                        .contentShape(.circle)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("Clear the search"))
-            }
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Ink.secondary)
         }
         .padding(.horizontal, Spacing.snug)
-        .frame(height: Metrics.control + Spacing.tight)
-        .background(Palette.surfaceRaised, in: .capsule)
-        .overlay { Capsule().strokeBorder(Palette.edge) }
-        .contentShape(.capsule)
-        .onTapGesture { isFocused = true }
+        .frame(height: SearchField.height)
+        .glassEffect(.regular.interactive(), in: .capsule)
     }
 }

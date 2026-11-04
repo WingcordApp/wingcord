@@ -460,6 +460,11 @@ struct ProfileGroundFill: ViewModifier {
             // What this card's flyouts wear: see `profileFlyoutAppearance()`.
             .environment(\.profileFlyoutScheme, ground.wantsDarkInk ? .light : .dark)
             .environment(\.profileWearsTheme, ground != .neutral)
+            // **Everything on a profile can be selected, by default.** It was added
+            // one `Text` at a time, which is how a bio's roles and activities came
+            // to be the ones nobody could copy. Here it's the rule, and a new line
+            // on a profile gets it without anybody remembering to ask.
+            .textSelection(.enabled)
     }
 
     @ViewBuilder

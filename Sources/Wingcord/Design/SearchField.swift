@@ -27,6 +27,9 @@ struct SearchField: View {
     var takesFocus = false
     /// Escape, where it closes the search rather than only clearing the words.
     var onCancel: (() -> Void)?
+    /// When the field stops being edited: for one that collapses when it's left
+    /// empty.
+    var onEndEditing: (() -> Void)?
 
     /// The toolbar search item's height, and the segmented strip's.
     static var height: CGFloat { SegmentedPicker<Int>.stripHeight }
@@ -34,7 +37,7 @@ struct SearchField: View {
     var body: some View {
         SearchFieldControl(
             prompt: prompt, text: $text, onMove: onMove, onSubmit: onSubmit,
-            takesFocus: takesFocus, onCancel: onCancel
+            takesFocus: takesFocus, onCancel: onCancel, onEndEditing: onEndEditing
         )
             .controlSize(.large)
             .padding(.horizontal, 12)
@@ -50,6 +53,7 @@ private struct SearchFieldControl: NSViewRepresentable {
     var onSubmit: (() -> Void)?
     var takesFocus = false
     var onCancel: (() -> Void)?
+    var onEndEditing: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text)
@@ -85,6 +89,7 @@ private struct SearchFieldControl: NSViewRepresentable {
         context.coordinator.onMove = onMove
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onCancel = onCancel
+        context.coordinator.onEndEditing = onEndEditing
         if field.stringValue != text { field.stringValue = text }
         if field.placeholderString != prompt { field.placeholderString = prompt }
     }
@@ -143,6 +148,7 @@ private struct SearchFieldControl: NSViewRepresentable {
         var onMove: ((Int) -> Void)?
         var onSubmit: (() -> Void)?
         var onCancel: (() -> Void)?
+        var onEndEditing: (() -> Void)?
 
         init(text: Binding<String>) {
             self.text = text
@@ -155,6 +161,10 @@ private struct SearchFieldControl: NSViewRepresentable {
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSSearchField else { return }
             write(field.stringValue)
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            onEndEditing?()
         }
 
         /// The arrows and Return, where the field leads a list.

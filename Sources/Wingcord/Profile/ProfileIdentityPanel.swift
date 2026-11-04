@@ -255,6 +255,7 @@ struct ProfileIdentityPanel: View {
                     markdown: bio,
                     font: .system(.subheadline),
                     color: InkColor.primary,
+                    mentions: model.mentionContext(),
                     onEmoji: openEmoji,
                     onLink: openLink
                 )

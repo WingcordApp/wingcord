@@ -544,6 +544,7 @@ private struct DetailColumn: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 DetailHeader(layout: layout)
             }
+            .environment(\.shellLayout, layout)
             .modal(isPresented: Binding(
                 get: { model.channelChrome.isTopicShown },
                 set: { if !$0 { model.openTopicChannelID = nil } }
