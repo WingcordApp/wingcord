@@ -1989,6 +1989,15 @@ final class SessionController {
     /// they land. Making the card wait would trade a complete card for a
     /// spinner, and the fields that arrive late are decorative.
     func loadProfile(of userID: UserID, inGuild guildID: GuildID?) {
+        // **Not again within a minute** — a member list clicked through, a
+        // card closed and reopened — except the reader's own, which an edit
+        // has to be able to refresh. The card draws what it has meanwhile.
+        if userID != model.currentUserID,
+           let fetched = model.profileFetchedAt[ProfileFetchKey(userID: userID, guildID: guildID)],
+           Date.now.timeIntervalSince(fetched) < Self.profileFreshness
+        {
+            return
+        }
         // Marked loading on the click, not a hop later, so the card that opens
         // with it already shows its skeleton.
         guard beginProfileFetch(of: userID) else { return }
@@ -2001,6 +2010,10 @@ final class SessionController {
         guard beginProfileFetch(of: userID) else { return }
         await applyProfile(of: userID, inGuild: guildID)
     }
+
+    /// How long a fetched profile is taken as current before an open asks
+    /// again.
+    static let profileFreshness: TimeInterval = 60
 
     private func beginProfileFetch(of userID: UserID) -> Bool {
         guard profileFetches.insert(userID).inserted else { return false }
@@ -2016,6 +2029,7 @@ final class SessionController {
         do {
             let fetched = try await rest.profile(of: userID, inGuild: guildID)
             model.profileFetchFailures.remove(userID)
+            model.profileFetchedAt[ProfileFetchKey(userID: userID, guildID: guildID)] = .now
             let user = fetched.user
             // **What the card will actually draw from, by value.** The
             // shape dump beside this one names the response's KEYS, which
@@ -3213,7 +3227,11 @@ extension SessionController {
             guard let self else { return }
             defer { model.loadingGuildSurfaces.remove(fetch) }
             do {
-                model.gameServers[guildID] = try await rest.gameServers(inGuild: guildID)
+                let servers = try await rest.gameServers(inGuild: guildID)
+                model.gameServers[guildID] = servers
+                // Their games, for the box art each card wears — one `/games`
+                // call for all of them, and none for a game already known.
+                await loadGames(ids: servers.compactMap(\.gameID))
             } catch {
                 // 403 and 404 both mean the same thing to the row that reads
                 // this: there is nothing to show, and nothing to ask again.

@@ -15,7 +15,7 @@ struct CreateChannelSheet: View {
     var request: ChannelCreationRequest
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
 
     @State private var kind: ChannelKind
     @State private var name = ""

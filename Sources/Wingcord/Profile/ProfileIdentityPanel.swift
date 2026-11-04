@@ -333,6 +333,7 @@ struct ProfileIdentityPanel: View {
                     avatarSide: Self.avatarSide,
                     margin: Self.gutter,
                     fill: ground.statusBubbleFill,
+                    surface: .fullProfile,
                     ink: ground.statusBubbleInk,
                     answer: model.statusAnswering(for: profile),
                     isSelectable: true

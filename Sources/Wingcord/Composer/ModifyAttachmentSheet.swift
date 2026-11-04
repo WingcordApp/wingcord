@@ -17,7 +17,7 @@ struct ModifyAttachmentSheet: View {
     @State private var filename: String
     @State private var altText: String
     @State private var isSpoiler: Bool
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @Environment(\.displayScale) private var displayScale
 
     init(attachment: PendingAttachment, save: @escaping (String, String?, Bool) -> Void) {
@@ -42,7 +42,7 @@ struct ModifyAttachmentSheet: View {
             preview
             SheetField(title: "Filename") {
                 TextField("", text: $filename)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
                     .onSubmit {
                         commit()
                         dismiss()
@@ -52,7 +52,7 @@ struct ModifyAttachmentSheet: View {
                 SheetField(title: "Description (Alt Text)") {
                     TextField("Add a description", text: $altText, axis: .vertical)
                         .lineLimit(2...6)
-                        .textFieldStyle(.roundedBorder)
+                        .modalField()
                 }
             }
             Toggle("Mark as spoiler", isOn: Binding(get: { isSpoiler || nameSpoils }, set: { isSpoiler = $0 }))

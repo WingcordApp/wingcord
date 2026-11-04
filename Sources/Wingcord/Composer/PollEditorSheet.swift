@@ -38,7 +38,7 @@ struct PollEditorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            ModalHeader(title: "Create a Poll", close: requestClose)
             ScrollView {
                 form
             }
@@ -48,7 +48,8 @@ struct PollEditorSheet: View {
             footer
         }
         .frame(width: Self.width)
-        .background(Palette.surface)
+        // Thrown away, a poll with words in it would lose them: the ✕ asks.
+        .modalDismissDisabled(!draft.isUntouched)
         .animation(motion.standard, value: draft.answers.map(\.id))
         .animation(motion.standard, value: problems)
         .onAppear { focus = .question }
@@ -66,36 +67,19 @@ struct PollEditorSheet: View {
             }
             problems.removeAll { $0 != .noQuestion }
         }
-        .alert("Are you sure?", isPresented: $isConfirmingExit) {
-            Button("Exit", role: .destructive, action: close)
-            Button("Back to editing", role: .cancel) {}
-        } message: {
-            Text("Are you sure you want to exit? Any changes made will be lost if you exit now.")
+        // Discord's words; red, because losing the poll is the result nobody
+        // chose (D11b).
+        .modal(isPresented: $isConfirmingExit, style: .alert) {
+            ModalAlert(
+                hero: .symbol("exclamationmark.triangle.fill", tint: .orange),
+                title: "Are you sure?",
+                message: Text("Are you sure you want to exit? Any changes made will be lost if you exit now."),
+                actions: [
+                    .cancel("Back to editing"),
+                    .destructive("Exit", symbol: "xmark.circle") { close() },
+                ]
+            )
         }
-    }
-
-    // MARK: Chrome
-
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text("Create a Poll")
-                .font(.system(.title3, weight: .semibold))
-                .foregroundStyle(Ink.primary)
-            Spacer()
-            Button(action: requestClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Ink.secondary)
-            .keyboardShortcut(.cancelAction)
-            .accessibilityLabel(Text("Close"))
-        }
-        .padding(.horizontal, Spacing.group)
-        .padding(.top, Spacing.group)
-        .padding(.bottom, Spacing.margin)
     }
 
     private var form: some View {
@@ -153,25 +137,15 @@ struct PollEditorSheet: View {
             if model.canScheduleMessages(in: request.channelID) {
                 scheduleControl
             }
-            Button(action: submit) {
-                Group {
-                    if isSubmitting {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Post")
-                    }
-                }
-                .font(.system(.body, weight: .semibold))
-                .padding(.horizontal, Spacing.group)
-                .frame(height: Metrics.composerControlHeight)
-                .background(Palette.accent, in: .capsule)
-                .contentShape(.capsule)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .disabled(isSubmitting)
             // Discord's ⌘↩ from anywhere in the form.
-            .keyboardShortcut(.return, modifiers: .command)
+            ModalButton(
+                title: "Post",
+                symbolName: "paperplane.fill",
+                role: .act,
+                isWorking: isSubmitting,
+                shortcut: KeyboardShortcut(.return, modifiers: .command),
+                action: submit
+            )
         }
         .padding(.horizontal, Spacing.group)
         .padding(.vertical, Spacing.margin)

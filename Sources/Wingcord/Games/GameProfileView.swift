@@ -37,6 +37,9 @@ struct GameProfileView: View {
     @State private var isHeaderCollapsed = false
     /// How far the main column has travelled, for the ambient field's parallax.
     @State private var scrollOffset: CGFloat = 0
+    /// Overview or Communities — the second exists only for a game that lists
+    /// three servers or more (`GamePresentation.hasCommunities`).
+    @State private var tab: GameProfileTab = .overview
 
     /// The margin the three floating objects share. 22 in the handoff.
     private static let inset: CGFloat = 18
@@ -64,10 +67,19 @@ struct GameProfileView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            columns
+            switch tab {
+            case .overview:
+                columns
+                    .transition(.opacity)
+            case .communities:
+                GameCommunitiesPage(gameID: game.gameID)
+                    .padding(.top, headerReserve)
+                    .transition(.opacity)
+            }
             GameHeaderBar(
                 game: game,
                 isCondensed: isHeaderCollapsed,
+                tab: game.hasCommunities ? $tab : nil,
                 didCopyLink: didCopyLink,
                 copyLink: copyLink,
                 dismiss: dismiss
@@ -87,6 +99,16 @@ struct GameProfileView: View {
         }
         .shadow(color: .black.opacity(0.5), radius: 36, y: 14)
         .animation(motion.standard, value: isHeaderCollapsed)
+        .animation(motion.fade, value: tab)
+        // The Communities page scrolls by itself and never condenses the
+        // header, so it opens on the whole bar.
+        .onChange(of: tab) { _, _ in isHeaderCollapsed = false }
+        .onAppear {
+            if let initial = model.gameProfileInitialTab, game.hasCommunities {
+                tab = initial
+                model.gameProfileInitialTab = nil
+            }
+        }
         .onDisappear { copyReset?.cancel() }
     }
 
@@ -302,6 +324,8 @@ struct GameProfileView: View {
 private struct GameHeaderBar: View {
     var game: GamePresentation
     var isCondensed: Bool
+    /// The page tabs — nil for a game with nothing but its overview.
+    var tab: Binding<GameProfileTab>?
     var didCopyLink: Bool
     var copyLink: () -> Void
     var dismiss: () -> Void
@@ -353,6 +377,14 @@ private struct GameHeaderBar: View {
                 }
             }
             Spacer(minLength: Spacing.snug)
+            // Discord's tabs, as the native capsule strip the inbox uses.
+            if let tab {
+                SegmentedPicker(
+                    options: [.init(.overview, "Overview"), .init(.communities, "Communities")],
+                    selection: tab
+                )
+                .fixedSize()
+            }
             circle(didCopyLink ? "checkmark" : "link", didCopyLink ? "Copied" : "Copy the game's id", copyLink)
             circle("xmark", "Close", dismiss)
                 .keyboardShortcut(.cancelAction)
@@ -419,3 +451,10 @@ private struct RankChip: View {
         .accessibilityLabel(Text("Ranked number \(rank) globally"))
     }
 }
+
+/// A game profile's pages — Discord's `OVERVIEW` and `COMMUNITIES`.
+enum GameProfileTab: Hashable, Sendable {
+    case overview
+    case communities
+}
+

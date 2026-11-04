@@ -1,7 +1,9 @@
 import SwiftUI
 import WingcordCore
 
-/// The server's banner: artwork behind the channel list, rounded like a card.
+/// The server's banner: artwork behind the channel list, **a plain rectangle**
+/// across the column (Alex, 2026-10-26, screenshot 19 — "this weird rounded
+/// shape": it was rounded on the leading side only, inset from the rail).
 ///
 /// **A fixed height that travels with the list, and nothing else.** It used to
 /// grow and zoom when the list was pulled past its top, driven by the scroll
@@ -51,24 +53,9 @@ struct SidebarBanner: View {
         artwork
             .frame(height: layout.bannerRestingHeight)
             .overlay(alignment: .bottom) { bottomScrim }
-            // **Rounded on the leading side, square on the trailing one.**
-            //
-            // The trailing edge is not an edge of the banner — it is where the
-            // sidebar column ends and the reading surface begins. A radius there
-            // rounds the artwork away from a boundary that is already a hard
-            // vertical line, which reads as the picture having shrunk back from
-            // the seam. The leading side has no such boundary: it meets the rail
-            // and the window's own corner, so it keeps its radius.
-            .clipShape(
-                .rect(
-                    topLeadingRadius: Radius.card,
-                    bottomLeadingRadius: Radius.card,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 0,
-                    style: .continuous
-                )
-            )
-            .padding(.leading, Spacing.base)
+            // Edge to edge, square: the column's own band, as Discord draws
+            // it. Its foot is the scrim's soft edge, not a corner.
+            .clipped()
             .offset(y: -layout.travel)
             .allowsHitTesting(false)
     }

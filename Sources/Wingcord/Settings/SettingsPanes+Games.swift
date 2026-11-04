@@ -62,25 +62,16 @@ struct ActivityPane: View {
                 SettingsValueRow(
                     title: running.name,
                     value: "Detection off",
-                    help: "Switched off in Registered Games below — not shown as your activity."
+                    help: "Switched off in Registered Games below, so it isn\u{2019}t shown."
                 )
             } else {
                 SettingsValueRow(
                     title: "Nothing detected",
                     value: "—",
-                    help: "Start a game and it appears here. Wingcord watches which applications "
-                        + "are running; it never reads what is in them."
+                    help: "Start a game and it shows up here. Wingcord sees which apps are open, "
+                        + "never what\u{2019}s in them."
                 )
             }
-        }
-        if model.detectedGame == nil {
-            SettingsFootnote(
-                "Discord's detection list has sixty-two Mac games on it and eleven thousand "
-                    + "Windows ones, so most titles are recognised through Whisky, CrossOver or "
-                    + "Game Porting Toolkit rather than natively. Anything it does not know can "
-                    + "be added by hand below.",
-                symbolName: "gamecontroller"
-            )
         }
     }
 
@@ -99,19 +90,14 @@ struct ActivityPane: View {
             SettingsCard {
                 SettingsToggle(
                     title: "Share my activity",
-                    help: "Lets friends and servers see the game you are playing.",
+                    help: "Friends and servers see what you\u{2019}re playing. It follows your account, "
+                        + "so it\u{2019}s the same everywhere you\u{2019}re signed in.",
                     isOn: Binding(
                         get: { privacy.sharesCurrentGame },
                         set: { model.setSharesCurrentGame($0) }
                     )
                 )
             }
-            SettingsFootnote(
-                "This one follows your account rather than this Mac — it is the same switch "
-                    + "Discord calls Share my activity, and turning it off here turns it off "
-                    + "everywhere you are signed in.",
-                symbolName: "icloud"
-            )
         }
     }
 
@@ -150,9 +136,8 @@ struct ActivityPane: View {
             .disabled(!privacy.sharesCurrentGame)
             SettingsFootnote(
                 privacy.sharesCurrentGame
-                    ? "Your friends always see it. This is about servers — and \"small\" means "
-                        + "two hundred members or fewer, which is Discord's own line."
-                    : "These are ignored while Share my activity is off.",
+                    ? "Friends always see it. A small server has 200 members or fewer."
+                    : "Turn on Share my activity to choose.",
                 symbolName: privacy.sharesCurrentGame ? "person.2" : "exclamationmark.triangle"
             )
         }
@@ -195,8 +180,7 @@ struct ActivityPane: View {
                 )
             }
             SettingsFootnote(
-                "Some games let people jump straight into your session from your activity. "
-                    + "These decide whether they need to ask.",
+                "Some games let people join straight from your activity. These decide who has to ask.",
                 symbolName: "person.badge.plus"
             )
         }
@@ -219,11 +203,12 @@ struct AddGameRow: View {
             // Discord's words.
             SettingsControlRow(
                 "Not seeing your game?",
-                help: "Add anything that is running and has a window — a game Discord does not "
-                    + "know, or an application that is not a game at all."
+                help: "Add anything that\u{2019}s open and has a window \u{2014} even an app "
+                    + "that isn\u{2019}t a game."
             ) {
                 Button("Add it!") { isPicking = true }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
                     .popover(isPresented: $isPicking, arrowEdge: .bottom) {
                         candidateList
@@ -289,14 +274,13 @@ struct OverlayPane: View {
         SettingsCard {
             SettingsToggle(
                 title: "Show the overlay over games",
-                help: "Wingcord draws over whatever you are playing. Nothing is injected into "
-                    + "the game — it is a window floating above it.",
+                help: "Your friends and messages, floating over whatever you\u{2019}re playing. "
+                    + "Nothing touches the game itself.",
                 isOn: $settings.isOverlayEnabled
             )
         }
         SettingsFootnote(
-            "It works over a game running windowed or borderless-fullscreen, which on a Mac is "
-                + "very nearly all of them. A game that takes the display outright will cover it.",
+            "Works over windowed and borderless games. One that takes over the whole display covers it.",
             symbolName: "macwindow.on.rectangle"
         )
 
@@ -310,26 +294,23 @@ struct OverlayPane: View {
                 ) { navigate(.shortcuts) }
             }
             SettingsFootnote(
-                "Escape closes the overlay, clicking the dimmed background closes it, and "
-                    + "holding ⌥ hides every widget for as long as you hold it.",
+                "Esc or a click outside closes it. Hold \u{2325} to hide every widget.",
                 symbolName: "escape"
             )
         }
 
-        SettingsGroup("While you are playing") {
+        SettingsGroup("While you\u{2019}re playing") {
             SettingsCard {
                 SettingsToggle(
                     title: "Let pinned widgets be clicked",
-                    help: "Pinned widgets take clicks even while the overlay is asleep. Handy "
-                        + "for muting; awkward if your crosshair is over one. A message toast "
-                        + "answers a click either way.",
+                    help: "Pinned widgets answer clicks while you play. Handy for muting, "
+                        + "awkward under a crosshair.",
                     isOn: $settings.overlayHasClickableRegions
                 )
                 CardDivider()
                 SettingsToggle(
                     title: "Show messages",
-                    help: "Messages appear over the game instead of in Notification Center, "
-                        + "which is behind it.",
+                    help: "Messages pop up over the game instead of behind it.",
                     isOn: $settings.overlayShowsNotifications
                 )
             }
@@ -357,7 +338,7 @@ struct OverlayPane: View {
             SettingsCard {
                 CardHeaderRow(
                     title: "Show names",
-                    help: "Whether a name is drawn beside each face."
+                    help: "A name beside each face."
                 )
                 SettingsSegmentedControl(
                     selection: $settings.overlayVoiceNames,
@@ -385,11 +366,7 @@ struct OverlayPane: View {
                     format: { String(Int($0)) }
                 )
             }
-            SettingsFootnote(
-                "Whoever is talking is always shown first, so the cap never hides the person "
-                    + "making noise.",
-                symbolName: "waveform"
-            )
+            SettingsFootnote("Whoever\u{2019}s talking always comes first.", symbolName: "waveform")
         }
 
         SettingsGroup("Widgets") {
@@ -401,9 +378,8 @@ struct OverlayPane: View {
                 }
             }
             SettingsFootnote(
-                "A pinned widget stays on screen while you are playing. Everything else appears "
-                    + "only when you open the overlay. Drag them where you want them from the "
-                    + "overlay's own arrange button.",
+                "Pinned widgets stay up while you play; the rest wait for the overlay. "
+                    + "Arrange them from the overlay itself.",
                 symbolName: "pin"
             )
             // **The way back, and it has to be here rather than on the
@@ -488,7 +464,7 @@ private struct WidgetRow: View {
     private var help: String? {
         if StreamerMode.shared.hiddenOverlayWidgets.contains(kind) { return "Hidden while Streamer Mode is on." }
         switch kind {
-        case .activity: return "What you are showing as your activity, and the switches that change it."
+        case .activity: return "What you\u{2019}re showing as your activity, with its switches."
         case .performance: return "Processor, graphics, memory and heat, once a second."
         default: return nil
         }
@@ -550,14 +526,24 @@ private struct OverlayLayoutCard: View {
                 }
             }
         }
-        .alert(
-            "Rename Layout",
+        .modal(
             isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
-            presenting: renaming
-        ) { saved in
-            TextField("Name", text: $name)
-            Button("Rename") { controller.renameSavedLayout(saved.id, to: name) }
-            Button("Cancel", role: .cancel) {}
+            style: .alert
+        ) {
+            if let saved = renaming {
+                ModalAlert(
+                    hero: .symbol("rectangle.3.group"),
+                    title: "Rename Layout",
+                    actions: [
+                        .cancel(),
+                        .act("Rename", symbol: "pencil", enabled: !name.trimmingCharacters(in: .whitespaces).isEmpty) {
+                            controller.renameSavedLayout(saved.id, to: name)
+                        },
+                    ]
+                ) {
+                    ModalTextField(placeholder: "Name", text: $name, symbolName: "pencil")
+                }
+            }
         }
     }
 
@@ -592,15 +578,14 @@ struct ClipsPane: View {
         SettingsCard {
             SettingsToggle(
                 title: "Keep the last moments",
-                help: "Wingcord keeps your game while you play, so the clip key can save what "
-                    + "already happened.",
+                help: "Wingcord holds on to the last moments of your game, so the clip key can "
+                    + "save what just happened.",
                 isOn: $settings.clipsEnabled
             )
         }
         SettingsFootnote(
-            "Nothing is written to disk until you press the key. It runs only while a game is in "
-                + "front, and it captures the game's own window — not your screen, not this app, "
-                + "not your notifications.",
+            "Nothing is saved until you press the key, and only the game\u{2019}s window is kept "
+                + "\u{2014} never your screen or your notifications.",
             symbolName: "lock.shield"
         )
 
@@ -651,9 +636,8 @@ struct ClipsPane: View {
                 }
             }
             SettingsFootnote(
-                "Your clips keep your microphone, the soundboard, and everybody in the call whose own "
-                    + "setting allows it — each on a track of its own, so the editor can take them "
-                    + "apart. Nobody's voice is kept in a stage.",
+                "Clips keep your mic, the soundboard and everyone who allows it, each on its own "
+                    + "track. Stages are never recorded.",
                 symbolName: "person.wave.2"
             )
         }
@@ -679,7 +663,7 @@ struct ClipsPane: View {
                 CardDivider()
                 SettingsToggle(
                     title: "Laughter and shouting",
-                    help: "Listens to what a clip may keep — the call's voices and your microphone.",
+                    help: "Listens to the call and your mic for a laugh or a shout.",
                     isOn: Binding(
                         get: { settings.autoClipsHearsReactions },
                         set: { settings.autoClipsHearsReactions = $0; model.autoClips.refresh() }
@@ -698,10 +682,9 @@ struct ClipsPane: View {
             .disabled(!settings.clipsEnabled)
             SettingsFootnote(
                 settings.clipsEnabled
-                    ? "Auto Clips wait in the library's To Review until you keep them or throw them away. "
-                        + "Listening happens on this Mac, with Apple's own sound classifier — nothing is sent "
-                        + "anywhere, and nothing is heard while no game is in front."
-                    : "Auto Clips needs Keep the last moments, at the top of this page.",
+                    ? "Auto Clips wait in the library\u{2019}s To Review. The listening happens on "
+                        + "this Mac, and only while a game is in front."
+                    : "Turn on Keep the last moments first.",
                 symbolName: "sparkles"
             )
         }
@@ -722,9 +705,8 @@ struct ClipsPane: View {
                 ) { model.capture.showBar() }
             }
             SettingsFootnote(
-                "A recording keeps the screen without the cursor, the camera as a file of its own, your "
-                    + "microphone and the Mac's sound as separate tracks, and where the cursor went — so "
-                    + "the editor can put them together any way. Wingcord's own sound, a call, is never in it.",
+                "Screen, camera, mic and sound each get their own track, so the editor can mix "
+                    + "them any way. Calls are never recorded.",
                 symbolName: "record.circle"
             )
         }
@@ -785,10 +767,9 @@ struct ClipsPane: View {
         let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
         let budget = ByteCountFormatter.string(fromByteCount: Int64(ClipRecorder.memoryBudget), countStyle: .memory)
         return bytes > ClipRecorder.memoryBudget
-            ? "About \(size) while a game is in front. Past \(budget) the oldest seconds wait in a cache "
-                + "file instead of memory, and are gone when the game is."
-            : "About \(size) of memory while a game is in front — the picture, at this quality, for the "
-                + "whole length. Nothing while one is not."
+            ? "About \(size) while a game is in front. Past \(budget), the oldest seconds wait on "
+                + "disk until the game closes."
+            : "About \(size) of memory while a game is in front, and none otherwise."
     }
 
     private var callClippingValue: String {
@@ -839,10 +820,12 @@ private struct ClipRow: View {
         SettingsControlRow(clip.name, help: caption) {
             HStack(spacing: Spacing.base) {
                 Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([clip.url]) }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
                 Button("Delete", role: .destructive, action: remove)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
             }
         }

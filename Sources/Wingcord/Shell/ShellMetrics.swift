@@ -83,7 +83,7 @@ nonisolated enum SidebarPageLayout: String, CaseIterable, Identifiable, Sendable
     var label: String {
         switch self {
         case .twoPages: "Two Pages"
-        case .threeStops: "Three Stops"
+        case .threeStops: "Three Pages"
         }
     }
 }

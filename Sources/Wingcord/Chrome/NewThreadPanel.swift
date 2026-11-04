@@ -63,14 +63,20 @@ struct NewThreadPanel: View {
             guard !isSubmitting else { return }
             model.abandonNewThread(request, unsentText: isDiscarded ? "" : text)
         }
-        .alert("Are you sure you want to go?", isPresented: $isConfirmingExit) {
-            Button("Exit", role: .destructive) {
-                isDiscarded = true
-                model.closeNewThread()
-            }
-            Button("Back to editing", role: .cancel) {}
-        } message: {
-            Text("Any changes you made will be lost if you exit now.")
+        // Red: losing the words is the result nobody chose (D11b).
+        .modal(isPresented: $isConfirmingExit, style: .alert) {
+            ModalAlert(
+                hero: .symbol("exclamationmark.triangle.fill", tint: .orange),
+                title: "Are you sure you want to go?",
+                message: Text("Any changes you made will be lost if you exit now."),
+                actions: [
+                    .cancel("Back to editing"),
+                    .destructive("Exit", symbol: "xmark.circle") {
+                        isDiscarded = true
+                        model.closeNewThread()
+                    },
+                ]
+            )
         }
     }
 
@@ -126,7 +132,7 @@ struct NewThreadPanel: View {
                         get: { name },
                         set: { name = String($0.prefix(Self.nameLimit)) }
                     ))
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
                     .onSubmit(submit)
                     .accessibilityLabel(Text(form.isFromMessage ? "Thread Name (Optional)" : "Thread Name"))
                     if let error = refusal?.nameError {

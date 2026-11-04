@@ -36,6 +36,10 @@ public struct DiscoverableGuild: Hashable, Sendable, Identifiable {
     public var memberCount: Int
     public var onlineCount: Int
     public var boostCount: Int
+    /// The language the server speaks — `preferred_locale`, which Discord's
+    /// own conversion reads (`449054`'s `jE`) and the Communities tab filters
+    /// by. Nil where a route leaves it out.
+    public var preferredLocale: String?
 
     public init(
         id: GuildID,
@@ -48,7 +52,8 @@ public struct DiscoverableGuild: Hashable, Sendable, Identifiable {
         features: Set<String> = [],
         memberCount: Int = 0,
         onlineCount: Int = 0,
-        boostCount: Int = 0
+        boostCount: Int = 0,
+        preferredLocale: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -61,6 +66,7 @@ public struct DiscoverableGuild: Hashable, Sendable, Identifiable {
         self.memberCount = memberCount
         self.onlineCount = onlineCount
         self.boostCount = boostCount
+        self.preferredLocale = preferredLocale
     }
 
     /// Initials for a server with no icon.

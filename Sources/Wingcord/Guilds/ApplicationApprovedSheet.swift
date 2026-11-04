@@ -11,74 +11,29 @@ struct ApplicationApprovedSheet: View {
     var notice: ApprovedApplicationNotice
 
     @Environment(AppModel.self) private var model
-
-    private static let iconSide: CGFloat = 72
+    @Environment(\.isTopModal) private var isTop
 
     var body: some View {
-        VStack(spacing: Spacing.margin) {
-            serverIcon
-                .padding(.top, Spacing.group)
-
-            VStack(spacing: Spacing.base) {
-                // Discord's two paragraphs: the phrase, then the server.
-                VStack(spacing: 2) {
-                    Text("You are now a member of")
-                    Text(verbatim: "\(notice.serverName)!")
-                }
-                .font(.system(.title3, weight: .semibold))
-                .foregroundStyle(Ink.primary)
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isHeader)
-
-                Text("Hooray! It's time to talk and meet your new community.")
-                    .font(.system(.subheadline, weight: .medium))
-                    .foregroundStyle(Ink.secondary)
-            }
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
-
-            Button(action: acknowledge) {
-                Text("Let's Go!")
-                    .font(.system(.body, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: Metrics.composerControlHeight)
-                    .background(Palette.accent, in: .capsule)
-                    .contentShape(.capsule)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .keyboardShortcut(.defaultAction)
-            .padding(.top, Spacing.base)
-        }
-        .padding(.horizontal, Spacing.group)
-        .padding(.bottom, Spacing.group)
-        .frame(width: 400)
-        .background(Palette.surface)
+        let guild = model.guilds[notice.guildID]
+        ModalAlert(
+            hero: .serverIcon(
+                guild?.iconHash.flatMap { CDN.guildIcon(guildID: notice.guildID, hash: $0, side: ModalHero.side) },
+                monogram: guild?.monogram ?? "",
+                badge: "checkmark.seal.fill"
+            ),
+            // Discord's two paragraphs: the phrase, then the server.
+            title: "You are now a member of \(notice.serverName)!",
+            message: Text("Hooray! It's time to talk and meet your new community."),
+            actions: [
+                ModalAlertAction(title: "Let's Go!", symbolName: "arrow.right", role: .act, closes: false, perform: acknowledge),
+            ]
+        )
         // Escape is a close, and a close is the acknowledgement.
         .background {
             Button("", action: acknowledge)
-                .keyboardShortcut(.cancelAction)
+                .keyboardShortcut(isTop ? .cancelAction : nil)
                 .hidden()
         }
-    }
-
-    private var serverIcon: some View {
-        let guild = model.guilds[notice.guildID]
-        return RemoteImage(
-            url: guild?.iconHash.flatMap {
-                CDN.guildIcon(guildID: notice.guildID, hash: $0, side: Self.iconSide)
-            },
-            side: Self.iconSide
-        ) {
-            Text(guild?.monogram ?? "")
-                .font(.system(size: Self.iconSide * 0.32, weight: .bold))
-                .foregroundStyle(Ink.secondary)
-                .frame(width: Self.iconSide, height: Self.iconSide)
-                .background(Palette.surfaceRaised)
-        }
-        .frame(width: Self.iconSide, height: Self.iconSide)
-        .clipShape(.rect(cornerRadius: Self.iconSide * 0.3, style: .continuous))
-        .accessibilityHidden(true)
     }
 
     private func acknowledge() {

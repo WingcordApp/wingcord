@@ -9,7 +9,13 @@ import UniformTypeIdentifiers
 // avatar. One control, because three file pickers is three places to forget the
 // size limit.
 
-/// A preview, a Change button and a Remove button.
+/// The picture, then Change and Remove beside it — one row (D10f).
+///
+/// **An image well, the HIG's way** ("they can also drag in a new image
+/// without selecting the well first"): a file dropped anywhere on the row is
+/// taken as a pick, and a click on the picture opens the panel the button
+/// does. The picture keeps its own shape — a banner is drawn 16:9, not in a
+/// square — and an empty one says it can be filled.
 ///
 /// **The size limit is stated, not enforced.** Discord's route is the authority
 /// and refuses an oversized file with a message worth showing; a client that
@@ -21,6 +27,8 @@ struct ImageWell: View {
     var detail: String
     var url: URL?
     var isCircular: Bool
+    /// Width over height. A banner's is 16:9, so its picture is drawn wide.
+    var aspectRatio: CGFloat = 1
     /// Whether a GIF is offered at all — an animated icon is a Level 1 perk,
     /// and a GIF picked for a server without it uploads as a still.
     var allowsAnimated = true
@@ -28,59 +36,108 @@ struct ImageWell: View {
     /// Nil where there is nothing to remove.
     var onRemove: (() -> Void)?
 
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.motion) private var motion
     @State private var failure: String?
+    @State private var isTargeted = false
+    @State private var isHovered = false
+
+    private static let height: CGFloat = 52
 
     var body: some View {
         HStack(spacing: SettingsMetrics.navigationIconGap) {
-            preview
+            Button(action: pick) { preview }
+                .buttonStyle(.plain)
+                .onHover { isHovered = $0 }
+                .accessibilityLabel(Text(url == nil ? "Choose a picture" : "Change the picture"))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(SettingsType.rowTitle)
                     .foregroundStyle(Ink.primary)
-                Text(failure ?? detail)
+                Text(failure ?? (detail.isEmpty ? dropHint : detail))
                     .font(SettingsType.rowSubtitle)
                     .foregroundStyle(failure == nil ? AnyShapeStyle(Ink.secondary) : AnyShapeStyle(Palette.destructive))
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: Spacing.base)
             HStack(spacing: Spacing.tight) {
-                Button("Change", action: pick)
-                    .buttonStyle(.bordered)
+                Button(url == nil ? "Choose\u{2026}" : "Change\u{2026}", action: pick)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
                 if let onRemove {
                     Button("Remove", role: .destructive, action: onRemove)
-                        .buttonStyle(.plain)
-                        .font(.system(.caption))
-                        .foregroundStyle(Palette.destructive)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
                 }
             }
         }
         .padding(.leading, SettingsMetrics.navigationIconLeading)
         .padding(.trailing, SettingsMetrics.controlTrailing)
+        .padding(.vertical, Spacing.base)
         .frame(maxWidth: .infinity, minHeight: SettingsMetrics.navigationRowHeight)
+        .contentShape(.rect)
+        .dropDestination(for: URL.self) { urls, _ in
+            guard isEnabled, let file = urls.first else { return false }
+            drop(file)
+            return true
+        } isTargeted: { isTargeted = $0 && isEnabled }
+        .contextMenu {
+            Button(url == nil ? "Choose\u{2026}" : "Change\u{2026}", action: pick)
+            if let onRemove {
+                Button("Remove", role: .destructive, action: onRemove)
+            }
+        }
         .accessibilityElement(children: .contain)
     }
 
+    /// Where no line of its own is given: that a file can be dropped here.
+    private var dropHint: String {
+        url == nil ? "Drop a picture here, or choose one." : "Drop a picture here to replace it."
+    }
+
+    private var shape: AnyShape {
+        isCircular ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
     private var preview: some View {
-        Group {
+        let width = isCircular ? Self.height : (Self.height * aspectRatio).rounded()
+        return ZStack {
             if let url {
-                RemoteImage(url: url, side: 44) { placeholder }
+                RemoteImage(url: url, side: max(width, Self.height)) { placeholder }
             } else {
                 placeholder
             }
         }
-        .frame(width: 44, height: 44)
-        .clipShape(isCircular ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 8, style: .continuous)))
+        .frame(width: width, height: Self.height)
+        .clipShape(shape)
+        .overlay { rim }
+        .scaleEffect(isTargeted ? 1.05 : isHovered && isEnabled ? 1.03 : 1)
+        .animation(motion.hover, value: isHovered)
+        .animation(motion.glassMorph, value: isTargeted)
         .accessibilityHidden(true)
     }
 
+    /// What the well will do: dashed while it is empty, the accent while a
+    /// file hangs over it.
+    @ViewBuilder private var rim: some View {
+        let color = isTargeted ? Palette.accent : Palette.edge
+        let style = StrokeStyle(lineWidth: isTargeted ? 2 : 1, dash: url == nil && !isTargeted ? [4, 3] : [])
+        if isCircular {
+            Circle().strokeBorder(color, style: style)
+        } else {
+            RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(color, style: style)
+        }
+    }
+
     private var placeholder: some View {
-        SettingsSurface.controlTrough
-            .overlay {
-                Image(systemName: "photo")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Ink.tertiary)
-            }
+        ZStack {
+            SettingsSurface.controlTrough
+            Image(systemName: "photo.badge.plus")
+                .font(.system(size: 16))
+                .foregroundStyle(Ink.secondary)
+        }
     }
 
     private func pick() {
@@ -91,6 +148,19 @@ struct ImageWell: View {
             else { return }
             failure = nil
             onPick(file.image)
+        }
+    }
+
+    private func drop(_ file: URL) {
+        Task {
+            guard let picked = await ExpressionUpload.image(at: file, allowsAnimated: allowsAnimated) else {
+                failure = allowsAnimated ? "That isn\u{2019}t a picture this takes." : "That isn\u{2019}t a still picture."
+                Haptics.bump()
+                return
+            }
+            failure = nil
+            Haptics.tick()
+            onPick(picked.image)
         }
     }
 }
@@ -393,24 +463,16 @@ struct GamePickerSheet: View {
     @State private var query = ""
     @State private var results: [GameSummary] = []
     @State private var isSearching = false
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Games")
-                    .font(.system(.headline))
-                    .foregroundStyle(Ink.primary)
-                Spacer()
-                Button("Done") { dismiss() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-            .padding(Spacing.margin)
+            ModalHeader(title: "Games", close: { dismiss() })
 
-            TextField("Search for a game...", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal, Spacing.margin)
+            // The system's search field on glass, leading what it searches.
+            SearchField(prompt: "Search for a game…", text: $query)
+                .padding(.horizontal, Spacing.group)
+                .padding(.bottom, Spacing.snug)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -444,8 +506,7 @@ struct GamePickerSheet: View {
                 }
             }
         }
-        .frame(width: 420, height: 460)
-        .background(Palette.surface)
+        .frame(width: 420, height: 480)
         .task(id: query) {
             guard !query.isEmpty else {
                 results = []

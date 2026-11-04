@@ -444,7 +444,8 @@ struct MiniProfileCard: View {
             Text("View Profile")
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
         .controlSize(.large)
         .padding(.horizontal, Spacing.margin)
         .padding(.top, Spacing.tight)

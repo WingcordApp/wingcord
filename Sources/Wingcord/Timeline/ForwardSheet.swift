@@ -31,9 +31,7 @@ struct ForwardSheet<Preview: View>: View {
     @State private var comment = ""
     /// Copy Link says so for a moment after it is pressed.
     @State private var didCopy = false
-    @FocusState private var focus: Field?
-
-    private enum Field: Hashable { case search, comment }
+    @FocusState private var isCommentFocused: Bool
 
     private static var width: CGFloat { 460 }
     private static var listHeight: CGFloat { 300 }
@@ -45,8 +43,12 @@ struct ForwardSheet<Preview: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            search
+            ModalHeader(title: title, subtitle: subtitle.map { Text(verbatim: $0) }, close: dismiss)
+            // The system's search field on glass — the card's first field,
+            // so it has the keyboard when the card lands.
+            SearchField(prompt: "Search people and channels", text: $query)
+                .padding(.horizontal, Spacing.group)
+                .padding(.bottom, Spacing.snug)
             list
             Divider().overlay(Ink.quaternary)
             preview()
@@ -55,56 +57,6 @@ struct ForwardSheet<Preview: View>: View {
             footer
         }
         .frame(width: Self.width)
-        .background(Palette.surface)
-        .onAppear { focus = .search }
-    }
-
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: Spacing.tight) {
-                Text(title)
-                    .font(.system(.title3, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.system(.subheadline))
-                        .foregroundStyle(Ink.secondary)
-                }
-            }
-            Spacer()
-            Button(action: dismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Ink.secondary)
-            .keyboardShortcut(.cancelAction)
-            .accessibilityLabel(Text("Close"))
-        }
-        .padding(.horizontal, Spacing.group)
-        .padding(.top, Spacing.group)
-        .padding(.bottom, Spacing.margin)
-    }
-
-    private var search: some View {
-        HStack(spacing: Spacing.base) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Ink.tertiary)
-            TextField("Search", text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(.body))
-                .focused($focus, equals: .search)
-        }
-        .padding(.horizontal, Spacing.snug)
-        .frame(height: Metrics.composerControlHeight)
-        .background(Palette.surfaceRaised, in: .capsule)
-        // A hairline, so the field has an edge on a dark ground.
-        .overlay { Capsule().strokeBorder(Palette.edge) }
-        .padding(.horizontal, Spacing.group)
-        .padding(.bottom, Spacing.snug)
     }
 
     private var list: some View {
@@ -121,7 +73,7 @@ struct ForwardSheet<Preview: View>: View {
                 if matches.isEmpty {
                     Text("Nothing here matches “\(query)”.")
                         .font(.system(.subheadline))
-                        .foregroundStyle(Ink.tertiary)
+                        .foregroundStyle(Ink.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, Spacing.group)
                         .padding(.vertical, Spacing.margin)
@@ -135,58 +87,44 @@ struct ForwardSheet<Preview: View>: View {
     }
 
     private var footer: some View {
-        HStack(spacing: Spacing.snug) {
-            TextField("Add a message…", text: $comment)
-                .textFieldStyle(.plain)
-                .font(.system(.body))
-                .focused($focus, equals: .comment)
-                .padding(.horizontal, Spacing.snug)
-                .frame(height: Metrics.composerControlHeight)
-                .background(Palette.surfaceRaised, in: .capsule)
-                .overlay { Capsule().strokeBorder(Palette.edge) }
-
-            if let copyLink {
-                Button {
-                    copyLink()
-                    didCopy = true
-                } label: {
-                    Image(symbol: didCopy ? "checkmark" : "link")
-                        .font(.system(size: 13, weight: .semibold))
-                        .contentTransition(.symbolEffect(.replace))
-                        .frame(width: Metrics.composerControlHeight, height: Metrics.composerControlHeight)
-                        .contentShape(.circle)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Ink.primary)
-                .background(Palette.surfaceRaised, in: .circle)
-                .overlay { Circle().strokeBorder(Palette.edge) }
-                .help(didCopy ? "Link Copied!" : "Copy Link")
-                .accessibilityLabel(Text(didCopy ? "Link Copied!" : "Copy Link"))
-                // Back to the link after a beat, so a second copy reads as one.
-                .task(id: didCopy) {
-                    guard didCopy else { return }
-                    try? await Task.sleep(for: .seconds(1.5))
-                    didCopy = false
-                }
-            }
-
-            Button {
-                send(orderedChoice, comment)
-            } label: {
-                Label("Send", systemImage: "paperplane.fill")
-                    .font(.system(.body, weight: .semibold))
-                    .padding(.horizontal, Spacing.margin)
+        GlassEffectContainer(spacing: Spacing.base) {
+            HStack(spacing: Spacing.snug) {
+                TextField("Add a message…", text: $comment)
+                    .textFieldStyle(.plain)
+                    .font(.system(.body))
+                    .focused($isCommentFocused)
+                    .padding(.horizontal, Spacing.snug + Spacing.hair)
                     .frame(height: Metrics.composerControlHeight)
+                    .modalFieldGround(isFocused: isCommentFocused, in: .capsule)
+
+                if let copyLink {
+                    Button {
+                        copyLink()
+                        didCopy = true
+                    } label: {
+                        Image(systemName: didCopy ? "checkmark" : "link")
+                            .font(.system(.body, weight: .semibold))
+                            .contentTransition(.symbolEffect(.replace))
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.large)
+                    .help(didCopy ? "Link Copied!" : "Copy Link")
+                    .accessibilityLabel(Text(didCopy ? "Link Copied!" : "Copy Link"))
+                    // Back to the link after a beat, so a second copy reads as one.
+                    .task(id: didCopy) {
+                        guard didCopy else { return }
+                        try? await Task.sleep(for: .seconds(1.5))
+                        didCopy = false
+                    }
+                }
+
+                ModalButton(title: "Send", symbolName: "paperplane.fill", role: .act) {
+                    send(orderedChoice, comment)
+                }
+                .disabled(chosen.isEmpty)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(chosen.isEmpty ? AnyShapeStyle(Ink.tertiary) : AnyShapeStyle(.white))
-            .background {
-                Capsule().fill(
-                    chosen.isEmpty ? Palette.surfaceRaised : Palette.accent
-                )
-            }
-            .disabled(chosen.isEmpty)
-            .keyboardShortcut(.defaultAction)
         }
         .animation(motion.standard, value: chosen.isEmpty)
         .padding(.horizontal, Spacing.group)
@@ -233,7 +171,7 @@ private struct ForwardRow: View {
                     if let subtitle = target.subtitle {
                         Text(subtitle)
                             .font(Typeface.rowSubtitle)
-                            .foregroundStyle(Ink.tertiary)
+                            .foregroundStyle(Ink.secondary)
                             .lineLimit(1)
                     }
                 }
@@ -242,7 +180,7 @@ private struct ForwardRow: View {
 
                 Image(symbol: isChosen ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(isChosen ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.quaternary))
+                    .foregroundStyle(isChosen ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.tertiary))
             }
             .padding(.horizontal, Spacing.snug)
             .padding(.vertical, Spacing.base)

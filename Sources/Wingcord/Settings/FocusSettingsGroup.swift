@@ -36,7 +36,7 @@ struct FocusSettingsGroup: View {
                 CardDivider()
                 SettingsToggle(
                     title: "Put it back afterwards",
-                    help: "When the Focus ends, your status returns to what it was — unless you changed it yourself in the meantime.",
+                    help: "When the Focus ends, your status goes back \u{2014} unless you changed it yourself.",
                     isOn: $settings.focusRestores
                 )
                 CardDivider()
@@ -49,9 +49,8 @@ struct FocusSettingsGroup: View {
             }
             FocusStateLine()
             SettingsFootnote(
-                "In System Settings › Focus, pick a Focus, then Focus Filters › Add Filter… › Wingcord. "
-                    + "Each Focus can use the status above, or choose its own there. "
-                    + "Invisible is never raised to a visible status.",
+                "In System Settings \u{203A} Focus, pick a Focus, then Focus Filters \u{203A} Add Filter\u{2026} "
+                    + "\u{203A} Wingcord. Each Focus can choose its own status there too.",
                 symbolName: "moon"
             )
         }

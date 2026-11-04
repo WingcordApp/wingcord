@@ -13,7 +13,7 @@ struct DeleteServerSheet: View {
     /// Run once the server is gone — the window has nothing left to show.
     var deleted: () -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var typed = ""
     @State private var failure: String?
     @State private var isWorking = false
@@ -30,7 +30,7 @@ struct DeleteServerSheet: View {
         ) {
             SheetField(title: "Enter server name") {
                 TextField("", text: $typed)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
                     .autocorrectionDisabled()
             }
             if let failure {

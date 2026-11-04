@@ -424,6 +424,16 @@ extension EnvironmentValues {
     /// The shell's geometry, for the views inside the panel that place
     /// themselves against the traffic lights.
     @Entry var shellLayout: ShellLayout?
+    /// How tall the call card and the now bar stand over the foot of the
+    /// pages, which every sidebar list takes as its bottom safe-area padding.
+    ///
+    /// **Handed down, because the safe area never arrives.** The pages ignore
+    /// the bottom inset so their rows can pass under the bars' glass, and a
+    /// macOS `List` given that region by an ancestor takes no content inset
+    /// from it — measured in a probe, and in the demo: the last channels sat
+    /// under the bars, out of reach, with the rubber band springing them back.
+    /// `safeAreaPadding` on the list itself is the one form that insets it.
+    @Entry var sidebarBarsInset: CGFloat = 0
 }
 
 // MARK: - The switcher

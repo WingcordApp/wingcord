@@ -226,7 +226,8 @@ struct EditableTextBlock: View {
                         .font(.system(.caption))
                         .foregroundStyle(Ink.tertiary)
                     Button("Save", action: commit)
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
                         .controlSize(.small)
                 }
                 Spacer(minLength: 0)
@@ -470,12 +471,19 @@ struct DestructiveConfirmation: ViewModifier {
     var confirmTitle: String
     var perform: () -> Void
 
+    /// **A card, in the act's colour** — the reader asked for the deletion —
+    /// **with no Return**, because it cannot be undone (D11b).
     func body(content: Content) -> some View {
-        content.confirmationDialog(title, isPresented: $isPresented) {
-            Button(confirmTitle, role: .destructive, action: perform)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(message)
+        content.modal(isPresented: $isPresented, style: .alert) {
+            ModalAlert(
+                hero: .symbol("trash.fill"),
+                title: title,
+                message: Text(message),
+                actions: [
+                    .cancel(),
+                    .act(confirmTitle, symbol: "trash", irreversible: true, perform: perform),
+                ]
+            )
         }
     }
 }

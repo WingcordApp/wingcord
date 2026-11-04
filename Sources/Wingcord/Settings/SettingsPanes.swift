@@ -16,7 +16,7 @@ struct SettingsPaneContent: View {
     var section: SettingsSection
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        SettingsStack {
             // One hero per pane, from the catalog. Account and About draw their
             // own — a person's avatar and the app's mark say more than a tinted
             // tile of the same symbol already in the source list.
@@ -29,25 +29,22 @@ struct SettingsPaneContent: View {
                 )
             }
             switch section {
+            case .account: AccountPane()
+            case .privacySafety: PrivacySafetyPane()
+            case .connections: ConnectedAppsPane()
             case .general: GeneralPane()
             case .appearance: AppearancePane()
-            case .messages: MessagesPane()
-            case .expressions: ExpressionsPane()
-            case .media: MediaPane()
-            case .voiceVideo: VoiceVideoPane()
+            case .accessibility: AccessibilityPane()
             case .notifications: NotificationsPane()
+            case .shortcuts: ShortcutsPane()
+            case .chat: ChatPane()
+            case .voiceVideo: VoiceVideoPane()
             case .activity: ActivityPane()
             case .overlay: OverlayPane()
             case .clips: ClipsPane()
             case .streamerMode: StreamerModePane()
-            case .account: AccountPane()
-            case .connectedApps: ConnectedAppsPane()
-            case .privacy: PrivacyPane()
-            case .messagingPermissions: MessagingPermissionsPane()
+            case .extras: ExtrasPane()
             case .performance: PerformancePane()
-            case .accessibility: AccessibilityPane()
-            case .shortcuts: ShortcutsPane()
-            case .storage: StoragePane()
             case .diagnostics: DiagnosticsPane()
             case .experiments: ExperimentsPane()
             case .about: AboutPane()
@@ -76,20 +73,28 @@ private struct GeneralPane: View {
                     .init(.home, "Direct messages", symbolName: "bubble.left.and.bubble.right"),
                 ]
             )
+            CardDivider()
+            SettingsActionRow(
+                "Language",
+                help: "Wingcord speaks your Mac\u{2019}s language. Dates, times and numbers follow it too.",
+                actionTitle: "System Settings"
+            ) {
+                open("x-apple.systempreferences:com.apple.Localization-Settings.extension")
+            }
         }
 
         SettingsGroup("Appearance and access") {
             SettingsCard {
                 SettingsNavigationRow(
                     title: "Appearance",
-                    subtitle: "Themes, a background picture, text size and density.",
+                    subtitle: SettingsSection.appearance.summary,
                     symbolName: SettingsSection.appearance.symbolName,
                     tint: SettingsSection.appearance.tint
                 ) { navigate(.appearance) }
                 CardDivider()
                 SettingsNavigationRow(
                     title: "Permissions",
-                    subtitle: "Notifications and system access, granted by macOS.",
+                    subtitle: "What macOS lets Wingcord do, in System Settings.",
                     symbolName: "checkmark.shield.fill",
                     tint: Color(hex: 0x30D158)
                 ) {
@@ -102,7 +107,7 @@ private struct GeneralPane: View {
             SettingsCard {
                 SettingsToggle(
                     title: "Show the member list by default",
-                    help: "A new window opens with the roster column showing. The toolbar toggle still overrides it per conversation.",
+                    help: "New windows open with the member list showing. The toolbar button still hides it per conversation.",
                     isOn: $settings.showsMemberListByDefault
                 )
             }
@@ -112,14 +117,10 @@ private struct GeneralPane: View {
             SettingsCard {
                 SettingsToggle(
                     title: "Developer mode",
-                    help: "Adds Copy Message ID and Copy User ID to the menus that have an id to copy. Nothing else changes.",
+                    help: "Adds Copy ID to the menus of messages, people, channels and servers.",
                     isOn: $settings.developerMode
                 )
             }
-            SettingsFootnote(
-                "The items are absent rather than greyed out when this is off — a menu a third longer for nobody's benefit is worse than a shorter one.",
-                symbolName: "number"
-            )
 
             SettingsCard {
                 SettingsNavigationRow(
@@ -128,75 +129,102 @@ private struct GeneralPane: View {
                     symbolName: SettingsSection.experiments.symbolName,
                     tint: SettingsSection.experiments.tint
                 ) { navigate(.experiments) }
+                CardDivider()
+                SettingsNavigationRow(
+                    title: "Extras",
+                    subtitle: SettingsSection.extras.summary,
+                    symbolName: SettingsSection.extras.symbolName,
+                    tint: SettingsSection.extras.tint
+                ) { navigate(.extras) }
             }
+        }
+    }
 
-            // Vencord's Fake Nitro (decision 9). Discord has no words for it,
-            // so its switches carry the plugin's own descriptions.
+    private func open(_ string: String) {
+        guard let url = URL(string: string) else { return }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+// MARK: - Extras
+
+/// Wingcord's own additions — the Vencord plugins it carries — in a pane of
+/// their own (D10a), where they used to hide under General › Advanced.
+private struct ExtrasPane: View {
+    @State private var settings = AppSettings.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Vencord's Fake Nitro (decision 9), its switches in plain words
+            // (D10e) — the plugin's own read like its source.
             SettingsCard {
-                SettingsToggle(title: "Fake Nitro", isOn: $settings.fakeNitro)
+                SettingsToggle(
+                    title: "Fake Nitro",
+                    help: "Nitro\u{2019}s emoji, stickers and stream quality, without Nitro.",
+                    isOn: $settings.fakeNitro
+                )
                 if settings.fakeNitro {
                     CardDivider()
                     SettingsToggle(
                         title: "Emoji",
-                        help: "Allows sending fake emojis (also bypasses missing permission to use custom emojis)",
+                        help: "Send emoji from any server, even where custom emoji aren\u{2019}t allowed.",
                         isOn: $settings.fakeNitroEmoji
                     )
                     CardDivider()
                     SettingsToggle(
                         title: "Stickers",
-                        help: "Allows sending fake stickers (also bypasses missing permission to use stickers)",
+                        help: "Send stickers from any server, even where stickers aren\u{2019}t allowed.",
                         isOn: $settings.fakeNitroStickers
                     )
                     CardDivider()
                     SettingsToggle(
                         title: "Stream quality",
-                        help: "Allow streaming in nitro quality",
+                        help: "Go live at Nitro\u{2019}s resolution and frame rate.",
                         isOn: $settings.fakeNitroStreamQuality
                     )
                     CardDivider()
                     SettingsToggle(
-                        title: "Disable embed permission check",
-                        help: "Whether to disable the embed permission check when sending fake emojis and stickers",
+                        title: "Skip the embed check",
+                        help: "Sends without asking first in a channel that won\u{2019}t show the links as pictures.",
                         isOn: $settings.fakeNitroSkipsEmbedCheck
                     )
                 }
             }
             .padding(.top, SettingsMetrics.cardToHeader)
             SettingsFootnote(
-                "Emoji and stickers go as links to their pictures, which anybody without Fake Nitro sees as a link. Discord can act on accounts that use it.",
+                "People without Fake Nitro see a link instead. Discord can act on accounts that use it.",
                 symbolName: "sparkles"
             )
 
-            // Vencord's AnonymiseFileNames (decision 11), in the plugin's words:
-            // its name and description on the switch, each setting's own
-            // description under it, and the two that belong to one method
+            // Vencord's AnonymiseFileNames (decision 11): the switch, then
+            // each of its settings, and the two that belong to one method
             // dimmed under the others, as the plugin's are.
             SettingsCard {
                 SettingsToggle(
                     title: "Anonymise File Names",
-                    help: "Anonymise uploaded file names",
+                    help: "Uploads go out under a new name, so a file\u{2019}s name gives nothing away.",
                     isOn: $settings.anonymisesFileNames
                 )
                 if settings.anonymisesFileNames {
                     CardDivider()
                     SettingsToggle(
                         title: "Anonymise by default",
-                        help: "Whether to anonymise file names by default",
+                        help: "New uploads start anonymised. Each file\u{2019}s incognito button switches it.",
                         isOn: $settings.anonymisesByDefault
                     )
                     CardDivider()
                     SettingsFlyoutRow(
                         "Method",
-                        help: "Anonymising method",
+                        help: "How the new name is made.",
                         selection: $settings.anonymisingMethod,
                         options: FileNameAnonymiser.Method.allCases,
                         title: \.title
                     )
                     CardDivider()
-                    SettingsControlRow("Randomised length", help: "Random characters length") {
+                    SettingsControlRow("Randomised length", help: "How many characters a random name has.") {
                         HStack(spacing: Spacing.tight) {
                             TextField("", value: $settings.randomisedLength, format: .number)
-                                .textFieldStyle(.roundedBorder)
+                                .modalField()
                                 .multilineTextAlignment(.trailing)
                                 .frame(width: 48)
                             Stepper("", value: $settings.randomisedLength, in: AppSettings.randomisedLengths)
@@ -208,72 +236,48 @@ private struct GeneralPane: View {
                     }
                     .disabled(settings.anonymisingMethod != .randomCharacters)
                     CardDivider()
-                    SettingsControlRow("Consistent", help: "Consistent filename") {
+                    SettingsControlRow("Consistent name", help: "The name every upload gets with Consistent.") {
                         TextField("", text: $settings.consistentFileName)
-                            .textFieldStyle(.roundedBorder)
+                            .modalField()
                             .controlSize(.small)
                             .frame(width: 140)
-                            .accessibilityLabel(Text("Consistent"))
+                            .accessibilityLabel(Text("Consistent name"))
                     }
                     .disabled(settings.anonymisingMethod != .consistent)
                 }
             }
             .padding(.top, SettingsMetrics.cardToHeader)
 
-            // Vencord's SilentTyping (decision 16), in the plugin's words, as
-            // the card above is.
+            // Vencord's SilentTyping (decision 16), as the card above is.
             SettingsCard {
                 SettingsToggle(
                     title: "Silent Typing",
-                    help: "Hide that you are typing",
+                    help: "Write without anyone seeing \u{201C}typing\u{2026}\u{201D}.",
                     isOn: $settings.silentTyping
                 )
                 if settings.silentTyping {
                     CardDivider()
-                    // Each setting's name over its description, as Vencord's
-                    // settings draw them and the card above has them.
                     SettingsToggle(
-                        title: "Show icon",
-                        help: "Show an icon for toggling the plugin",
+                        title: "Composer button",
+                        help: "A keyboard button beside the message field turns it on and off.",
                         isOn: $settings.silentTypingShowsIcon
                     )
                     CardDivider()
                     SettingsToggle(
-                        title: "Context menu",
-                        help: "Add option to toggle the functionality in the chat input context menu",
+                        title: "In the field\u{2019}s menu",
+                        help: "Right-click the message field to turn it on and off.",
                         isOn: $settings.silentTypingInContextMenu
                     )
                     CardDivider()
                     SettingsToggle(
-                        title: "Is enabled",
-                        help: "Toggle functionality",
+                        title: "Hide my typing",
+                        help: "What the button and the menu switch. Off, people see you typing again.",
                         isOn: $settings.silentTypingIsOn
                     )
                 }
             }
             .padding(.top, SettingsMetrics.cardToHeader)
         }
-
-        SettingsGroup("Language") {
-            SettingsCard {
-                SettingsActionRow(
-                    "Language",
-                    help: "Wingcord follows the system language for the whole interface.",
-                    actionTitle: "System Settings"
-                ) {
-                    open("x-apple.systempreferences:com.apple.Localization-Settings.extension")
-                }
-            }
-            SettingsFootnote(
-                "Dates, times and number formats follow the same setting, which is why there is no separate control for them here.",
-                symbolName: "globe"
-            )
-        }
-    }
-
-    private func open(_ string: String) {
-        guard let url = URL(string: string) else { return }
-        NSWorkspace.shared.open(url)
     }
 }
 
@@ -283,24 +287,95 @@ private struct AppearancePane: View {
     @State private var settings = AppSettings.shared
     @State private var theme = ThemeStore.shared
     @Environment(\.motion) private var motion
-    /// The selection ring's, and owned here because it has to span both
-    /// galleries: the choice is one choice. See `ThemeGallery`.
+    /// The selection ring's, and owned here because it has to span every
+    /// gallery: the choice is one choice. See `ThemeGallery`.
     @Namespace private var themeRing
+    /// Which shelf of looks is open — the shelf the theme in use is on, the
+    /// first time the pane opens.
+    @State private var shelf: LookShelf
+
+    init() {
+        _shelf = State(initialValue: LookShelf(holding: ThemeStore.shared.choice))
+    }
 
     var body: some View {
-        // **The background first** — in the redesign it is the window's
-        // picture, behind the sidebar's glass and the conversation, and the
-        // theme is what shows when there is none (REDESIGN.md R5).
-        SettingsGroup("Background") {
-            WallpaperSettingsCard()
+        // **One look picker** (D10b; Alex, 2026-10-26: "there's 3 different
+        // pickers … i was thinking of unifying it"). The window as it will
+        // look on top, the native segmented strip under it, and one grid —
+        // Wingcord's themes, Discord's, the saved ones, or a picture behind
+        // whichever is chosen. The three theme shelves share one selection
+        // ring, because choosing a theme anywhere is one choice.
+        SettingsGroup("Look") {
+            SettingsMessagePreview()
+            SegmentedPicker(
+                options: LookShelf.allCases.map { .init($0, $0.title) },
+                selection: $shelf.animation(motion.standard),
+                fillsWidth: true
+            )
+            .padding(.top, SettingsMetrics.cardToHeader)
+            ZStack(alignment: .top) {
+                switch shelf {
+                case .wingcord:
+                    ThemeGallery(ring: themeRing)
+                        .transition(.opacity)
+                case .discord:
+                    DiscordThemeGallery(ring: themeRing)
+                        .transition(.opacity)
+                case .saved:
+                    SavedThemeGallery(ring: themeRing)
+                        .transition(.opacity)
+                case .pictures:
+                    WallpaperSettingsCard()
+                        .transition(.opacity)
+                }
+            }
+            .padding(.top, SettingsMetrics.headerToCard)
+            if shelf != .pictures {
+                SettingsCard {
+                    SettingsSliderRow(
+                        title: "Vividness",
+                        help: "How much colour and glow your theme gives off. Names stay readable at any setting.",
+                        value: $theme.vividness,
+                        range: 0...1,
+                        step: 0.05,
+                        format: { "\(Int(($0 * 100).rounded()))%" },
+                        onEditingChanged: { editing in
+                            if editing { theme.beginAdjusting() } else { theme.endAdjusting() }
+                        }
+                    )
+                    .disabled(theme.choice.isStated)
+                }
+                .padding(.top, SettingsMetrics.cardToHeader)
+            }
+        }
+
+        // Only while it is the theme in use. A picker for a blend nobody has
+        // selected is a control whose every move is invisible.
+        //
+        // The group is always in the tree and its *contents* come and go, which
+        // is what gives the animation something stable to run on: a conditional
+        // wrapped around the group itself would be a structural change to the
+        // pane, and the card would appear at full height with no transition at
+        // all.
+        SettingsGroup {
+            if theme.choice.isCustom {
+                PlumageCard()
+                    .transition(.opacity)
+            }
+        }
+        .animation(motion.standard, value: theme.choice.isCustom)
+
+        SettingsGroup("Everywhere you go") {
+            ThemeSyncCard()
+            ServerThemePreferenceCard()
         }
 
         SettingsGroup("Window") {
             SettingsCard {
                 CardHeaderRow(
                     title: "Sidebar",
-                    help: "Floating sits the sidebar on the background as a glass panel; "
-                        + "docked runs it flush with the window's edge."
+                    help: "Floating hovers it over the background as glass. "
+                        + "Docked runs it flush with the window\u{2019}s edge."
                 )
                 SettingsSegmentedControl(
                     selection: Binding(
@@ -315,7 +390,7 @@ private struct AppearancePane: View {
                 CardHeaderRow(
                     title: "Pages",
                     help: "Swipe the sidebar with two fingers between your messages and your servers. "
-                        + "Three stops gives the servers a named list of their own, with the channels past it."
+                        + "Three pages give your servers a list of their own."
                 )
                 SettingsSegmentedControl(
                     selection: $settings.sidebarPages,
@@ -326,115 +401,23 @@ private struct AppearancePane: View {
                 CardDivider()
                 SettingsToggle(
                     title: "Server banners",
-                    help: "Shows a server's banner art at the top of its channels.",
+                    help: "The server\u{2019}s art across the top of its channel list.",
                     isOn: $settings.showsServerBanners
                 )
                 CardDivider()
                 SettingsToggle(
                     title: "Message previews",
-                    help: "Shows the newest message under each conversation. Asks Discord once "
-                        + "for them when the list appears, the way its mobile app does.",
+                    help: "The newest message under each conversation in your list.",
                     isOn: $settings.loadsMessagePreviews
                 )
             }
         }
 
-        SettingsGroup("Theme") {
-            ThemeGallery(ring: themeRing)
-            SettingsCard {
-                SettingsSliderRow(
-                    title: "Vividness",
-                    help: "How far a theme's colour and light come forward, here and "
-                        + "in Discord's themes. Names that would stop reading on a "
-                        + "brighter ground are lifted just enough to stay legible. "
-                        + "True Black and Porcelain are stated rather than derived, "
-                        + "and stay exactly as they are.",
-                    value: $theme.vividness,
-                    range: 0...1,
-                    step: 0.05,
-                    format: { "\(Int(($0 * 100).rounded()))%" },
-                    onEditingChanged: { editing in
-                        if editing { theme.beginAdjusting() } else { theme.endAdjusting() }
-                    }
-                )
-                .disabled(theme.choice.isStated)
-            }
-            SettingsFootnote(
-                "A theme colours the ground the app is read on and the one accent it spends — "
-                    + "never a role, an avatar or anything else that came from a person. Every "
-                    + "dark one is built on the same three steps of lightness, so the "
-                    + "separation between the reading surface, a card on it and a row inside "
-                    + "that card is the same whichever you pick. Porcelain is the light room.",
-                symbolName: "circle.lefthalf.filled"
-            )
-        }
-
-        // Only while it is the theme in use. A picker for a blend nobody has
-        // selected is a control whose every move is invisible — and it is a
-        // hundred and fifty points of card standing between the gallery and the
-        // picture.
-        //
-        // The group is always in the tree and its *contents* come and go, which
-        // is what gives the animation something stable to run on: a conditional
-        // wrapped around the group itself would be a structural change to the
-        // pane, and the card would appear at full height with no transition at
-        // all.
-        SettingsGroup {
-            if theme.choice.isCustom {
-                PlumageCard()
-                    .padding(.top, SettingsMetrics.cardToHeader)
-                    .transition(.opacity)
-            }
-        }
-        .animation(motion.standard, value: theme.choice.isCustom)
-
-        SettingsGroup("Discord Themes") {
-            DiscordThemeGallery(ring: themeRing)
-            SettingsFootnote(
-                "Discord's own gradient themes, with the colours, stops and angles its client "
-                    + "ships and the veils it reads them through. The first eight are light, and "
-                    + "turn the whole window light, as they do in Discord.",
-                symbolName: "swatchpalette"
-            )
-        }
-
-        SettingsGroup("Saved Themes") {
-            SavedThemeGallery(ring: themeRing)
-            SettingsFootnote(
-                "Custom themes from conversations, kept with Save on their card, and the ones your "
-                    + "account has. Each is drawn through Discord's own custom-theme recipe, in the "
-                    + "room it was made for. Right-click one to share it or delete it.",
-                symbolName: "bookmark"
-            )
-        }
-
-        ThemeSyncCard()
-            .padding(.top, SettingsMetrics.cardToHeader)
-
-        SettingsGroup("Server Themes") {
-            ServerThemePreferenceCard()
-            SettingsFootnote(
-                "Some servers set a theme of their own. While you are in one, it takes the "
-                    + "place of yours — your picture included — in the version for your light "
-                    + "or dark room. Saved to your account, so Discord follows it too.",
-                symbolName: "paintpalette"
-            )
-        }
-
-        SettingsGroup("Preview") {
-            SettingsMessagePreview()
-            SettingsFootnote(
-                "Drawn by the transcript's own painter, so it cannot disagree with the real thing.",
-                symbolName: "eye"
-            )
-        }
-
         SettingsGroup("Bars") {
             SettingsCard {
                 CardHeaderRow(
-                    title: "Appearance",
-                    help: "The silhouette both floating bars take. A pill keeps "
-                        + "its round controls beside it; a boxy bar encloses them."
+                    title: "Shape",
+                    help: "Pill keeps the round buttons beside the bar. Boxy holds them inside it."
                 )
                 SettingsSegmentedControl(
                     selection: $settings.chromeShape,
@@ -445,8 +428,7 @@ private struct AppearancePane: View {
                 CardDivider()
                 SettingsToggle(
                     title: "GIF, sticker and app buttons in the bar",
-                    help: "Off, they live in the + menu and the field holds only the emoji "
-                        + "button and send — the way Messages does it.",
+                    help: "Off, they move into the + menu and the bar keeps just emoji and send.",
                     isOn: $settings.composerControlsInline
                 )
                 CardDivider()
@@ -457,18 +439,18 @@ private struct AppearancePane: View {
                 CardDivider()
                 SettingsToggle(
                     title: "Show my nameplate",
-                    help: "Wears the nameplate on your account behind your name.",
+                    help: "Your nameplate behind your name, at the foot of the sidebar.",
                     isOn: $settings.showsNameplateInNowBar
                 )
             }
-            SettingsFootnote(
-                "The real bars, at the shape above — not a picture of them. "
-                    + "Drag the icons to rearrange them.",
-                symbolName: "hand.draw"
-            )
+            SettingsFootnote("Drag the buttons to rearrange them.", symbolName: "hand.draw")
         }
 
-        // Above Density, so the preview under that card is the answer to both.
+        // **Messages, once** (D10a): bubbles, density, timestamps and size,
+        // beside one another under the one preview at the top of the pane.
+        // Timestamps were in Messages as well, and the colour people bring in
+        // Accessibility too — two controls for one setting is how a reader
+        // cannot tell which one won, so each lives in one place.
         SettingsGroup("Bubbles") {
             SettingsCard {
                 SettingsToggle(
@@ -488,8 +470,7 @@ private struct AppearancePane: View {
                 SettingsToggle(
                     title: "Screen effects",
                     help: "Balloons for a happy birthday, confetti for congratulations, "
-                        + "fireworks for a happy new year — on this Mac only. "
-                        + "Off while Reduce Motion is on.",
+                        + "fireworks for New Year. Skipped while Reduce Motion is on.",
                     isOn: $settings.playsScreenEffects
                 )
             }
@@ -499,7 +480,7 @@ private struct AppearancePane: View {
             SettingsCard {
                 CardHeaderRow(
                     title: "Message density",
-                    help: "Compact removes the spacing between runs and shrinks the author gutter."
+                    help: "Compact fits more on screen, with less room between messages."
                 )
                 SettingsSegmentedControl(
                     selection: $settings.isCompactMode,
@@ -511,24 +492,18 @@ private struct AppearancePane: View {
                 CardDivider()
                 SettingsSliderRow(
                     title: "Space between groups",
-                    help: "Extra air between one person's block of messages and the next. "
-                        + "It composes with the density above rather than replacing it.",
+                    help: "Extra room between one person\u{2019}s messages and the next person\u{2019}s.",
                     value: $settings.messageGroupSpacing,
                     range: 0...24,
                     step: 1,
                     format: { "\(Int($0)) pt" }
                 )
             }
-            SettingsMessagePreview()
-                .padding(.top, SettingsMetrics.cardToHeader)
-            SettingsFootnote(
-                "Drawn by the transcript's own painter, so it cannot disagree with the real thing.",
-                symbolName: "eye"
-            )
         }
 
         SettingsGroup("Timestamps") {
             SettingsCard {
+                CardHeaderRow(title: "Clock", help: "12-hour or 24-hour times.")
                 SettingsSegmentedControl(
                     selection: $settings.uses24HourTime,
                     options: [
@@ -539,14 +514,13 @@ private struct AppearancePane: View {
                 CardDivider()
                 SettingsToggle(
                     title: "Show seconds",
-                    help: "Adds seconds to every time, in whatever order your region writes them.",
+                    help: "Adds seconds to every time.",
                     isOn: $settings.showsSeconds
                 )
                 CardDivider()
                 SettingsToggle(
                     title: "Always show timestamps",
-                    help: "The time beside every message rather than only the one under the "
-                        + "pointer. The first message of a run always shows one either way.",
+                    help: "A time beside every message, not just the one under the pointer.",
                     isOn: $settings.alwaysShowsTimestamps
                 )
             }
@@ -556,63 +530,40 @@ private struct AppearancePane: View {
             SettingsCard {
                 SettingsSliderRow(
                     title: "Message size",
-                    help: "Scales on top of the system text size, so the accessibility setting still applies.",
+                    help: "How big the text in conversations is. \u{2318}+ and \u{2318}\u{2212} change it too.",
                     value: $settings.textScale,
                     range: 0.8...1.6,
                     step: 0.05,
                     format: { $0.formatted(.percent.precision(.fractionLength(0))) }
                 )
             }
-            SettingsFootnote(
-                "Every size in Wingcord is relative, so this scales the whole window rather than only the transcript.",
-                symbolName: "textformat.size"
-            )
         }
 
-        SettingsGroup("Colour") {
-            SettingsCard {
-                SettingsSliderRow(
-                    title: "User colour intensity",
-                    help: "Applies to colour that came from people — role colours, "
-                        + "profile themes — and never to Wingcord's own chrome.",
-                    value: $settings.userColorSaturation,
-                    range: 0...1,
-                    step: 0.05,
-                    format: { $0.formatted(.percent.precision(.fractionLength(0))) }
-                )
-            }
-            SettingsFootnote(
-                "Hue and brightness are left alone, so a dark role stays dark and two "
-                    + "colours you could tell apart still look different. At 0% every "
-                    + "user colour becomes the grey of its own brightness.",
-                symbolName: "paintpalette"
-            )
-        }
+    }
+}
 
-        SettingsGroup("Motion and transparency") {
-            SettingsCard {
-                SettingsNavigationRow(
-                    title: "Accessibility",
-                    subtitle: "Reduce Motion and Reduce Transparency.",
-                    symbolName: "figure.walk.motion",
-                    tint: Color(hex: 0x0A84FF)
-                ) {
-                    if let url = URL(
-                        string: "x-apple.systempreferences:com.apple.preference.universalaccess?Seeing_Display"
-                    ) {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-            }
-            // Deliberately NOT duplicated as an app toggle. Two switches for one
-            // behaviour means a reader who set the system one and still sees
-            // animation cannot tell which is being honoured — and honouring only
-            // the app's is exactly how someone who set Reduce Motion in System
-            // Settings gets the full animation set anyway.
-            SettingsFootnote(
-                "Wingcord follows both system settings. There is no app-level copy of either, so there is never a question of which one won.",
-                symbolName: "info.circle"
-            )
+/// The shelves of the one look picker.
+enum LookShelf: String, CaseIterable, Hashable, Sendable {
+    case wingcord
+    case discord
+    case saved
+    case pictures
+
+    var title: String {
+        switch self {
+        case .wingcord: "Wingcord"
+        case .discord: "Discord"
+        case .saved: "Saved"
+        case .pictures: "Pictures"
+        }
+    }
+
+    /// The shelf a theme is on.
+    init(holding choice: ThemeChoice) {
+        switch choice {
+        case .discord: self = .discord
+        case .shared: self = .saved
+        case .system, .preset, .custom: self = .wingcord
         }
     }
 }
@@ -632,6 +583,7 @@ private struct ThemeSyncCard: View {
         SettingsCard {
             SettingsToggle(
                 title: "Sync theme across my devices",
+                help: "Discord on your other devices wears the theme you pick here.",
                 isOn: Binding(
                     get: { settings.syncsThemeAcrossDevices },
                     set: { syncs in
@@ -644,6 +596,7 @@ private struct ThemeSyncCard: View {
             CardDivider()
             SettingsToggle(
                 title: "Apply theme to other users' profiles",
+                help: "Other people\u{2019}s themed profiles in your own light or dark.",
                 isOn: $settings.appliesThemeToProfiles
             )
         }
@@ -684,33 +637,24 @@ private struct ServerThemePreferenceCard: View {
 
 // MARK: - Messages
 
-private struct MessagesPane: View {
+private struct ChatPane: View {
     @Environment(AppModel.self) private var model
     @State private var settings = AppSettings.shared
 
     var body: some View {
-        SettingsCard {
-            CardHeaderRow(title: "Timestamps", help: "How the time beside a message is written.")
-            SettingsSegmentedControl(
-                selection: $settings.uses24HourTime,
-                options: [
-                    .init(false, "12-hour", symbolName: "clock"),
-                    .init(true, "24-hour", symbolName: "clock.badge.checkmark"),
-                ]
-            )
-        }
-
-        SettingsGroup("Content") {
+        // Timestamps are not here: they live once, in Appearance › Messages,
+        // beside the bubbles and the density they are drawn with (D10a).
+        SettingsGroup("Messages") {
             SettingsCard {
                 SettingsToggle(
                     title: "Show link previews",
-                    help: "Unfurl embeds for links posted in a conversation.",
+                    help: "Links unfold into a card with the page\u{2019}s picture and title.",
                     isOn: $settings.showsEmbeds
                 )
                 CardDivider()
                 SettingsToggle(
                     title: "Load images automatically",
-                    help: "Turn this off to fetch attachments only when you open them.",
+                    help: "Off, a picture waits until you open it.",
                     isOn: $settings.loadsImagesAutomatically
                 )
                 CardDivider()
@@ -718,6 +662,7 @@ private struct MessagesPane: View {
                 // with the account — see `SyncedPreferences`.
                 SettingsToggle(
                     title: "Open threads in split view",
+                    help: "A thread opens beside its channel instead of in its place.",
                     isOn: Binding(
                         get: { model.syncedPreferences.opensThreadsInSplitView },
                         set: { model.setOpensThreadsInSplitView($0) }
@@ -725,6 +670,8 @@ private struct MessagesPane: View {
                 )
             }
         }
+        ExpressionsPane()
+        MediaPane()
     }
 }
 
@@ -734,32 +681,26 @@ private struct ExpressionsPane: View {
     @State private var settings = AppSettings.shared
 
     var body: some View {
-        SettingsCard {
-            CardHeaderRow(title: "Default skin tone", help: "Applied to every emoji that takes one.")
-            SettingsSegmentedControl(
-                selection: $settings.skinTone,
-                options: UnicodeEmoji.SkinTone.allCases.map {
-                    // The swatch alone. Six cells across a card is 81 points
-                    // each, and "Medium-Light" does not fit in 81 points at any
-                    // size worth reading — while a row of hands is the thing
-                    // being chosen, shown directly.
-                    .init($0, "", glyph: $0.swatch, spoken: $0.title)
-                }
-            )
-        }
-
-        SettingsGroup("Playback") {
+        SettingsGroup("Emoji") {
             SettingsCard {
+                CardHeaderRow(title: "Default skin tone", help: "For every emoji that comes in more than one.")
+                SettingsSegmentedControl(
+                    selection: $settings.skinTone,
+                    options: UnicodeEmoji.SkinTone.allCases.map {
+                        // The swatch alone. Six cells across a card is 81 points
+                        // each, and "Medium-Light" does not fit in 81 points at any
+                        // size worth reading — while a row of hands is the thing
+                        // being chosen, shown directly.
+                        .init($0, "", glyph: $0.swatch, spoken: $0.title)
+                    }
+                )
+                CardDivider()
                 SettingsToggle(
                     title: "Play animated emoji and avatars",
-                    help: "An animated emoji is a decode loop for as long as it is on screen.",
+                    help: "Off, they hold still on their first frame. Easier on the battery.",
                     isOn: $settings.playsAnimatedContent
                 )
             }
-            SettingsFootnote(
-                "Turning animation off saves real power on battery: a busy channel can hold a dozen decode loops at once.",
-                symbolName: "battery.75percent"
-            )
         }
     }
 }
@@ -770,32 +711,34 @@ private struct MediaPane: View {
     @State private var settings = AppSettings.shared
 
     var body: some View {
-        SettingsCard {
-            SettingsSliderRow(
-                title: "Playback volume",
-                help: "Shared by every clip the viewer opens.",
-                value: $settings.mediaVolume,
-                range: 0...1,
-                step: 0.05,
-                format: { $0.formatted(.percent.precision(.fractionLength(0))) }
-            )
-            CardDivider()
-            SettingsToggle(
-                title: "Start muted",
-                help: "Kept apart from a zero volume, so unmuting restores the level you set.",
-                isOn: $settings.mutesMedia
-            )
-            CardDivider()
-            SettingsToggle(
-                title: "Loop videos",
-                help: "Repeat a clip when it reaches the end.",
-                isOn: $settings.loopsVideo
-            )
+        SettingsGroup("Video and sound") {
+            SettingsCard {
+                SettingsSliderRow(
+                    title: "Playback volume",
+                    help: "Where the sound starts for every video you open.",
+                    value: $settings.mediaVolume,
+                    range: 0...1,
+                    step: 0.05,
+                    format: { $0.formatted(.percent.precision(.fractionLength(0))) }
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Start muted",
+                    help: "Videos open silent. Unmuting brings back your volume.",
+                    isOn: $settings.mutesMedia
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Loop videos",
+                    help: "A video starts again when it reaches the end.",
+                    isOn: $settings.loopsVideo
+                )
+            }
         }
 
         // Discord's own switch and words (its mobile client's): a picture
         // over the limit is compressed to fit as it is added.
-        SettingsGroup("Image compression") {
+        SettingsGroup("Uploads") {
             SettingsCard {
                 SettingsToggle(
                     title: "Auto-compress Images",
@@ -817,20 +760,16 @@ private struct NotificationsPane: View {
         SettingsCard {
             SettingsToggle(
                 title: "Show unread counts",
-                help: "In the server rail and on the Dock icon. The unread dot stays either way — this is the number.",
+                help: "The numbers on your servers and the Dock icon. Unread dots stay either way.",
                 isOn: $settings.showsUnreadCounts
             )
         }
-        SettingsFootnote(
-            "Muted conversations never contribute to a count, and a channel you cannot see never marks its server unread.",
-            symbolName: "bell.slash"
-        )
 
         SettingsGroup("Banners") {
             SettingsCard {
                 SettingsToggle(
                     title: "Show notifications",
-                    help: "A banner when a message arrives in a channel you are not reading.",
+                    help: "A banner when a message lands somewhere you aren\u{2019}t reading.",
                     isOn: $settings.postsNotifications
                 )
                 CardDivider()
@@ -849,13 +788,7 @@ private struct NotificationsPane: View {
                 .disabled(!settings.postsNotifications)
             }
             SettingsFootnote(
-                "Each server's own notification setting is honoured, and a muted server or channel never notifies. "
-                    + "Direct messages always do, unless you have muted the conversation.",
-                symbolName: "bell.badge"
-            )
-            SettingsFootnote(
-                "macOS decides whether Wingcord may interrupt you at all. If nothing appears, look under "
-                    + "Notifications in System Settings.",
+                "Nothing showing up? Check Wingcord in System Settings \u{203A} Notifications.",
                 symbolName: "gear"
             )
         }
@@ -889,7 +822,7 @@ private struct NotificationsPane: View {
                 )
             }
             SettingsFootnote(
-                "These belong to your account, so they are the same on every device you sign in on.",
+                "These follow your account to every device.",
                 symbolName: "person.crop.circle.badge.checkmark"
             )
         }
@@ -902,10 +835,6 @@ private struct NotificationsPane: View {
                     SettingsToggle(title: entry.element.title, isOn: subscription(entry.element))
                 }
             }
-            SettingsFootnote(
-                "This is what Discord tells your friends about you, not what it tells you.",
-                symbolName: "arrow.up.forward"
-            )
         }
         .disabled(model.notificationSubscriptionsRaw == nil)
 
@@ -919,8 +848,7 @@ private struct NotificationsPane: View {
                 CardDivider()
                 SettingsToggle(
                     title: "Quiet mode",
-                    help: "Holds every notification back until you turn it off. "
-                        + "The only one of these that is off to begin with.",
+                    help: "Holds every notification back until you turn it off.",
                     isOn: flag(\.isQuiet) { .quietMode($0) }
                 )
             }
@@ -980,7 +908,10 @@ private struct AccountPane: View {
     @State private var accounts: [StoredAccount] = []
 
     var body: some View {
-        content
+        // In a stack of its own, so the fetch below is ONE task: a modifier on
+        // a builder of several views lands on each of them, and this one asked
+        // Discord for the account once per child.
+        SettingsStack { content }
             // **Fetched when the pane opens, not held from launch.** The token
             // check at startup calls the same route and throws these fields
             // away deliberately: an e-mail address and a phone number kept for
@@ -1047,7 +978,7 @@ private struct AccountPane: View {
                 }
             }
             SettingsFootnote(
-                "Tokens live in the macOS Keychain, marked so they never sync to iCloud and are unreadable while the Mac is locked.",
+                "Kept in your Keychain, on this Mac only.",
                 symbolName: "key.fill"
             )
         }
@@ -1057,19 +988,28 @@ private struct AccountPane: View {
 
 // MARK: - Privacy
 
+private struct PrivacySafetyPane: View {
+    var body: some View {
+        MessagingPermissionsPane()
+        SettingsGroup("Your data") {
+            PrivacyPane()
+        }
+    }
+}
+
 private struct PrivacyPane: View {
     var body: some View {
         SettingsCard {
             SettingsValueRow(
                 title: "Analytics",
                 value: "None collected",
-                help: "Wingcord has no telemetry of any kind and makes no request that is not to Discord."
+                help: "Wingcord talks to Discord and nobody else."
             )
             CardDivider()
             SettingsValueRow(
                 title: "Crash reports",
                 value: "Local only",
-                help: "Written beside the app's own data and never sent anywhere."
+                help: "Saved on this Mac. Never sent anywhere."
             )
         }
 
@@ -1080,7 +1020,7 @@ private struct PrivacyPane: View {
                 SettingsValueRow(title: "Affiliation", value: "None")
             }
             SettingsFootnote(
-                "Wingcord is not affiliated with Discord. Using a third-party client is against Discord's terms of service; use it knowing that.",
+                "Wingcord isn\u{2019}t made by Discord, and third-party clients are against its terms. Use it knowing that.",
                 symbolName: "exclamationmark.triangle"
             )
         }
@@ -1097,22 +1037,46 @@ private struct PerformancePane: View {
         SettingsCard {
             SettingsToggle(
                 title: "Show the performance inspector",
-                help: "A live overlay: frame time, memory, cache occupancy. It costs nothing while it is off.",
+                help: "A live overlay of frame times, memory and caches.",
                 isOn: $settings.showsPerformanceInspector
             )
         }
 
         SettingsGroup("Now") {
             SettingsCard {
-                SettingsValueRow(title: "Memory footprint", value: snapshot.footprintDescription)
+                SettingsValueRow(
+                    title: "Memory footprint",
+                    value: snapshot.footprintDescription,
+                    help: "What Activity Monitor shows for Wingcord."
+                )
                 CardDivider()
-                SettingsValueRow(title: "Image cache budget", value: snapshot.imageBudgetDescription)
+                SettingsValueRow(
+                    title: "Image cache budget",
+                    value: snapshot.imageBudgetDescription,
+                    help: Self.imageBudgetHelp
+                )
+                CardDivider()
+                SettingsValueRow(
+                    title: "Animation budget",
+                    value: SettingsMeterRow.bytes(AnimatedImageStore.budget),
+                    help: "The most animated emoji, decorations and profile effects may hold."
+                )
                 CardDivider()
                 SettingsValueRow(title: "Loaded transcripts", value: "\(snapshot.residentChannels)")
                 CardDivider()
                 SettingsValueRow(title: "Messages held", value: "\(snapshot.residentMessages)")
                 CardDivider()
                 SettingsValueRow(title: "Slow frames (last 300)", value: "\(snapshot.slowFrames)")
+            }
+        }
+        // Sampling runs only while this pane is on screen. `.task` cancels on
+        // disappear, which is the whole reason it is used rather than a timer —
+        // a settings pane nobody is looking at must not sample memory once a
+        // second for the life of the process.
+        .task {
+            while !Task.isCancelled {
+                snapshot = PerformanceMonitor.shared.snapshot()
+                try? await Task.sleep(for: .seconds(1))
             }
         }
 
@@ -1132,7 +1096,7 @@ private struct PerformancePane: View {
                     SettingsValueRow(
                         title: "Worst recent frame",
                         value: milliseconds(snapshot.worstFrameMilliseconds),
-                        help: "The worst of the last 300. One slow frame is a hitch; a rising worst is a regression."
+                        help: "The slowest of the last 300 frames."
                     )
                     CardDivider()
                     SettingsValueRow(
@@ -1140,38 +1104,31 @@ private struct PerformancePane: View {
                         value: snapshot.displayHertz.formatted(
                             .number.precision(.fractionLength(0))
                         ) + " Hz",
-                        help: "What a frame has to fit inside. At 120 Hz that is 8.3 ms."
+                        help: "How long a frame has to be drawn in. At 120 Hz that\u{2019}s 8.3 ms."
                     )
                 }
             }
         }
 
-        SettingsGroup("Maintenance") {
-            SettingsCard {
-                SettingsActionRow(
-                    "Cached images",
-                    help: "Images come back from the on-disk cache, so this frees memory without costing a download.",
-                    actionTitle: "Free"
-                ) {
-                    ImageStore.shared.purge()
-                    snapshot = PerformanceMonitor.shared.snapshot()
-                }
-            }
-        }
-        // Sampling runs only while this pane is on screen. `.task` cancels on
-        // disappear, which is the whole reason it is used rather than a timer —
-        // a settings pane nobody is looking at must not sample memory once a
-        // second for the life of the process.
-        .task {
-            while !Task.isCancelled {
-                snapshot = PerformanceMonitor.shared.snapshot()
-                try? await Task.sleep(for: .seconds(1))
-            }
+        // What Wingcord keeps on this Mac — Storage, folded in (D10a): the
+        // cost of the app on the disk beside its cost in memory.
+        SettingsGroup("Storage") {
+            StoragePane()
         }
     }
 
     private func milliseconds(_ value: Double) -> String {
         value.formatted(.number.precision(.fractionLength(1))) + " ms"
+    }
+
+    /// Read off `ImageStore.Budget`, so the sentence cannot drift from the
+    /// table it describes.
+    private static var imageBudgetHelp: String {
+        typealias Budget = ImageStore.Budget
+        let megabytes = { (bytes: Int) in bytes / (1024 * 1024) }
+        return "The most the image caches may hold: avatars \(megabytes(Budget.thumbnails)) MB, "
+            + "attachments \(megabytes(Budget.attachments)) MB, artwork \(megabytes(Budget.artwork)) MB, "
+            + "and the viewer \(megabytes(Budget.stage)) MB while it\u{2019}s open."
     }
 }
 
@@ -1217,8 +1174,7 @@ private struct AccessibilityPane: View {
             SettingsCard {
                 CardHeaderRow(
                     title: "Hide these",
-                    help: "Other people's decorations. Their words, badges and "
-                        + "names are untouched."
+                    help: "Decorations other people wear. Their words, names and badges stay."
                 )
                 SettingsCheckboxGrid(
                     options: CosmeticSuppression.all.map { .init($0.option, $0.title) },
@@ -1234,8 +1190,7 @@ private struct AccessibilityPane: View {
                 CardDivider()
                 SettingsToggle(
                     title: "Hide my own too",
-                    help: "Off by default: most people who turn these off mean "
-                        + "other people's, not the one they bought.",
+                    help: "Hides the ones you wear as well.",
                     isOn: $settings.suppressesOwnCosmetics
                 )
             }
@@ -1249,15 +1204,13 @@ private struct AccessibilityPane: View {
             SettingsCard {
                 SettingsToggle(
                     title: "Underline links",
-                    help: "A link is told apart from body text by colour alone "
-                        + "otherwise, which is the first distinction to go.",
+                    help: "Links get an underline, not just a colour.",
                     isOn: $settings.underlinesLinks
                 )
                 CardDivider()
                 SettingsFlyoutRow(
                     "Role colours",
-                    help: "Whether a name is drawn in the colour of somebody's "
-                        + "highest coloured role.",
+                    help: "Names in the colour of their highest coloured role, or plain.",
                     selection: $settings.roleColorPlacement,
                     options: RoleColorPlacement.allCases,
                     title: \.title,
@@ -1266,8 +1219,7 @@ private struct AccessibilityPane: View {
                 CardDivider()
                 SettingsSliderRow(
                     title: "Colour strength",
-                    help: "Fades every colour that came from a person — role "
-                        + "colours, name gradients — without touching the app's own.",
+                    help: "How strongly role colours and name gradients show. At 0% they turn grey.",
                     value: $settings.userColorSaturation,
                     range: 0...1,
                     step: 0.05,
@@ -1275,8 +1227,7 @@ private struct AccessibilityPane: View {
                 )
             }
             SettingsFootnote(
-                "Text size and message density are in Appearance, where the rest of "
-                    + "what the transcript looks like lives.",
+                "Looking for text size or density? They\u{2019}re in Appearance.",
                 symbolName: "textformat.size"
             )
         }
@@ -1289,8 +1240,7 @@ private struct AccessibilityPane: View {
             SettingsCard {
                 CardHeaderRow(
                     title: "Say this about a message",
-                    help: "Each one is a phrase added to every message in the "
-                        + "channel. Useful once, noise a hundred times."
+                    help: "What VoiceOver reads out with each message. Fewer is quicker."
                 )
                 SettingsCheckboxGrid(
                     options: SpokenDetail.allCases.map { .init($0, $0.title) },
@@ -1311,9 +1261,8 @@ private struct AccessibilityPane: View {
                 CardDivider()
                 SettingsToggle(
                     title: "Announce new messages",
-                    help: "Interrupts whatever is being read when a message arrives "
-                        + "in the channel you are in. Off by default — on a busy "
-                        + "channel it makes the app unusable.",
+                    help: "VoiceOver reads new messages in the channel you\u{2019}re in as they arrive, "
+                        + "cutting in on whatever it\u{2019}s saying.",
                     isOn: $settings.announcesNewMessages
                 )
             }
@@ -1329,34 +1278,30 @@ private struct AccessibilityPane: View {
                     title: "Reduce Motion",
                     value: reduceMotion ? "On" : "Off",
                     help: reduceMotion
-                        ? "Travel is replaced by a short cross-fade. The materials stay."
-                        : "Animations run in full. Wingcord has no separate motion setting."
+                        ? "Movement becomes a quick fade."
+                        : "Animations run in full."
                 )
                 CardDivider()
                 SettingsValueRow(
                     title: "Reduce Transparency",
                     value: reduceTransparency ? "On" : "Off",
                     help: reduceTransparency
-                        ? "This window is drawn on opaque surfaces instead of glass."
-                        : "Chrome is glass, and the desktop shows through it."
+                        ? "Solid surfaces instead of glass."
+                        : "Glass, with your desktop showing through."
                 )
                 CardDivider()
                 SettingsValueRow(
                     title: "Increase Contrast",
                     value: contrast == .increased ? "On" : "Off",
-                    help: "Every label uses the system's hierarchy rather than a fixed grey, so contrast tracks this automatically."
+                    help: "Text and edges get stronger while it\u{2019}s on."
                 )
                 CardDivider()
                 SettingsValueRow(
                     title: "Differentiate Without Color",
                     value: differentiateWithoutColor ? "On" : "Off",
-                    help: "Presence is drawn as a shape — filled, crescent, dash, ring — and not by colour alone, whether or not this is set."
+                    help: "Every status has its own shape too, so colour is never the only clue."
                 )
             }
-            SettingsFootnote(
-                "Reported, not duplicated: there is no app-level copy of any of these, so there is never a question of which one is being honoured.",
-                symbolName: "checkmark.seal"
-            )
 
             SettingsCard {
                 SettingsNavigationRow(
@@ -1370,14 +1315,13 @@ private struct AccessibilityPane: View {
                 CardDivider()
                 SettingsNavigationRow(
                     title: "VoiceOver",
-                    subtitle: "Every row in this window carries a spoken label.",
+                    subtitle: "Your Mac reads the screen aloud.",
                     symbolName: "speaker.wave.3.fill",
                     tint: Color(hex: 0x5E5CE6)
                 ) {
                     open("x-apple.systempreferences:com.apple.preference.universalaccess?Seeing_VoiceOver")
                 }
             }
-            .padding(.top, SettingsMetrics.cardToHeader)
         }
     }
 
@@ -1388,24 +1332,24 @@ private struct AccessibilityPane: View {
             SettingsCard {
                 SettingsActionRow(
                     "Reset this page",
-                    help: "Puts every switch above back where it started. Nothing "
-                        + "outside this page is touched.",
+                    help: "Puts this page back the way it started.",
                     actionTitle: "Reset"
                 ) { isConfirmingReset = true }
             }
             // **A confirmation, because there is no undo.** §5.5's rule about a
             // destructive act: this throws away a set of choices somebody made
             // deliberately, and a misclick has nothing to put them back.
-            .confirmationDialog(
-                "Reset accessibility settings?",
-                isPresented: $isConfirmingReset,
-                titleVisibility: .visible
-            ) {
-                Button("Reset", role: .destructive, action: resetAll)
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Every switch on this page goes back to its default. "
-                    + "Nothing else in Settings changes.")
+            .modal(isPresented: $isConfirmingReset, style: .alert) {
+                ModalAlert(
+                    hero: .symbol("arrow.counterclockwise"),
+                    title: "Reset accessibility settings?",
+                    message: Text("Every switch on this page goes back to its default. "
+                        + "Nothing else in Settings changes."),
+                    actions: [
+                        .cancel(),
+                        .act("Reset", symbol: "arrow.counterclockwise", irreversible: true, perform: resetAll),
+                    ]
+                )
             }
         }
     }
@@ -1451,9 +1395,7 @@ private struct ShortcutsPane: View {
                 }
             }
             SettingsFootnote(
-                "A global shortcut takes its combination away from every other application, "
-                    + "which is why there are only a few and why each can be cleared with ⌫ "
-                    + "while recording.",
+                "These work even while you\u{2019}re in another app — and take their keys from it.",
                 symbolName: "globe"
             )
         }
@@ -1483,9 +1425,7 @@ private struct ShortcutsPane: View {
         }
 
         SettingsFootnote(
-            "These work while Wingcord is in front. Clearing one with ⌫ frees its "
-                + "combination and leaves the command in the menu bar, where it is still "
-                + "one click away.",
+            "Click a shortcut and press the new keys. \u{232B} clears it \u{2014} the command stays in the menu bar.",
             symbolName: "keyboard"
         )
 
@@ -1507,11 +1447,6 @@ private struct ShortcutsPane: View {
                     .accessibilityElement(children: .combine)
                 }
             }
-            SettingsFootnote(
-                "These belong to whatever has the keyboard — the composer, a list, an open "
-                    + "card — so they mean what they mean wherever you are and cannot be moved.",
-                symbolName: "text.cursor"
-            )
         }
     }
 
@@ -1539,85 +1474,34 @@ private struct StoragePane: View {
     /// would spend more on reporting the cost than the cost it reports.
     @State private var report: StorageReport?
 
-    /// Read off `ImageStore.Budget`, so the sentence cannot drift from the
-    /// table it describes.
-    private static var imageBudgetHelp: String {
-        typealias Budget = ImageStore.Budget
-        let megabytes = { (bytes: Int) in bytes / (1024 * 1024) }
-        return "What the image caches may hold between them: avatars \(megabytes(Budget.thumbnails)) MB, "
-            + "attachments \(megabytes(Budget.attachments)) MB, artwork \(megabytes(Budget.artwork)) MB, "
-            + "and the media viewer \(megabytes(Budget.stage)) MB while it is open."
-    }
-
     var body: some View {
+        // The memory half lives in Performance › Now, beside the footprint it
+        // is part of; this is what stays on the disk. The report folder is
+        // Diagnostics', with the trace it holds.
         SettingsCard {
             SettingsMeterRow(
                 title: "Downloaded images",
-                help: "Avatars, attachments and artwork, kept so a relaunch is cheap and a re-decode is a decode rather than a download.",
+                help: "Avatars, attachments and artwork kept on disk, so nothing downloads twice.",
                 used: report?.downloadCache ?? 0,
                 capacity: ImageStore.shared.downloadCacheCapacity
             )
-        }
-        SettingsFootnote(
-            "This is the disk half. It is deliberately outside the memory budget below — 512 MB of cached bytes is not 512 MB of memory.",
-            symbolName: "internaldrive"
-        )
-
-        SettingsGroup("In memory") {
-            SettingsCard {
-                SettingsValueRow(
-                    title: "Decoded image budget",
-                    value: SettingsMeterRow.bytes(ImageStore.shared.residentBudget),
-                    help: Self.imageBudgetHelp
-                )
-                CardDivider()
-                SettingsValueRow(
-                    title: "Animation budget",
-                    value: SettingsMeterRow.bytes(AnimatedImageStore.budget),
-                    help: "Filmstrips for animated emoji, avatar decorations and profile effects. A sixty-frame decoration is about 2 MB."
-                )
-                CardDivider()
-                SettingsValueRow(
-                    title: "Process footprint",
-                    value: report.map { SettingsMeterRow.bytes(Int($0.footprint)) } ?? "—",
-                    help: "phys_footprint — what Activity Monitor shows and what a jetsam decision is made on."
-                )
-            }
-            // What a cache is ALLOWED, not what it holds: `NSCache` publishes its
-            // cost limit and never its current cost, and a figure derived by
-            // walking the keys would be a guess dressed as a measurement.
-            SettingsFootnote(
-                "Budgets, not occupancy: the caches report what they may hold and never what they are holding, so this pane does not claim to know.",
-                symbolName: "questionmark.circle"
+            CardDivider()
+            SettingsValueRow(
+                title: "Crash reports and traces",
+                value: report.map { SettingsMeterRow.bytes($0.reports) } ?? "—",
+                help: "Saved on this Mac. Never sent anywhere."
             )
-        }
-
-        SettingsGroup("Diagnostics on disk") {
-            SettingsCard {
-                SettingsValueRow(
-                    title: "Crash reports and traces",
-                    value: report.map { SettingsMeterRow.bytes($0.reports) } ?? "—",
-                    help: "Written beside the app's own data, and never sent anywhere."
+            CardDivider()
+            SettingsActionRow(
+                "Image cache folder",
+                help: "~/Library/Caches, under Wingcord\u{2019}s bundle identifier.",
+                actionTitle: "Reveal"
+            ) {
+                let directory = ImageStore.cacheDirectory
+                try? FileManager.default.createDirectory(
+                    at: directory, withIntermediateDirectories: true
                 )
-                CardDivider()
-                SettingsActionRow(
-                    "Report folder",
-                    actionTitle: "Reveal"
-                ) {
-                    NSWorkspace.shared.activateFileViewerSelecting([CrashReporter.reportDirectory])
-                }
-                CardDivider()
-                SettingsActionRow(
-                    "Image cache folder",
-                    help: "~/Library/Caches, under the app's bundle identifier.",
-                    actionTitle: "Reveal"
-                ) {
-                    let directory = ImageStore.cacheDirectory
-                    try? FileManager.default.createDirectory(
-                        at: directory, withIntermediateDirectories: true
-                    )
-                    NSWorkspace.shared.activateFileViewerSelecting([directory])
-                }
+                NSWorkspace.shared.activateFileViewerSelecting([directory])
             }
         }
 
@@ -1625,7 +1509,7 @@ private struct StoragePane: View {
             SettingsCard {
                 SettingsActionRow(
                     "Downloaded images",
-                    help: "Frees disk. Everything still on screen is re-downloaded the next time it is needed.",
+                    help: "Frees disk space. Pictures download again the next time you see them.",
                     actionTitle: "Empty"
                 ) {
                     ImageStore.shared.clearDownloadCache()
@@ -1634,7 +1518,7 @@ private struct StoragePane: View {
                 CardDivider()
                 SettingsActionRow(
                     "Decoded images and animations",
-                    help: "Frees memory without costing a download — the bytes come back from the disk cache above.",
+                    help: "Frees memory. Pictures come back from the disk, not the network.",
                     actionTitle: "Free"
                 ) {
                     ImageStore.shared.purge()
@@ -1644,10 +1528,6 @@ private struct StoragePane: View {
                     measure(settling: false)
                 }
             }
-            SettingsFootnote(
-                "Emptying the disk cache costs a download; freeing memory costs a decode. Under memory pressure the app already does the second one by itself.",
-                symbolName: "arrow.clockwise"
-            )
         }
         .task { await refresh() }
     }
@@ -1680,11 +1560,9 @@ private struct StoragePane: View {
 private struct StorageReport: Sendable {
     var downloadCache: Int
     var reports: Int
-    var footprint: UInt64
 
     @MainActor
     static func current() async -> StorageReport {
-        let footprint = PerformanceMonitor.physicalFootprint()
         let images = ImageStore.cacheDirectory
         let reports = CrashReporter.reportDirectory
         // Both figures come from walking the directories, off the main actor:
@@ -1701,7 +1579,7 @@ private struct StorageReport: Sendable {
             (cache: StorageReport.size(of: images), reports: StorageReport.size(of: reports))
         }.value
         return StorageReport(
-            downloadCache: sizes.cache, reports: sizes.reports, footprint: footprint
+            downloadCache: sizes.cache, reports: sizes.reports
         )
     }
 
@@ -1737,18 +1615,14 @@ private struct DiagnosticsPane: View {
             SettingsValueRow(
                 title: "Connection",
                 value: model.connectionState.settingsLabel,
-                help: "The gateway socket's state, live."
+                help: "Your live connection to Discord."
             )
             CardDivider()
             SettingsValueRow(title: "Servers", value: "\(model.guilds.count)")
             CardDivider()
             SettingsValueRow(title: "People known", value: "\(model.users.count)")
             CardDivider()
-            SettingsValueRow(
-                title: "Folders",
-                value: "\(model.folders.count)",
-                help: "Read from user_settings_proto, which is where Discord keeps them now."
-            )
+            SettingsValueRow(title: "Folders", value: "\(model.folders.count)")
         }
 
         SettingsGroup("Logging") {
@@ -1768,7 +1642,7 @@ private struct DiagnosticsPane: View {
                 }
             }
             SettingsFootnote(
-                "The trace records the ORDER of the events a connection goes through — the gateway's handshake, and the nine messages a call's encryption is negotiated in. Reading that order is how a connection that never comes up gets diagnosed; the lines alone do not say where the time went.",
+                "The trace writes down every step a connection takes, so one that never comes up can be pinned down.",
                 symbolName: "waveform.path.ecg"
             )
         }
@@ -1822,14 +1696,10 @@ private struct AboutPane: View {
                 ) { open("https://github.com/wingcord/wingcord/blob/main/LICENSE") },
                 .init(
                     id: "lottie", title: "Lottie",
-                    caption: "The one dependency, and why",
+                    caption: "Plays Discord\u{2019}s animated stickers",
                     symbolName: "heart.fill"
                 ) { open("https://github.com/airbnb/lottie-ios") },
             ])
-            SettingsFootnote(
-                "Eight of Discord's fourteen sticker packs are Lottie, and a Lottie sticker has no bitmap on the CDN at all — both the .png and .gif endpoints answer 404. It is used only as a rasteriser, at load time, off the main thread.",
-                symbolName: "shippingbox"
-            )
         }
     }
 

@@ -10,46 +10,86 @@ import SwiftUI
 struct SettingsSidebar: View {
     @Binding var selection: SettingsSection?
     @Binding var query: String
+    /// Opens a setting a search found — its pane, scrolled to it and lit.
+    var show: (SettingsSearchEntry) -> Void = { _ in }
 
     var body: some View {
         List(selection: $selection) {
-            ForEach(visibleGroups, id: \.self) { group in
-                Section {
-                    ForEach(group) { section in
-                        Label {
-                            Text(section.title)
-                        } icon: {
-                            SettingsIconTile(
-                                symbolName: section.symbolName,
-                                tint: section.tint,
-                                side: SettingsMetrics.sidebarIconSide,
-                                radius: SettingsMetrics.sidebarIconRadius
-                            )
+            if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                ForEach(SettingsSection.groups, id: \.self) { group in
+                    Section {
+                        ForEach(group) { section in
+                            row(section)
                         }
-                        .tag(section)
+                    }
+                }
+            } else {
+                // **Settings, under the pane they live on** (D10c), as System
+                // Settings lists them: the pane's own row, then each setting
+                // that matched, a step in.
+                let results = SettingsSearch.results(for: query)
+                if results.isEmpty {
+                    Text("No settings match “\(query)”.")
+                        .font(.system(.callout))
+                        .foregroundStyle(Ink.secondary)
+                        .selectionDisabled()
+                }
+                ForEach(results, id: \.section) { result in
+                    Section {
+                        row(result.section)
+                        ForEach(result.settings) { entry in
+                            SettingsSearchResultRow(entry: entry) { show(entry) }
+                                .selectionDisabled()
+                        }
                     }
                 }
             }
         }
         .listStyle(.sidebar)
-        .searchable(text: $query, placement: .sidebar, prompt: "Search")
+        .searchable(text: $query, placement: .sidebar, prompt: "Search settings")
         .accessibilityLabel("Settings sections")
     }
 
-    /// The groups, with rows the search excludes removed and empty groups
-    /// dropped — so a search never leaves a gap where a group used to be.
-    private var visibleGroups: [[SettingsSection]] {
-        // `isEmpty` before `trimmingCharacters`: the trim ALLOCATES, and the
-        // empty query is not the rare case — it is every selection change.
-        guard !query.isEmpty else { return SettingsSection.groups }
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return SettingsSection.groups }
-        let needle = trimmed.lowercased()
-        return SettingsSection.groups.compactMap { group in
-            let kept = group.filter {
-                $0.title.lowercased().contains(needle) || $0.keywords.contains(needle)
-            }
-            return kept.isEmpty ? nil : kept
+    private func row(_ section: SettingsSection) -> some View {
+        Label {
+            Text(section.title)
+        } icon: {
+            SettingsIconTile(
+                symbolName: section.symbolName,
+                tint: section.tint,
+                side: SettingsMetrics.sidebarIconSide,
+                radius: SettingsMetrics.sidebarIconRadius
+            )
         }
+        .tag(section)
+    }
+}
+
+/// One setting a search found: its name, and the line that explains it.
+private struct SettingsSearchResultRow: View {
+    var entry: SettingsSearchEntry
+    var open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(entry.title)
+                    .font(.system(.callout, weight: .medium))
+                    .foregroundStyle(Ink.primary)
+                    .lineLimit(1)
+                if !entry.help.isEmpty {
+                    Text(entry.help)
+                        .font(.system(.caption))
+                        .foregroundStyle(Ink.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.leading, SettingsMetrics.sidebarIconSide + Spacing.base)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("\(entry.title), in \(entry.section.title)"))
+        .accessibilityHint(Text(entry.help))
     }
 }

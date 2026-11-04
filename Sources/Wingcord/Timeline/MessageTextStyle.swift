@@ -264,6 +264,15 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         [.font: metadataFont, .foregroundColor: tertiaryColor, .paragraphStyle: bodyParagraph]
     }
 
+    /// The "(edited)" after a changed message's words: Discord's `.edited`, a
+    /// size under the words (`.625rem` against 1). **The secondary rung, not the time's tertiary**:
+    /// a word this small in the quietest ink is the pale grey the transcript
+    /// keeps clear of, and on the reader's own bubble it is the white the
+    /// alpha steps down from.
+    var editedMark: [NSAttributedString.Key: Any] {
+        [.font: metadataFont, .foregroundColor: secondaryColor, .paragraphStyle: bodyParagraph]
+    }
+
     /// Inline code's glyphs. Its plate and hairline are painted from the run's
     /// measured rectangles — CoreText's `.backgroundColor` is a flat box per
     /// glyph run, with no corner and no border.

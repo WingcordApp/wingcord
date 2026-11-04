@@ -12,6 +12,8 @@ struct EventActionBar: View {
 
     @Environment(AppModel.self) private var model
     @State private var hasCopied = false
+    /// The capsules' height, read off Copy Link, for the ⋯ beside it.
+    @State private var capsuleHeight: CGFloat?
     /// The date whose Interested asked "the series, or this one?".
     @State private var askedDate: UInt64?
     @State private var confirmation: EventConfirmation?
@@ -21,22 +23,27 @@ struct EventActionBar: View {
         let isExternal = event.location.externalLocation != nil
         let canManage = model.canManage(event)
         HStack(spacing: Spacing.base) {
-            EventMoreMenu(event: event, occurrence: occurrence, confirm: { confirmation = $0 })
+            EventMoreMenu(event: event, occurrence: occurrence, side: capsuleHeight, confirm: { confirmation = $0 })
             copyButton
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { capsuleHeight = $0 }
             if isActive, !isExternal { joinButton }
             if !isActive { interestedButton }
             // Discord offers Start from fifteen minutes before, never for a
             // cancelled date — and a stage needs an instance this client does
             // not make.
             if !isActive, canManage, isStartable, event.exception(for: occurrence)?.isCanceled != true {
-                Button("Start") { confirmation = .start }
-                    .buttonStyle(.borderedProminent)
+                Button { confirmation = .start } label: { EventActionLabel(title: "Start") }
+                    .buttonStyle(.glassProminent)
+                    .tint(Palette.accent)
             }
             if isActive, canManage, isExternal {
-                Button("End Event") { confirmation = .end }
-                    .buttonStyle(.bordered)
+                Button { confirmation = .end } label: { EventActionLabel(title: "End Event") }
+                    .buttonStyle(.glass)
             }
         }
+        // Glass capsules of one height, every one — the app's button (Alex,
+        // 2026-10-27, screenshots 35–36: a squat ⋯ beside a flat Copy Link).
+        .buttonBorderShape(.capsule)
         .controlSize(.small)
         .eventConfirmation($confirmation, for: event)
     }
@@ -54,9 +61,9 @@ struct EventActionBar: View {
             model.copyEventLink(event, occurrence: nil)
             hasCopied = true
         } label: {
-            Label(hasCopied ? "Copied" : "Copy Link", systemImage: hasCopied ? "checkmark" : "link")
+            EventActionLabel(title: hasCopied ? "Copied" : "Copy Link", systemImage: hasCopied ? "checkmark" : "link")
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
         .disabled(hasCopied)
         .task(id: hasCopied) {
             guard hasCopied else { return }
@@ -78,8 +85,8 @@ struct EventActionBar: View {
         } else {
             "Join"
         }
-        return Button(title) { model.joinEventRoom(event) }
-            .buttonStyle(.borderedProminent)
+        return Button { model.joinEventRoom(event) } label: { EventActionLabel(title: title) }
+            .buttonStyle(.glassProminent)
             .tint(Palette.presenceOnline)
             .disabled(!canJoin)
     }
@@ -94,13 +101,13 @@ struct EventActionBar: View {
                 model.apply(step, to: event)
             }
         } label: {
-            Label("Interested", systemImage: isInterested ? "checkmark" : "bell")
+            EventActionLabel(title: "Interested", systemImage: isInterested ? "checkmark" : "bell")
         }
         return Group {
             if isInterested {
-                button.buttonStyle(.borderedProminent).tint(Palette.presenceOnline)
+                button.buttonStyle(.glassProminent).tint(Palette.presenceOnline)
             } else {
-                button.buttonStyle(.bordered)
+                button.buttonStyle(.glass)
             }
         }
         .accessibilityAddTraits(isInterested ? .isSelected : [])
@@ -111,6 +118,24 @@ struct EventActionBar: View {
             if let askedDate {
                 EventSeriesChoice(event: event, occurrence: askedDate) { self.askedDate = nil }
             }
+        }
+    }
+}
+
+/// One button's words, its glyph set inline in them — so every capsule in
+/// the bar is one text line tall, as the ⋯ menu beside them is. A `Label`'s
+/// symbol stood a point and a half above the line and made its capsule
+/// taller than the menu, which AppKit draws at the small control's own
+/// height whatever its label says (Alex, 2026-10-27: "the second pill bigger").
+struct EventActionLabel: View {
+    var title: String
+    var systemImage: String?
+
+    var body: some View {
+        if let systemImage {
+            Text("\(Image(systemName: systemImage)) \(title)")
+        } else {
+            Text(title)
         }
     }
 }
@@ -161,21 +186,50 @@ struct EventMoreMenu: View {
     var occurrence: UInt64?
     /// A date in "Events in series", whose menu answers for that date.
     var isSeriesDate = false
+    /// The circle's diameter: the capsules' height beside it, when the bar
+    /// has measured it.
+    var side: CGFloat? = nil
     var confirm: (EventConfirmation) -> Void
 
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        Menu {
-            items
-        } label: {
-            Image(systemName: "ellipsis")
+        // **Its own glass, at its neighbours' height.** A `Menu` in a glass
+        // button style is AppKit's pop-up, drawn at the small control's own
+        // 19 points whatever its label says — a point and a half under the
+        // SwiftUI capsules beside it (Alex, 2026-10-27, screenshot 36). Plain,
+        // the menu draws this label as given, so the circle is the bar's.
+        if let side {
+            Menu {
+                items
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(InkColor.primary)
+                    .frame(width: side, height: side)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                    .contentShape(.circle)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More options")
+            .accessibilityLabel(Text("More options"))
+        } else {
+            Menu {
+                items
+            } label: {
+                Text(Image(systemName: "ellipsis"))
+                    .fontWeight(.semibold)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .menuIndicator(.hidden)
+            .help("More options")
+            .accessibilityLabel(Text("More options"))
         }
-        .menuStyle(.button)
-        .buttonStyle(.bordered)
-        .menuIndicator(.hidden)
-        .help("More options")
-        .accessibilityLabel(Text("More options"))
     }
 
     @ViewBuilder
@@ -295,6 +349,15 @@ enum EventConfirmation: Equatable {
         }
     }
 
+    /// The card's symbol, and its act's.
+    var symbolName: String {
+        switch self {
+        case .start: "play.fill"
+        case .end: "stop.fill"
+        case .cancel, .cancelDate: "calendar.badge.minus"
+        }
+    }
+
     var message: String {
         switch self {
         case .start: "You are about to start this event"
@@ -336,15 +399,25 @@ private struct EventConfirmationDialog: ViewModifier {
     @Environment(AppModel.self) private var model
 
     func body(content: Content) -> some View {
-        content.confirmationDialog(
-            confirmation?.title ?? "",
+        content.modal(
             isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }),
-            presenting: confirmation
-        ) { asked in
-            Button(asked.confirmTitle, role: asked.isDestructive ? .destructive : nil) { perform(asked) }
-            Button("Never Mind", role: .cancel) {}
-        } message: { asked in
-            Text(asked.message)
+            style: .alert
+        ) {
+            if let asked = confirmation {
+                ModalAlert(
+                    hero: .symbol(asked.symbolName),
+                    title: asked.title,
+                    message: Text(asked.message),
+                    actions: [
+                        .cancel("Never Mind"),
+                        // Chosen, so the act's colour; a cancellation cannot be
+                        // taken back, so it takes no Return (D11b).
+                        .act(asked.confirmTitle, symbol: asked.symbolName, irreversible: asked.isDestructive) {
+                            perform(asked)
+                        },
+                    ]
+                )
+            }
         }
     }
 

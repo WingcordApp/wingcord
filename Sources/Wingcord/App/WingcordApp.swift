@@ -145,6 +145,7 @@ struct WingcordApp: App {
                 .presentsConversationHeads()
                 .presentsActivityInfo()
                 .presentsExpressionInfo()
+                .presentsInvokedCommand()
                 .presentsGuildSurfaces()
                 .presentsJoinServer()
                 .presentsSearchFilters()
@@ -154,6 +155,9 @@ struct WingcordApp: App {
                 // game page — and a switcher that opened underneath the surface
                 // it was summoned from would be invisible.
                 .presentsQuickSwitcher()
+                // **After every presenter**, so a card is over whatever raised
+                // it — a profile, the switcher, the events.
+                .hostsModals(publish: { model.isModalShown = $0 })
                 .watchesPushToTalk()
                 .publishesGameActivity()
                 // The menu bar's workspace commands are on while this window is
@@ -179,6 +183,7 @@ struct WingcordApp: App {
         // `WingcordCommands` installs.
         Window("Settings", id: SettingsWindow.sceneID) {
             SettingsView()
+                .hostsModals()
                 .resolvesMotion()
                 .environment(model)
         }
@@ -196,6 +201,7 @@ struct WingcordApp: App {
         // (docs/CLIPS-PRESENCE.md, Phase 4.2).
         Window("Clips", id: ClipsWindow.sceneID) {
             ClipsLibraryView()
+                .hostsModals()
                 .resolvesMotion()
                 .environment(model)
         }
@@ -214,6 +220,7 @@ struct WingcordApp: App {
         WindowGroup(id: ServerSettingsWindow.sceneID, for: ServerSettingsTarget.self) { target in
             if let value = target.wrappedValue {
                 ServerSettingsView(target: value, model: model, controller: model.sessionController)
+                    .hostsModals()
                     .resolvesMotion()
                     .environment(model)
             }

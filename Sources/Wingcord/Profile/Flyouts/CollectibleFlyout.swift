@@ -35,8 +35,8 @@ struct CollectibleFlyout: View {
         }
     }
 
-    /// `premium_type == 2` exactly — Basic is paid and carries none of these.
-    private var wearsNitro: Bool { model.entitlements.premiumTier == .nitro }
+    /// The one rule for whether an owned item may be worn — `canWear`.
+    private var capability: ProfileEditCapability { model.profileEditCapability(for: editor.scope) }
 
     private var chosen: OwnedCollectible? {
         owned.first { $0.skuID == editor.worn(kind) }
@@ -121,7 +121,7 @@ struct CollectibleFlyout: View {
     }
 
     private func tile(_ item: OwnedCollectible) -> some View {
-        let wearable = !item.isNitroExclusive || wearsNitro
+        let wearable = capability.canWear(item)
         return FlyoutTile(isSelected: editor.worn(kind) == item.skuID, height: tileHeight, insets: kind == .nameplate ? 0 : Spacing.tight) {
             guard wearable else { return }
             choose(item)

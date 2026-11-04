@@ -17,7 +17,9 @@ struct ModalPanelBackground<S: InsettableShape>: ViewModifier {
             .background(Palette.surface, in: shape)
             .overlay { shape.strokeBorder(Palette.edge).allowsHitTesting(false) }
             .clipShape(shape)
-            .shadow(color: .black.opacity(0.35), radius: 24, y: 8)
+            // The cards' depth (`ModalCardChrome`), so a panel and the card it
+            // raises read as the same material at two heights.
+            .shadow(color: .black.opacity(0.38), radius: 34, y: 16)
     }
 }
 

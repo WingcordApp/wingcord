@@ -228,7 +228,7 @@ struct ServerProfilePane: View {
                 }
             }
         }
-        .sheet(isPresented: $isPickingGames) {
+        .modal(isPresented: $isPickingGames) {
             GamePickerSheet(
                 store: store,
                 chosen: Set(profile.wrappedValue.gameApplicationIDs)

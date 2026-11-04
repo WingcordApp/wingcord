@@ -17,46 +17,46 @@ struct AddFriendSheet: View {
     @State private var tag = ""
     @State private var outcome: Result<String, FriendRequestFailure>?
     @State private var isSending = false
-    @FocusState private var isFocused: Bool
 
     private var canSend: Bool {
-        !tag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+        !tag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.base * 1.5) {
-            Text("Add Friend")
-                .font(.title3.weight(.semibold))
-            Text("You can add friends with their Discord username.")
-                .font(.subheadline)
-                .foregroundStyle(Ink.secondary)
-            HStack(spacing: Spacing.base) {
-                TextField("Username", text: $tag)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($isFocused)
-                    .onSubmit(send)
-                Button("Send Friend Request", action: send)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canSend)
+        VStack(alignment: .leading, spacing: 0) {
+            ModalHeader(
+                title: "Add Friend",
+                subtitle: Text("You can add friends with their Discord username."),
+                close: { AddFriendRequest.shared.isShown = false }
+            )
+            VStack(alignment: .leading, spacing: Spacing.snug) {
+                GlassEffectContainer(spacing: Spacing.base) {
+                    HStack(spacing: Spacing.base) {
+                        ModalTextField(placeholder: "Username", text: $tag, symbolName: "at", onSubmit: send)
+                        ModalButton(
+                            title: "Send Request",
+                            symbolName: "person.badge.plus",
+                            role: .act,
+                            isWorking: isSending,
+                            action: send
+                        )
+                        .disabled(!canSend)
+                    }
+                }
+                if let outcome {
+                    Label(outcome.message, systemImage: outcome.isSuccess ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(outcome.isSuccess ? Color(hex: 0x23A55A) : Color(hex: 0xF23F43))
+                        .transition(.opacity)
+                }
             }
-            if let outcome {
-                Label(outcome.message, systemImage: outcome.isSuccess ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .font(.subheadline)
-                    .foregroundStyle(outcome.isSuccess ? Color(hex: 0x23A55A) : Color(hex: 0xF23F43))
-                    .transition(.opacity)
-            }
-            HStack {
-                Spacer()
-                Button("Done") { AddFriendRequest.shared.isShown = false }
-                    .keyboardShortcut(.cancelAction)
-            }
+            .padding(.horizontal, Spacing.group)
+            .padding(.bottom, Spacing.group)
         }
-        .padding(20)
-        .frame(width: 440)
+        .frame(width: 460)
         .animation(motion.standard, value: outcome?.message)
         // A new name is a new question: the last answer goes.
         .onChange(of: tag) { _, _ in outcome = nil }
-        .onAppear { isFocused = true }
     }
 
     private func send() {

@@ -265,7 +265,8 @@ struct DiscoveryPane: View {
                 .padding(.vertical, Spacing.snug)
         } else if hasMore {
             Button("Show more", action: loadMore)
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.large)
                 .frame(maxWidth: .infinity)
         }

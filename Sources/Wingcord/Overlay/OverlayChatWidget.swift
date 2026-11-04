@@ -256,6 +256,7 @@ private struct OverlayChatBody: View {
             .overlay { ReactionTooltipOverlay(channelID: channelID) }
             .overlay { GuildMarkTooltipOverlay() }
             .overlay { AutoModActionTooltipOverlay(channelID: channelID) }
+            .overlay { EditedMarkTooltipOverlay() }
             // **The transcript runs to the panel's foot, UNDER the composer**,
             // and this one modifier is the whole of "the composer floats".
             //

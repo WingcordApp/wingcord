@@ -29,7 +29,8 @@ struct HotkeyRecorderRow: View {
                         .monospacedDigit()
                         .frame(minWidth: 58)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .background { ScreenAnchor(handle: anchor) }
                 .help("Record a new shortcut for showing Wingcord.")
@@ -40,7 +41,8 @@ struct HotkeyRecorderRow: View {
                     Image(systemName: "arrow.counterclockwise")
                         .font(.system(size: 11, weight: .semibold))
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .disabled(hotkey == Hotkey.default)
                 .help("Reset to the default hotkey.")

@@ -41,6 +41,9 @@ struct RailMemoKey: Hashable, Sendable {
 struct SidebarMemoKey: Hashable, Sendable {
     /// The events row: whether there is one, its count and its light.
     var eventsRow: SidebarEventsRow?
+    /// The Boost progress bar — whether there is one, and its counts. Read from
+    /// the experiments as well as the server, which no revision here covers.
+    var boostGoal: SidebarBoostGoal? = nil
     var structureRevision: UInt64
     /// The DM list's order IS recency, so it has to key on the revision that
     /// moves when a `lastMessageID` does — the one the guild tree deliberately
@@ -171,6 +174,7 @@ extension AppModel {
     func sidebarPresentation(for guildID: GuildID?) -> SidebarPresentation {
         let key = SidebarMemoKey(
             eventsRow: guildID.flatMap(sidebarEventsRow(for:)),
+            boostGoal: guildID.flatMap(sidebarBoostGoal(for:)),
             structureRevision: channelIndex.structureRevision,
             valueRevision: channelIndex.valueRevision,
             sidebarRevision: sidebarRevision,
@@ -200,7 +204,9 @@ extension AppModel {
         if let guildID {
             // A guild that is selected but has not arrived yet is a real state
             // during bootstrap. It gets an empty list, not the DM list.
-            value = guildTable[guildID].map { buildGuildSidebar(guild: $0, eventsRow: key.eventsRow) } ?? .empty
+            value = guildTable[guildID].map {
+                buildGuildSidebar(guild: $0, eventsRow: key.eventsRow, boostGoal: key.boostGoal)
+            } ?? .empty
             sidebarCache = (key, value)
         } else {
             value = buildDirectMessageSidebar(users: userTable)
@@ -837,13 +843,19 @@ extension AppModel {
         return out.trimmingCharacters(in: .whitespaces)
     }
 
-    private func buildGuildSidebar(guild: Guild, eventsRow: SidebarEventsRow?) -> SidebarPresentation {
+    private func buildGuildSidebar(
+        guild: Guild,
+        eventsRow: SidebarEventsRow?,
+        boostGoal: SidebarBoostGoal?
+    ) -> SidebarPresentation {
         let channelIDs = channelIndex.channelIDs(inGuild: guild.id)
         let filtersByFollow = hidesUnfollowedChannels(inGuild: guild.id)
         var rows: [SidebarRow] = []
-        rows.reserveCapacity(channelIDs.count + 2)
+        rows.reserveCapacity(channelIDs.count + 3)
 
-        // Discord's order: the guide, then the events, then the pages after.
+        // Discord's order: the Boost bar, the guide, then the events, then the
+        // pages after.
+        if let boostGoal { rows.append(.boostGoal(boostGoal)) }
         let surfaces = guildSurfaceRows(for: guild.id)
         for surface in surfaces where surface == .serverGuide {
             rows.append(.guildAction(surface))

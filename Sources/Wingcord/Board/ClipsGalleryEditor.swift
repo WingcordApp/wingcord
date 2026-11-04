@@ -35,7 +35,8 @@ struct ClipsGalleryEditor: View {
                     Label("Add a Clip", systemImage: "plus")
                         .font(.system(.subheadline, weight: .medium))
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .popover(isPresented: $isPicking, arrowEdge: .bottom) {
                     LibraryClipPicker(taken: Set(clips.compactMap(\.localClipID))) { picked in

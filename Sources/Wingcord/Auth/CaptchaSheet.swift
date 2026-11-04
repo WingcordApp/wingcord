@@ -72,19 +72,11 @@ struct CaptchaSheet: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.tight) {
-            Text("Quick check")
-                .font(.system(.title3, weight: .bold))
-                .foregroundStyle(Ink.primary)
-            Text("Discord asks for this before letting a new client join a server.")
-                .font(.system(.callout))
-                .foregroundStyle(Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Spacing.group)
-        .padding(.top, Spacing.group)
-        .padding(.bottom, Spacing.margin)
+        ModalHeader(
+            title: "Quick check",
+            subtitle: Text("Discord asks for this before letting a new client join a server."),
+            close: { onFinish(nil) }
+        )
     }
 
     /// Whatever the challenge currently is: a wait, the page, or a failure.
@@ -123,7 +115,7 @@ struct CaptchaSheet: View {
         VStack(spacing: Spacing.snug) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 26))
-                .foregroundStyle(Ink.tertiary)
+                .foregroundStyle(Ink.secondary)
                 // Decorative. The sentence below says the same thing, and
                 // VoiceOver reading "warning triangle" first delays the part
                 // that carries the information.
@@ -142,13 +134,10 @@ struct CaptchaSheet: View {
         .transition(.opacity)
     }
 
+    /// The ✕ in the heading is the way out; the foot keeps the web page's
+    /// breathing room.
     private var footer: some View {
-        HStack(spacing: Spacing.base) {
-            Spacer(minLength: 0)
-            SurfaceQuietButton(title: "Cancel", systemImage: nil) { onFinish(nil) }
-                .keyboardShortcut(.cancelAction)
-        }
-        .padding(Spacing.group)
+        Color.clear.frame(height: Spacing.margin)
     }
 
     private func handle(_ event: HCaptchaWebView.Event) {

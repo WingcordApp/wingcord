@@ -110,8 +110,10 @@ public enum BadgeRarity: Int, Hashable, Sendable, Codable {
 /// One level of a badge: its name, what reaching it takes, its pictures.
 public struct BadgeTier: Hashable, Sendable, Identifiable {
     public var key: String
-    /// "Breakout", "Sequoia", "Ruby".
-    public var name: String
+    /// "Breakout", "Sequoia", "Ruby" — or nothing: the Server Booster's nine
+    /// levels have keys ("LEVEL_1") and milestones ("1 Month") but no names,
+    /// and Discord draws none (see `CatalogBadge.levelName`).
+    public var name: String?
     /// What reaching it takes — "20 hours", "5 years".
     public var milestoneText: String?
     /// The small mark, for the row and the grids.
@@ -126,7 +128,7 @@ public struct BadgeTier: Hashable, Sendable, Identifiable {
     public var id: String { key }
 
     public init(
-        key: String, name: String, milestoneText: String? = nil,
+        key: String, name: String?, milestoneText: String? = nil,
         simpleIconURL: URL? = nil, complexIconURL: URL? = nil, complexIconAnimatedURL: URL? = nil,
         rarity: BadgeRarity? = nil
     ) {
@@ -243,12 +245,30 @@ public struct CatalogBadge: Hashable, Sendable, Identifiable {
     /// The level's rarity, or the badge's.
     public var displayRarity: BadgeRarity? { displayTier?.rarity ?? rarity }
 
+    /// What a level is called on screen — `08ae84284fe61c6f.js`:
+    /// `Q ? R?.name ?? R?.key : R?.name`. **Only Nitro falls back to the key**;
+    /// any other level without a name has none, so a Server Booster's
+    /// "LEVEL_1" is never drawn (Alex's screenshot 16).
+    public func levelName(_ tier: BadgeTier) -> String? {
+        kind == .premiumTenure ? tier.name ?? tier.key : tier.name
+    }
+
     /// The big title: the level's name — "NITRO RUBY" for Nitro, whose
-    /// levels are named by metal and stone.
+    /// levels are named by metal and stone — or the badge's own where its
+    /// level has none.
     public var title: String {
-        let tierName = displayTier?.name
+        let tierName = displayTier.flatMap(levelName)
         if kind == .premiumTenure { return ["Nitro", tierName].compactMap(\.self).joined(separator: " ") }
         return tierName ?? name ?? ""
+    }
+
+    /// The small line over the title: the badge's name, when the title is a
+    /// level's ("Account Age" over "SEQUOIA") — Discord's `eyebrow`. None for
+    /// Nitro, whose title already says it, and none where the title is the
+    /// badge's own name.
+    public var eyebrow: String? {
+        guard kind != .premiumTenure, displayTier.flatMap(levelName) != nil else { return nil }
+        return name
     }
 
     /// When the level drawn was reached — `982240`'s `E`.

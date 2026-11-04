@@ -184,13 +184,31 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
     // MARK: Selection
 
     /// The character boundary nearest a point in the block's own coordinates:
-    /// above the text is its start, below it its end.
+    /// above the text is its start, below it its end — and the end is where
+    /// the words stop, short of an "(edited)" after them.
     func characterIndex(at point: CGPoint) -> Int {
-        let length = text.attributed.length
+        let length = text.selectableLength
         guard let first = lineBoxes.first, point.y >= first.top else { return 0 }
         guard let box = lineBoxes.first(where: { point.y < $0.bottom }) else { return length }
         let index = CTLineGetStringIndexForPosition(box.line, CGPoint(x: point.x - box.originX, y: 0))
-        return index == kCFNotFound ? box.range.location : min(max(0, index), length)
+        return index == kCFNotFound ? min(box.range.location, length) : min(max(0, index), length)
+    }
+
+    /// Where the "(edited)" after a changed message's words landed, in the
+    /// block's own coordinates — what its tooltip answers over.
+    var editedMarkRect: CGRect? {
+        text.editedMark.flatMap { selectionRects(for: $0.range).first }
+    }
+
+    /// Where the character at `index` sits on its line's baseline, in the
+    /// block's own coordinates — what Look Up draws its lit copy of the
+    /// words from. Nil past the last line.
+    func baselineOrigin(at index: Int) -> CGPoint? {
+        guard let box = lineBoxes.first(where: {
+            index >= $0.range.location && index < $0.range.location + max(1, $0.range.length)
+        }) else { return nil }
+        let offset = CTLineGetOffsetForStringIndex(box.line, index, nil)
+        return CGPoint(x: box.originX + offset, y: box.baseline)
     }
 
     /// The highlight for `range`: one band per line it crosses.
@@ -212,7 +230,7 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
 
     /// The word around a character — a double-click's selection.
     func wordRange(at index: Int) -> NSRange {
-        let length = text.attributed.length
+        let length = text.selectableLength
         guard length > 0 else { return NSRange(location: 0, length: 0) }
         return text.attributed.doubleClick(at: min(max(0, index), length - 1))
     }

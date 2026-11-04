@@ -56,9 +56,8 @@ struct ConnectedRPCAppsGroup: View {
                 }
             }
             SettingsFootnote(
-                "Apps like Music Presence, or a game built with Discord\u{2019}s SDK, set your activity "
-                    + "through Wingcord the way they would through Discord. A blocked app still "
-                    + "connects; what it says is never shared.",
+                "Apps like Music Presence, and games built with Discord\u{2019}s SDK, set your activity "
+                    + "through Wingcord. A blocked app can still connect, but nothing it says is shared.",
                 symbolName: "app.connected.to.app.below.fill"
             )
         }

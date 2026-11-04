@@ -158,6 +158,21 @@ extension AppModel {
         sessionController.writeBlock(isBlocked, userID: userID)
     }
 
+    /// Ignore or Block — **asked first**, as Discord asks (its "Ignore
+    /// {name}?" and "Block {name}?"), with what it does in a few lines and the
+    /// other one a click away. Undoing either acts at once, as Discord's does.
+    func askToIgnore(_ userID: UserID) {
+        guard userID != currentUserID else { return }
+        if isIgnored(userID) { setIgnored(false, userID: userID); return }
+        relationshipConfirmation = RelationshipConfirmation(userID: userID, mode: .ignore)
+    }
+
+    func askToBlock(_ userID: UserID) {
+        guard userID != currentUserID else { return }
+        if isBlocked(userID) { setBlocked(false, userID: userID); return }
+        relationshipConfirmation = RelationshipConfirmation(userID: userID, mode: .block)
+    }
+
     func setIgnored(_ isIgnored: Bool, userID: UserID) {
         guard userID != currentUserID else { return }
         guard relationshipsInFlight.insert(userID).inserted else { return }

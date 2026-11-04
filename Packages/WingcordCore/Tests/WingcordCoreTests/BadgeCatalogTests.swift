@@ -62,6 +62,31 @@ struct BadgeCatalogTests {
         #expect(BadgeRarity.mythic.title == "Mythic")
     }
 
+    @Test("A level without a name has none — Server Booster's title is its own name")
+    func namelessLevels() {
+        // The booster's levels as the directory sends them: keys and
+        // milestones, no names (Alex's screenshot 16 drew "LEVEL_1").
+        let booster = CatalogBadge(
+            badgeID: 12, name: "Server Booster", isOwned: true, currentTierKey: "LEVEL_1",
+            tiers: [
+                BadgeTier(key: "LEVEL_1", name: nil, milestoneText: "1 Month"),
+                BadgeTier(key: "LEVEL_9", name: nil, milestoneText: "24+ Months"),
+            ]
+        )
+        #expect(booster.title == "Server Booster")
+        #expect(booster.eyebrow == nil)
+        #expect(booster.tiers.allSatisfy { booster.levelName($0) == nil })
+        // A named level keeps the badge's name over it.
+        #expect(streaming().eyebrow == "Streaming")
+        // Nitro alone falls back to the key, as Discord's does.
+        let nitro = CatalogBadge(
+            badgeID: 1, isOwned: true, currentTierKey: "gold",
+            tiers: [BadgeTier(key: "gold", name: nil)]
+        )
+        #expect(nitro.title == "Nitro gold")
+        #expect(nitro.eyebrow == nil)
+    }
+
     @Test("Owned and earnable split; staff and Nitro fixed unless tenure is hideable")
     func arrangement() {
         let staff = CatalogBadge(badgeID: 22, isOwned: true)

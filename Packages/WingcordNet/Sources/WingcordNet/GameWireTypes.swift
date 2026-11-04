@@ -26,6 +26,7 @@ struct GameDTO: Decodable, Sendable {
     var reviews: ReviewsDTO?
     var opencritic_url: String?
     var l30_rank: Int?
+    var community_guild_ids: [GuildID]?
     var game_flags: Int?
     var linked_applications: [LinkedApplicationDTO]?
     var third_party_skus: [SKUDTO]?
@@ -204,6 +205,7 @@ struct GameDTO: Decodable, Sendable {
             steamReleaseStatus: steam_release_status.flatMap(SteamReleaseStatus.init(rawValue:))
         )
         game.isProfileDisabled = (game_flags ?? 0) & 1 != 0
+        game.communityGuildIDs = community_guild_ids ?? []
         game.officialApplicationID = linked_applications?.first { $0.type == 2 }?.id
         return game
     }

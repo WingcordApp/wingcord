@@ -3,62 +3,75 @@ import SwiftUI
 // MARK: - The catalog
 //
 // Every settings section, in the order and the grouping the source list shows
-// them. The groups are separated by space alone — no dividers, no headers — so
-// the list reads as four short lists rather than one long one, which is the only
-// reason a twelve-row source list is scannable at all.
+// them: five short lists separated by space alone (docs/SHEETS-SETTINGS.md
+// D10a) — who you are, the app, talking, playing, and what is under the hood.
+// Twenty-two panes became nineteen: Messages, Expressions and Media are one
+// Chat; Privacy and Messaging Permissions are one Privacy & Safety; Storage is
+// part of Performance; and Wingcord's own additions, which hid under General ›
+// Advanced, have a pane of their own.
 
 enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
-    // The app itself.
+    // You.
+    case account
+    case privacySafety
+    case connections
+    // The app.
     case general
     case appearance
     case accessibility
-    // What you read.
-    case messages
-    case expressions
-    case media
-    case voiceVideo
     case notifications
     case shortcuts
-    // What you play.
+    // Talking.
+    case chat
+    case voiceVideo
+    // Playing.
     case activity
     case overlay
     case clips
     case streamerMode
-    // Who you are.
-    case account
-    case connectedApps
-    case privacy
-    case messagingPermissions
-    // What it costs.
+    // Under the hood.
+    case extras
     case performance
-    case storage
     case diagnostics
     case experiments
     case about
 
     var id: String { rawValue }
 
+    /// A page remembered or asked for by the name it had before the map was
+    /// redrawn, as the page it now lives on.
+    init?(stored raw: String) {
+        if let section = SettingsSection(rawValue: raw) {
+            self = section
+            return
+        }
+        switch raw {
+        case "messages", "expressions", "media": self = .chat
+        case "privacy", "messagingPermissions": self = .privacySafety
+        case "connectedApps": self = .connections
+        case "storage": self = .performance
+        default: return nil
+        }
+    }
+
     var title: String {
         switch self {
+        case .account: "Account"
+        case .privacySafety: "Privacy & Safety"
+        case .connections: "Connections"
         case .general: "General"
         case .appearance: "Appearance"
         case .accessibility: "Accessibility"
-        case .messages: "Messages"
-        case .expressions: "Expressions"
-        case .media: "Media"
-        case .voiceVideo: "Voice & Video"
         case .notifications: "Notifications"
         case .shortcuts: "Shortcuts"
+        case .chat: "Chat"
+        case .voiceVideo: "Voice & Video"
         case .activity: "Activity"
         case .overlay: "Game Overlay"
         case .clips: "Clips"
         case .streamerMode: "Streamer Mode"
-        case .account: "Account"
-        case .connectedApps: "Connected Apps"
-        case .privacy: "Privacy"
-        case .messagingPermissions: "Messaging Permissions"
+        case .extras: "Extras"
         case .performance: "Performance"
-        case .storage: "Storage"
         case .diagnostics: "Diagnostics"
         case .experiments: "Experiments"
         case .about: "About"
@@ -67,25 +80,22 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
 
     var symbolName: String {
         switch self {
+        case .account: "person.crop.circle.fill"
+        case .privacySafety: "hand.raised.fill"
+        case .connections: "link"
         case .general: "gearshape.fill"
         case .appearance: "paintbrush.fill"
         case .accessibility: "figure.walk.motion"
-        case .messages: "bubble.left.and.text.bubble.right.fill"
-        case .expressions: "face.smiling.inverse"
-        case .media: "photo.fill"
-        case .voiceVideo: "mic.fill"
         case .notifications: "bell.fill"
         case .shortcuts: "keyboard.fill"
+        case .chat: "bubble.left.and.text.bubble.right.fill"
+        case .voiceVideo: "mic.fill"
         case .activity: "gamecontroller.fill"
         case .overlay: "rectangle.on.rectangle.fill"
         case .clips: "scissors"
         case .streamerMode: "dot.radiowaves.left.and.right"
-        case .account: "person.crop.circle.fill"
-        case .connectedApps: "link"
-        case .privacy: "hand.raised.fill"
-        case .messagingPermissions: "bubble.left.and.exclamationmark.bubble.right.fill"
+        case .extras: "sparkles"
         case .performance: "speedometer"
-        case .storage: "internaldrive.fill"
         case .diagnostics: "waveform.path.ecg"
         case .experiments: "flask.fill"
         case .about: "info.circle.fill"
@@ -93,90 +103,82 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     }
 
     /// The tile behind the symbol. Content colour, not chrome: a source list of
-    /// eleven identical grey tiles is a source list nobody can navigate by
-    /// shape, and the tint is the only thing that makes a row findable at a
-    /// glance once its position is learned.
+    /// identical grey tiles is a source list nobody can navigate by shape, and
+    /// the tint is the only thing that makes a row findable at a glance once
+    /// its position is learned.
     var tint: Color {
         switch self {
+        case .account: Color(hex: 0x5E5CE6)
+        case .privacySafety: Color(hex: 0x30D158)
+        case .connections: Color(hex: 0x1D_B9_54)
         case .general: Color(hex: 0x8E8E93)
         case .appearance: Color(hex: 0xFF375F)
         case .accessibility: Color(hex: 0x0060DF)
-        case .messages: Color(hex: 0x0A84FF)
-        case .expressions: Color(hex: 0xFFB340)
-        case .media: Color(hex: 0x64D2FF)
-        case .voiceVideo: Color(hex: 0x34C759)
         case .notifications: Color(hex: 0xFF453A)
         case .shortcuts: Color(hex: 0xA2845E)
+        case .chat: Color(hex: 0x0A84FF)
+        case .voiceVideo: Color(hex: 0x34C759)
         case .activity: Color(hex: 0xFF6482)
         case .overlay: Color(hex: 0x7D7AFF)
         case .clips: Color(hex: 0xFFD426)
         case .streamerMode: Color(hex: 0x9146FF)
-        case .account: Color(hex: 0x5E5CE6)
-        case .connectedApps: Color(hex: 0x1D_B9_54)
-        case .privacy: Color(hex: 0x30D158)
-        case .messagingPermissions: Color(hex: 0xD4A017)
+        case .extras: Color(hex: 0x64D2FF)
         case .performance: Color(hex: 0xFF9F0A)
-        case .storage: Color(hex: 0x00C7BE)
         case .diagnostics: Color(hex: 0xBF5AF2)
         case .experiments: Color(hex: 0x5856D6)
         case .about: Color(hex: 0x32ADE6)
         }
     }
 
-    /// The line under the pane's name. One sentence, present tense, saying what
-    /// the pane is *for* rather than repeating its title — a subtitle that only
-    /// restates the heading is a line of type nobody reads twice.
+    /// The line under the pane's name: **a voice, not an inventory** (Alex,
+    /// 2026-10-26: "you defaulted to a generic laundry list instead of
+    /// creating an actual vibe"). It says what the pane is for, in a few
+    /// words with some life in them; the settings themselves explain plainly.
     var summary: String {
         switch self {
-        case .general: "Where Wingcord opens, and what the window shows"
-        case .appearance: "Themes, a picture behind them, and the size of everything"
-        case .accessibility: "What Wingcord follows, and where to change it"
-        case .messages: "How a conversation is written out"
-        case .expressions: "Emoji, stickers and the tone they are drawn in"
-        case .media: "Pictures, video and what plays by itself"
-        case .voiceVideo: "Microphone, camera, and how a call sounds"
-        case .notifications: "Banners, sounds and unread counts"
-        case .shortcuts: "Every key the app answers to"
-        case .activity: "What you're playing, and who gets to see it"
-        case .overlay: "Wingcord over the game, and the key that summons it"
-        case .clips: "The last moments of a game, whenever you want them"
-        case .streamerMode: "What a stream of your screen should never show"
-        case .account: "Who you are signed in as, on this Mac"
-        case .connectedApps: "Linked accounts, and what you've authorized"
-        case .privacy: "What leaves this machine, which is nothing"
-        case .messagingPermissions: "Who may write to you, and what they may send"
-        case .performance: "What the app is costing you right now"
-        case .storage: "What Wingcord keeps on this Mac, and how to reclaim it"
-        case .diagnostics: "The state of the connection, and where the logs are"
-        case .experiments: "Wingcord's previews, and what Discord is trying on you"
-        case .about: "Version, source and the one dependency"
+        case .account: "Who's signed in — and who's next."
+        case .privacySafety: "Your space, your rules."
+        case .connections: "Bring your other worlds along."
+        case .general: "How Wingcord starts and settles in."
+        case .appearance: "Paint the room you chat in."
+        case .accessibility: "Make it work the way you do."
+        case .notifications: "Only the pings that matter."
+        case .shortcuts: "Everything, one keystroke away."
+        case .chat: "How a conversation reads, moves and plays."
+        case .voiceVideo: "Sound like yourself."
+        case .activity: "Show what you're playing — or don't."
+        case .overlay: "Your friends, right on top of the game."
+        case .clips: "Never miss the play."
+        case .streamerMode: "Go live without giving yourself away."
+        case .extras: "Wingcord's little tricks."
+        case .performance: "Light on its feet, and proof of it."
+        case .diagnostics: "Under the hood, for when something's off."
+        case .experiments: "Try tomorrow's features today."
+        case .about: "Made for the Mac."
         }
     }
 
     /// The words a search should match beyond the title — what the section
-    /// *contains*, so "gif" finds Expressions and "battery" finds Media.
+    /// *contains*, so "gif" finds Chat and "battery" finds it too.
     var keywords: String {
         switch self {
-        case .general: "startup launch window sidebar language developer mode id"
-        case .appearance: "theme themes colour color palette plumage custom background image picture wallpaper backdrop blur dark accent text size compact density font"
-        case .accessibility: "voiceover motion transparency contrast colour blind"
-        case .messages: "timestamps embeds links previews replies"
-        case .expressions: "emoji stickers gif skin tone reactions"
-        case .media: "images video volume mute loop battery animation"
-        case .voiceVideo: "voice video call microphone mic camera input output device speaker headphones push to talk ptt soundboard screen share echo noise sensitivity webcam"
+        case .account: "sign in out switch token keychain"
+        case .privacySafety: "privacy data telemetry crash reports messaging permissions dm direct messages spam filter friend requests blocked block ignore sensitive explicit nsfw age restricted content filter blur gore terms"
+        case .connections: "connections connected apps spotify steam xbox playstation github twitch letterboxd authorized apps oauth deauthorize unlink"
+        case .general: "startup launch window member list language developer mode id permissions"
+        case .appearance: "theme themes look colour color palette plumage custom background image picture wallpaper backdrop blur dark light accent text size compact density font bubbles timestamps 24-hour seconds sidebar banners bars pill nameplate"
+        case .accessibility: "voiceover motion transparency contrast colour blind cosmetics underline links readability"
         case .notifications: "sounds badges alerts mentions"
         case .shortcuts: "keyboard keys bindings navigation"
+        case .chat: "messages link previews embeds images threads split view emoji stickers gif skin tone reactions animated media video volume mute loop battery compression upload"
+        case .voiceVideo: "voice video call microphone mic camera input output device speaker headphones push to talk ptt soundboard screen share echo noise sensitivity webcam"
         case .activity: "game games playing detection detected registered presence rich status share sharing activity privacy servers join party game mode performance cpu gpu animated emoji gif"
         case .overlay: "overlay in-game hud widgets lock unlock keybind hotkey notifications toolbar"
         case .clips: "clip clips record recording capture replay screenshot highlight gallery save share"
         case .streamerMode: "streamer mode stream streaming obs streamlabs xsplit ecamm broadcast hide personal information email phone notes invite links sounds notifications screen capture content protection overlay widgets privacy"
-        case .account: "sign in out switch token keychain"
-        case .connectedApps: "connections spotify steam xbox playstation github twitch authorized apps oauth deauthorize unlink"
-        case .privacy: "data telemetry crash reports"
-        case .messagingPermissions: "messaging permissions dm direct messages spam filter friend requests blocked block ignore sensitive explicit nsfw age restricted content filter blur gore"
-        case .performance: "memory cache inspector frames"
-        case .storage: "disk space cache clear reclaim downloads images"
-        case .diagnostics: "logs trace crash report"
+        case .extras: "fake nitro emoji stickers stream quality embed anonymise anonymize file names silent typing plugin vencord"
+        case .performance: "memory cache inspector frames storage disk space clear reclaim downloads images"
+        case .diagnostics: "logs trace crash report connection"
         case .experiments: "experiments rollout treatment bucket preview previews beta lab typing indicator voice invite"
         case .about: "version build licence acknowledgements"
         }
@@ -186,11 +188,11 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     /// here would silently vanish from the window, so the groups are asserted to
     /// cover every case in the tests.
     static let groups: [[SettingsSection]] = [
-        [.general, .appearance, .accessibility],
-        [.messages, .expressions, .media, .voiceVideo, .notifications, .shortcuts],
+        [.account, .privacySafety, .connections],
+        [.general, .appearance, .accessibility, .notifications, .shortcuts],
+        [.chat, .voiceVideo],
         [.activity, .overlay, .clips, .streamerMode],
-        [.account, .connectedApps, .privacy, .messagingPermissions],
-        [.performance, .storage, .diagnostics, .experiments, .about],
+        [.extras, .performance, .diagnostics, .experiments, .about],
     ]
 }
 
@@ -265,6 +267,9 @@ nonisolated enum SettingsType {
 final class SettingsHistory {
 
     private(set) var current: SettingsSection
+    /// A setting a search result asked to be shown — scrolled to and lit once.
+    /// A new value each time, so choosing the same result twice still answers.
+    private(set) var highlight: SettingsHighlightRequest?
 
     /// Everything before `current`, oldest first, and everything after it.
     private var behind: [SettingsSection] = []
@@ -291,6 +296,12 @@ final class SettingsHistory {
         current = section
     }
 
+    /// Opens the pane a setting is on and asks for the setting to be shown.
+    func show(_ entry: SettingsSearchEntry) {
+        go(to: entry.section)
+        highlight = SettingsHighlightRequest(title: entry.title, serial: (highlight?.serial ?? 0) &+ 1)
+    }
+
     func goBack() {
         guard let previous = behind.popLast() else { return }
         ahead.append(current)
@@ -302,4 +313,20 @@ final class SettingsHistory {
         behind.append(current)
         current = next
     }
+}
+
+/// One request to show a setting — see `SettingsHistory.show(_:)`.
+struct SettingsHighlightRequest: Hashable, Sendable {
+    var title: String
+    var serial: UInt64
+}
+
+extension EnvironmentValues {
+    /// The setting being shown just now, which its row lights for a moment.
+    @Entry var settingsHighlight: String? = nil
+}
+
+/// Where a row can be scrolled to, by its title.
+enum SettingsAnchor {
+    static func id(_ title: String) -> String { "setting:" + title }
 }

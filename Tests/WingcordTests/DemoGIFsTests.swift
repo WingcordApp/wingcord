@@ -43,4 +43,22 @@ struct DemoGIFsTests {
         let frame = try #require(PictureFile.firstFrame(cut))
         #expect(frame.width == 150 && frame.height == 150)
     }
+
+    /// Choose GIF's tile drew one quarter and three empty ones on a real
+    /// account: it read the landing, whose `gifs` is Discord's single trending
+    /// preview — the demo's landing carries all eight, which hid it.
+    @Test("Choose GIF's tile takes four pictures from a trending page, never a video")
+    func mosaicPick() {
+        func gif(_ name: String, video: Bool = false, preview: Bool = true) -> GIF {
+            GIF(
+                url: URL(string: "https://tenor.com/view/\(name)")!,
+                previewURL: preview ? URL(string: "https://media.tenor.com/\(name).\(video ? "mp4" : "gif")") : nil,
+                width: 220, height: 220, isVideo: video
+            )
+        }
+        let page = [gif("a", video: true), gif("b"), gif("c", preview: false), gif("d"), gif("e"), gif("f"), gif("g")]
+        #expect(AppModel.gifMosaic(from: page).map(\.lastPathComponent) == ["b.gif", "d.gif", "e.gif", "f.gif"])
+        #expect(AppModel.gifMosaic(from: DemoGIFs.all).count == 4)
+        #expect(AppModel.gifMosaic(from: [gif("only")]).count == 1)
+    }
 }

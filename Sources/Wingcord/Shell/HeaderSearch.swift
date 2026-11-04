@@ -21,6 +21,13 @@ struct HeaderSearch: View {
     /// The suggestion the arrow keys have reached. A lit row in a list belongs to
     /// the view (INVARIANTS §2), not to the store.
     @State private var highlighted: Int?
+    /// Whether the list has stood down for the search Return just ran.
+    ///
+    /// **Return runs the search and leaves the field focused**, so the
+    /// grammar's list stayed up over the results it had just produced (Alex's
+    /// screenshot 34). The next keystroke, an arrow key or coming back to the
+    /// field brings it back, as Discord's popout comes back.
+    @State private var suggestionsStoodDown = false
 
     private static let fieldWidth: CGFloat = 240
 
@@ -76,10 +83,11 @@ struct HeaderSearch: View {
         .frame(width: Self.fieldWidth, height: ShellMetrics.headerControl)
         .glassEffect(.regular, in: .capsule)
         .onChange(of: isFocused) { _, focused in
+            if focused { suggestionsStoodDown = false }
             if !focused, model.searchText.isEmpty { isOpen = false }
         }
         .overlay(alignment: .topTrailing) {
-            if isFocused {
+            if isFocused, !suggestionsStoodDown {
                 suggestions
                     .offset(y: ShellMetrics.headerControl + Spacing.tight)
             }
@@ -112,7 +120,9 @@ struct HeaderSearch: View {
                 }
             }
             .padding(Spacing.tight + Spacing.hair)
-            .frame(width: Self.fieldWidth + 60)
+            // Wide enough for "Mentions a specific user" and its example
+            // beside it — at the field's width plus 60 every title was cut.
+            .frame(width: Self.fieldWidth + 120)
             .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
             .fixedSize(horizontal: false, vertical: true)
             .transition(.materialize(from: .top, blurring: false))
@@ -123,6 +133,12 @@ struct HeaderSearch: View {
     private func move(_ step: Int) -> KeyPress.Result {
         let count = model.searchSuggestions(for: model.searchText).count
         guard count > 0 else { return .ignored }
+        if suggestionsStoodDown {
+            // The first arrow brings the list back rather than moving in one
+            // the reader cannot see.
+            suggestionsStoodDown = false
+            return .handled
+        }
         let next = (highlighted ?? (step > 0 ? -1 : count)) + step
         highlighted = min(max(next, 0), count - 1)
         return .handled
@@ -136,11 +152,13 @@ struct HeaderSearch: View {
 
     private func submit() {
         let rows = model.searchSuggestions(for: model.searchText)
-        if let highlighted, rows.indices.contains(highlighted) {
+        if let highlighted, rows.indices.contains(highlighted), !suggestionsStoodDown {
             adopt(rows[highlighted])
             return
         }
         model.submitSearch()
+        highlighted = nil
+        suggestionsStoodDown = true
     }
 
     private func close() {
@@ -157,6 +175,7 @@ struct HeaderSearch: View {
         Binding(
             get: { model.searchText },
             set: { text in
+                if text != model.searchText { suggestionsStoodDown = false }
                 guard !text.isEmpty else {
                     if model.isSearchDrafting { model.closeSearch() }
                     model.searchText = ""

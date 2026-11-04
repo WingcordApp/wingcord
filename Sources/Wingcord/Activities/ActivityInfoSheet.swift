@@ -33,6 +33,10 @@ struct ActivityInfoSheet: View {
         )
         .frame(minWidth: 460, minHeight: 520)
         .readingSurface()
+        .overlay(alignment: .topTrailing) {
+            ModalCloseButton { model.activityInfoID = nil }
+                .padding(Spacing.margin)
+        }
     }
 }
 
@@ -51,11 +55,12 @@ private struct ActivityInfoPresenter: ViewModifier {
         // **`isPresented`, not `item`.** A `Snowflake` is `Hashable` and
         // deliberately not `Identifiable` — an id is not a *thing with* an id
         // — so the binding is the presence of one.
-        return content.sheet(
+        return content.modal(
             isPresented: Binding(
                 get: { model.activityInfoID != nil },
                 set: { if !$0 { model.activityInfoID = nil } }
-            )
+            ),
+            style: .panel
         ) {
             if let id = model.activityInfoID {
                 ActivityInfoSheet(applicationID: id)

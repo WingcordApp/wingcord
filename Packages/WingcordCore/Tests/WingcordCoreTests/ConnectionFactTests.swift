@@ -17,6 +17,24 @@ struct ConnectionFactTests {
 
     // MARK: Captured payloads
 
+    /// Discord Canary 650542's Letterboxd stats (`9b7dfbb…`'s renderer):
+    /// `watches` and `films_in_diary_this_year`, neither of them count-shaped —
+    /// the mechanical rule alone would have dropped both.
+    @Test("Letterboxd's films, in Discord's words, and its address")
+    func letterboxd() throws {
+        let account = ConnectedAccount(
+            id: "dzikstar", service: "letterboxd", name: "DzikStar", isVerified: true,
+            metadata: ["watches": "31", "films_in_diary_this_year": "4"]
+        )
+        let counts = account.facts.compactMap { fact -> String? in
+            guard case .count(let value, let noun) = fact.content else { return nil }
+            return "\(value) \(noun)"
+        }
+        #expect(Set(counts) == ["31 Films Watched", "4 Films Logged This Year"])
+        #expect(account.profileURL?.absoluteString == "https://letterboxd.com/DzikStar/")
+        #expect(ConnectionPlatform.addable.contains("letterboxd"))
+    }
+
     @Test("Steam's own metadata, as captured")
     func steam() throws {
         let account = ConnectedAccount(

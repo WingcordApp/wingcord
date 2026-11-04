@@ -64,14 +64,9 @@ nonisolated struct SidebarBannerLayout: Equatable {
     /// also the distance the pill's fade is spread over.
     static var pillSlot: CGFloat { Metrics.control + Spacing.base }
 
-    /// The pill's leading edge, inset from the **banner's** edge rather than the
-    /// column's.
-    ///
-    /// The artwork is already padded in by `Spacing.base`, so a pill padded by
-    /// the same amount would sit hard against its edge — and that edge carries a
-    /// `Radius.card` corner, which curves away underneath exactly where the
-    /// pill's own corner is. One step further in puts it inside the curve, which
-    /// is the relationship iOS draws.
+    /// The pill's leading edge, from the column's — which is the banner's too,
+    /// now that the banner runs edge to edge. Where it always stood, so the
+    /// pill did not move when the artwork lost its inset and its corner.
     static var pillLeading: CGFloat { Spacing.base + Spacing.snug }
 
     // MARK: Derived

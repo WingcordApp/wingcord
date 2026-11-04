@@ -400,6 +400,13 @@ enum DemoFixtures {
                                 "verified": "1",
                             ]
                         ),
+                        // Letterboxd's two stats (Discord Canary 650542) —
+                        // neither key count-shaped, so both are by name.
+                        ConnectedAccount(
+                            id: "wingcord", service: "letterboxd",
+                            name: "wingcord", isVerified: true,
+                            metadata: ["watches": "31", "films_in_diary_this_year": "4"]
+                        ),
                         ConnectedAccount(
                             id: "1", service: "playstation",
                             name: "wingcord_psn", isVerified: true
@@ -778,6 +785,7 @@ enum DemoFixtures {
         DemoClipLibrary.populateIfNeeded(model, people: [me] + userIDs.filter { $0 != me }.prefix(4))
         DemoOverlayFixtures.populate()
         DemoBadges.populate(model, me: me)
+        populateInvokedCommands(model, person: userIDs[1])
         // **Nitro, as its own badges say** ("Nitro · Gold"), so every part of
         // the profile editor can be tried. `--demo-free` shows the account
         // without it — the locks, the notes, a server profile that is only a
@@ -1450,6 +1458,18 @@ enum DemoFixtures {
             termsLabel: "Read and agree to the server rules"
         )
 
+        // The game both servers run, so their cards wear its box art — drawn
+        // here, on this Mac, from a system symbol: the game's own art is never
+        // copied in, and Discord's CDN is no dependency of a demo.
+        let counterStrike = ApplicationID(rawValue: 1_158_877_933_042_143_272)
+        model.games[counterStrike] = Game(
+            id: counterStrike,
+            name: "Counter-Strike 2",
+            media: GameMedia(cover: DemoGameArt.cover(
+                symbol: "scope", top: (0.98, 0.55, 0.12), bottom: (0.55, 0.18, 0.05), name: "cs2"
+            ).map(GameMediaRef.url))
+        )
+
         model.gameServers[first] = [
             GameServer(
                 id: 7_001,
@@ -1464,6 +1484,7 @@ enum DemoFixtures {
                 maxPlayers: 16,
                 gameName: "Counter-Strike 2",
                 gameVersion: "latest",
+                gameID: counterStrike,
                 providerURL: URL(string: "https://example.invalid/server/demo")
             ),
             GameServer(
@@ -1479,6 +1500,7 @@ enum DemoFixtures {
                 maxPlayers: 10,
                 gameName: "Counter-Strike 2",
                 gameVersion: "latest",
+                gameID: counterStrike,
                 scheduledAction: "start",
                 scheduledActionAt: Date.now.addingTimeInterval(3600 * 9)
             ),
@@ -1860,6 +1882,10 @@ enum DemoFixtures {
                 channelID: channelID,
                 authorID: author,
                 content: content(at: index),
+                // Every eleventh message changed a couple of minutes after it
+                // was sent, so Discord's "(edited)" is on screen on both sides
+                // of a conversation.
+                editedAt: !isSystem && index % 11 == 4 ? moment.addingTimeInterval(130) : nil,
                 kind: isSystem ? .userJoin : (reference == nil ? .default : .reply),
                 // Two pins per channel, so the pane and the transcript's own
                 // pin state have something to disagree about if they ever do.
@@ -1894,6 +1920,26 @@ enum DemoFixtures {
                     interaction: MessageInteraction(
                         userID: userIDs[0], name: "launch", commandType: 4
                     )
+                )
+            ))
+        }
+
+        // esmBot answering, so a "used" line's chip can be pressed: Alex's own
+        // `/count`, a typed option that wraps, a person with a switch, and a
+        // subcommand. What each was run with is `populateInvokedCommands`.
+        for (offset, answer) in Self.esmBotAnswers.enumerated() {
+            moment.addTimeInterval(70)
+            let milliseconds = UInt64(moment.timeIntervalSince1970 * 1000)
+                - Snowflake<MessageTag>.epochMilliseconds
+            messages.append(Message(
+                id: MessageID(rawValue: (milliseconds << 22) | UInt64(800 + offset)),
+                channelID: channelID,
+                authorID: Self.esmBot,
+                content: answer.content,
+                kind: .chatInputCommand,
+                payload: MessagePayload(
+                    interaction: MessageInteraction(userID: userIDs[0], name: answer.name, commandType: 1),
+                    applicationID: ApplicationID(rawValue: Self.esmBot.rawValue)
                 )
             ))
         }
@@ -1957,6 +2003,60 @@ enum DemoFixtures {
         box.messages = messages
         box.hasMoreHistory = true
         return box
+    }
+
+    private static let esmBot = UserID(rawValue: 429_305_856_241_172_480)
+    private static let makeItAQuote = UserID(rawValue: 949_479_338_275_913_799)
+
+    private static let esmBotAnswers: [(name: String, content: String)] = [
+        ("count", "Here's how many times each command has been used this week."),
+        ("8ball", "🎱 Signs point to yes."),
+        ("avatar", "Here's their server avatar."),
+        ("base64 decode", "hello from the other side"),
+    ]
+
+    /// What the demo's "used" lines were run with, as `interaction-data` answers
+    /// — `--demo` has no session to ask. **Through the real decoder**, as the
+    /// command index's fixtures are.
+    private static func populateInvokedCommands(_ model: AppModel, person: UserID) {
+        for (id, name) in [(esmBot, "esmBot"), (makeItAQuote, "Make it a Quote")] where model.users[id] == nil {
+            model.users[id] = User(
+                id: id,
+                username: name.lowercased().replacing(" ", with: ""),
+                displayName: name,
+                discriminator: "0",
+                isBot: true
+            )
+        }
+        let answers = [
+            "count": #"{"name":"count","application_command":{"name":"count"}}"#,
+            "help": #"{"name":"help","application_command":{"name":"help"}}"#,
+            "8ball": #"""
+                {"name":"8ball","application_command":{"name":"8ball","options":[{"type":3,"name":"question"}]},
+                 "options":[{"type":3,"name":"question",
+                   "value":"is it too late to move the release to Thursday so the notes have a day to settle?"}]}
+                """#,
+            "avatar": """
+                {"name":"avatar","application_command":{"name":"avatar","options":[
+                   {"type":6,"name":"member"},{"type":5,"name":"server"}]},
+                 "options":[{"type":6,"name":"member","value":"\(person.rawValue)"},
+                            {"type":5,"name":"server","value":true}]}
+                """,
+            "base64 decode": #"""
+                {"name":"base64 decode","application_command":{"name":"base64","options":[
+                   {"type":1,"name":"decode","options":[{"type":3,"name":"text"}]}]},
+                 "options":[{"type":1,"name":"decode","options":[
+                   {"type":3,"name":"text","value":"aGVsbG8gZnJvbSB0aGUgb3RoZXIgc2lkZQ=="}]}]}
+                """#,
+        ]
+        for box in model.messageBoxes.values {
+            for message in box.messages where message.kind == .chatInputCommand {
+                guard let name = message.interaction?.name, let answer = answers[name],
+                      let command = try? InvokedCommand.decode(Data(answer.utf8))
+                else { continue }
+                model.invokedCommands[message.id] = command
+            }
+        }
     }
 
     /// Topics over the demo channel's own transcript, so the minimap, its

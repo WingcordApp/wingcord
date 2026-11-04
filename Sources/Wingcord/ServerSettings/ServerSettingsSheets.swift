@@ -24,12 +24,15 @@ struct SheetFrame<Content: View>: View {
     /// name and answers a 400 is a sheet that made the reader do the validating.
     var canConfirm: Bool
     var isDestructive = false
+    /// The act's symbol, beside its word.
+    var confirmSymbol: String? = nil
+    var width: CGFloat = 440
     var confirm: () -> Void
     @ViewBuilder var content: Content
 
     var body: some View {
-        // The window's one form sheet; the store finishes the write, so the
-        // sheet closes on the press.
+        // The window's one form card; the store finishes the write, so the
+        // card closes on the press.
         FormSheet(
             title: title,
             subtitle: subtitle.map { Text(verbatim: $0) },
@@ -37,6 +40,8 @@ struct SheetFrame<Content: View>: View {
             isDestructive: isDestructive,
             canConfirm: canConfirm,
             closesOnConfirm: true,
+            width: width,
+            confirmSymbol: confirmSymbol,
             confirm: confirm
         ) {
             content
@@ -101,7 +106,7 @@ struct RenameSheet: View {
         } content: {
             SheetField(title: "Name", isRequired: true) {
                 TextField("Name", text: $draft)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
             }
         }
     }
@@ -161,7 +166,8 @@ struct StickerSheet: View {
                                 )
                             }
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
                         .controlSize(.small)
                     }
                 }
@@ -169,7 +175,7 @@ struct StickerSheet: View {
 
             SheetField(title: "Sticker Name", isRequired: true) {
                 TextField("ex: cat hug", text: $draft.name)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
             }
 
             // The picker, not a text field: a sticker's related emoji is a
@@ -194,7 +200,7 @@ struct StickerSheet: View {
                 detail: "You can add a description, sometimes called alt-text, to your stickers so they\u{2019}re accessible to even more people, including those who are blind or visually impaired. Good descriptions are concise, but present what\u{2019}s in your stickers accurately enough to understand their context. Descriptions are optional but must be more than 1 character."
             ) {
                 TextField("", text: $draft.description, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
                     .lineLimit(2...4)
             }
         }
@@ -262,7 +268,8 @@ struct SoundSheet: View {
                             .lineLimit(1)
                         Spacer()
                         Button("Browse", action: pick)
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.capsule)
                             .controlSize(.small)
                     }
                 }
@@ -270,7 +277,7 @@ struct SoundSheet: View {
 
             SheetField(title: "Sound Name", isRequired: true) {
                 TextField("", text: $draft.name)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
             }
 
             SheetField(title: "Related Emoji") {

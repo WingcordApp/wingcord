@@ -648,7 +648,7 @@ struct ServerOptionsMenu: View {
                     symbolName: "person.2.badge.gearshape"
                 ) {
                     close()
-                    SettingsWindow.open(.connectedApps)
+                    SettingsWindow.open(.connections)
                 }
                 // **Enabled only when every rule holds.** Discord greys its own
                 // Finish until then, and a button that posts an assign the
@@ -1009,52 +1009,53 @@ struct ServerOptionsPresenter: ViewModifier {
                     .environment(model)
                     .presentationBackground(.clear)
             }
-            // Discord's "Are you sure?" (`314116`) before an application goes —
-            // a system alert for the reason Leave Server's is one.
-            .alert(
-                "Are you sure?",
-                isPresented: Binding(
-                    get: { model.withdrawApplicationRequest != nil },
-                    set: { if !$0 { model.withdrawApplicationRequest = nil } }
-                ),
-                presenting: model.withdrawApplicationRequest
-            ) { request in
-                Button("Yes", role: .destructive) {
-                    model.withdrawApplicationRequest = nil
-                    model.withdrawApplication(request.guildID)
-                }
-                Button("Never Mind", role: .cancel) { model.withdrawApplicationRequest = nil }
-            } message: { request in
-                if request.isDiscard {
-                    Text("If you discard, you can start a new application from an invite link.")
-                } else {
-                    Text("Are you sure you want to withdraw your application from \(request.serverName ?? "")?")
-                }
-            }
-            // **A system alert, deliberately, where the menu above it is glass.**
-            // Leaving is the one irreversible act in the set; it wants the
-            // platform's own destructive vocabulary, its Escape and Return
-            // handling and its VoiceOver announcement, none of which a hand-built
-            // panel would inherit. The same trade message deletion makes.
-            .alert(
-                "Leave '\(model.leaveGuildRequest?.name ?? "")'?",
-                isPresented: Binding(
-                    get: { model.leaveGuildRequest != nil },
-                    // **Only ever clears when the store is still showing this
-                    // one.** A setter that clears unconditionally can dismiss a
-                    // second request on its way in.
-                    set: { if !$0 { model.leaveGuildRequest = nil } }
-                ),
-                presenting: model.leaveGuildRequest
-            ) { _ in
-                Button("Leave Server", role: .destructive) { model.confirmLeaveGuild() }
-                Button("Cancel", role: .cancel) { model.leaveGuildRequest = nil }
-            } message: { request in
-                Text(
-                    "Are you sure you want to leave \(request.name)? "
-                        + "You won't be able to rejoin this server unless you are re-invited."
+            // Discord's "Are you sure?" (`314116`) before an application goes.
+            .modal(item: $model.withdrawApplicationRequest, style: .alert) { request in
+                ModalAlert(
+                    hero: serverHero(request.guildID, badge: "doc.badge.ellipsis"),
+                    title: "Are you sure?",
+                    message: Text(request.isDiscard
+                        ? "If you discard, you can start a new application from an invite link."
+                        : "Are you sure you want to withdraw your application from \(request.serverName ?? "")?"),
+                    actions: [
+                        .cancel("Never Mind"),
+                        .act("Yes", symbol: "arrow.uturn.backward", irreversible: true) {
+                            model.withdrawApplication(request.guildID)
+                        },
+                    ]
                 )
             }
+            // **Leaving, as a card with the server on it**, in the act's
+            // colour — it is chosen — and with no Return, because the way back
+            // in is an invite (D11b).
+            .modal(item: $model.leaveGuildRequest, style: .alert) { request in
+                ModalAlert(
+                    hero: serverHero(request.guildID, badge: "rectangle.portrait.and.arrow.right"),
+                    title: "Leave '\(request.name)'?",
+                    message: Text(
+                        "Are you sure you want to leave \(request.name)? "
+                            + "You won't be able to rejoin this server unless you are re-invited."
+                    ),
+                    actions: [
+                        .cancel(),
+                        .act("Leave Server", symbol: "rectangle.portrait.and.arrow.right", irreversible: true) {
+                            model.confirmLeaveGuild()
+                        },
+                    ]
+                )
+            }
+    }
+}
+
+extension ServerOptionsPresenter {
+    /// The server's own icon, wearing what is about to happen to it.
+    fileprivate func serverHero(_ guildID: GuildID, badge: String) -> ModalHero {
+        let guild = model.guilds[guildID]
+        return .serverIcon(
+            guild?.iconHash.flatMap { CDN.guildIcon(guildID: guildID, hash: $0, side: ModalHero.side) },
+            monogram: guild?.monogram ?? "",
+            badge: badge
+        )
     }
 }
 

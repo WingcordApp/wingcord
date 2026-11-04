@@ -57,7 +57,8 @@ struct ChannelTitleMenu: View {
 /// hang off the channel pill, and the pill is now the window's own title.
 struct ChannelTopicSheet: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.isTopModal) private var isTop
+    @ModalDismiss private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.margin) {
@@ -75,12 +76,16 @@ struct ChannelTopicSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-                    .controlSize(.large)
+                ModalButton(title: "Done", symbolName: "checkmark", role: .act) { dismiss() }
             }
         }
         .padding(Spacing.group)
         .frame(width: 460)
+        // Escape closes it as Done does — the one way out is both keys.
+        .background {
+            Button("", action: dismiss)
+                .keyboardShortcut(isTop ? .cancelAction : nil)
+                .hidden()
+        }
     }
 }

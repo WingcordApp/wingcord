@@ -29,7 +29,7 @@ struct BroadcastPreviewGroup: View {
                 }
             }
             SettingsFootnote(
-                "What your friends and servers see now, as Wingcord publishes it.",
+                "Exactly what your friends and servers see right now.",
                 symbolName: "eye"
             )
         }

@@ -82,7 +82,9 @@ struct BadgeDTO: Decodable, Sendable {
             guard let key = key?.value else { return nil }
             return BadgeTier(
                 key: key,
-                name: name ?? key.capitalized,
+                // As sent: a level without a name keeps none (a booster
+                // level's key is "LEVEL_1", not words).
+                name: name.flatMap { $0.isEmpty ? nil : $0 },
                 milestoneText: milestone_text,
                 simpleIconURL: simple_icon_url ?? simple_icon_raster_url,
                 complexIconURL: complex_icon_static_url,

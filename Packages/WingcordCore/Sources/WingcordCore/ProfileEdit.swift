@@ -101,8 +101,10 @@ public struct OwnedCollectible: Hashable, Sendable, Identifiable {
     public var palette: String?
     /// What the shop's "Acquired October 2025" line is drawn from.
     public var acquiredAt: Date?
-    /// `premium_type == 2` — a Nitro perk rather than a purchase, which is what
-    /// puts an item under "Exclusive to Nitro" instead of beside the owned ones.
+    /// Claimed through Nitro (`purchase_type` 7) rather than bought, gifted,
+    /// earned or redeemed — which is what puts an item under "Exclusive to
+    /// Nitro" instead of beside the owned ones, and the only kind an account
+    /// without Nitro may not wear.
     public var isNitroExclusive: Bool
 
     public var id: String { skuID }

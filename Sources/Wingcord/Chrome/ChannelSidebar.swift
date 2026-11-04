@@ -58,12 +58,15 @@ struct ChannelSidebar: View, Equatable {
     var openMenu: (ChannelID, CGRect) -> Void = { _, _ in }
     /// Create Channel inside a category — its "+".
     var createChannel: (ChannelID) -> Void = { _ in }
+    /// The Boost progress bar's switch, from its own menu.
+    var setBoostProgressBar: (GuildID, Bool) -> Void = { _, _ in }
 
     @Environment(\.motion) private var motion
     /// Where the header title starts, and the header row it centres in — see
     /// `SidebarPages`, whose pages without a rail start it past the lights.
     @Environment(\.sidebarTitleLeading) private var titleLeading
     @Environment(\.sidebarHeaderBand) private var headerBand
+    @Environment(\.sidebarBarsInset) private var barsInset
     /// How far the list has been scrolled — see `SidebarScroll`.
     @State private var scroll = SidebarScroll()
     /// Whether the pointer is over the banner — see `SidebarBannerPointer`.
@@ -242,6 +245,11 @@ struct ChannelSidebar: View, Equatable {
                 openMenu: { openMenu($0, $1) }
             )
             .selectionDisabled()
+        case .boostGoal(let goal):
+            // Opens a flyout rather than going anywhere, as the events row
+            // opens a panel.
+            SidebarBoostGoalRow(goal: goal) { setBoostProgressBar(goal.guildID, $0) }
+                .selectionDisabled()
         case .events(let events):
             // Opens a panel rather than going anywhere, so it is a button in
             // the list and never its selection.
@@ -472,6 +480,9 @@ struct ChannelSidebar: View, Equatable {
         // and a scroll edge effect under it blurs the rows before the capsule
         // can refract them — see `softScrollEdgeTopOnly`.
         .softScrollEdgeTopOnly()
+        // The rows pass under the bars and the last one rests above them —
+        // `sidebarBarsInset`.
+        .safeAreaPadding(.bottom, barsInset)
     }
 
     /// The space a sidebar list leaves above its first row, which the banner's
@@ -928,9 +939,10 @@ private struct PinnedConversationTile: View {
                 AvatarView(url: channel.avatarURL, monogram: channel.monogram ?? "?", side: Self.face)
                     .overlay {
                         // The open conversation wears a ring, as a selected
-                        // row wears its highlight.
+                        // row wears its highlight — in bright ink, never the
+                        // accent, like the rows' own lift.
                         Circle()
-                            .strokeBorder(Color.accentColor, lineWidth: isSelected ? 2.5 : 0)
+                            .strokeBorder(Ink.primary, lineWidth: isSelected ? 2.5 : 0)
                             .padding(-4)
                     }
                     .overlay(alignment: .bottomTrailing) {

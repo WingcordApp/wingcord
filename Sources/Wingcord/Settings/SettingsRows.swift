@@ -28,6 +28,42 @@ struct SettingsCard<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(SettingsSurface.card)
             .clipShape(.settingsRect(SettingsMetrics.cardRadius))
+            .containerValue(\.isSettingsCard, true)
+    }
+}
+
+extension ContainerValues {
+    /// Set by every `SettingsCard`, read by `SettingsStack` — so two cards in a
+    /// row are told apart by the same gap a heading would leave.
+    @Entry var isSettingsCard = false
+    /// Set by every `SettingsFootnote`: a card under one starts a new block.
+    @Entry var isSettingsFootnote = false
+}
+
+/// A pane's or a group's children, top to bottom, with **a gap wherever a
+/// card follows a card or a footnote** — no two cards ever touch, and no card
+/// sits on the line under another (Alex, 2026-10-26: the "squircles" sitting
+/// one under another, screenshot 11). A card under a heading or a gallery
+/// keeps the spacing it has.
+///
+/// The rows say what they are through container values, so a card drawn by a
+/// view of its own (`AccountStandingCard`, `AddGameRow`) counts as one.
+struct SettingsStack<Content: View>: View {
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+
+    var body: some View {
+        Group(subviews: content) { subviews in
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(subviews.enumerated()), id: \.element.id) { index, subview in
+                    let previous = index > 0 ? subviews[index - 1].containerValues : nil
+                    let startsBlock = subview.containerValues.isSettingsCard
+                        && (previous?.isSettingsCard == true || previous?.isSettingsFootnote == true)
+                    subview.padding(.top, startsBlock ? SettingsMetrics.cardToHeader : 0)
+                }
+            }
+        }
     }
 }
 
@@ -74,8 +110,22 @@ struct SettingsGroup<Content: View>: View {
                     .foregroundStyle(Ink.primary)
                     .padding(.top, SettingsMetrics.cardToHeader)
                     .padding(.bottom, SettingsMetrics.headerToCard)
+                SettingsStack { content }
+            } else {
+                // **The same gap with no title as with one.** Untitled groups
+                // used to add none, so consecutive ones butted their cards
+                // together — Boost Perks was four in a row (Alex, 2026-10-26).
+                // Read as subviews, so the gap goes above the group once (a
+                // modifier on the content itself lands on every child — a
+                // footnote got one too) and a group whose content is
+                // conditionally empty takes no room at all.
+                Group(subviews: content) { subviews in
+                    if !subviews.isEmpty {
+                        SettingsStack { subviews }
+                            .padding(.top, SettingsMetrics.cardToHeader)
+                    }
+                }
             }
-            content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -83,21 +133,87 @@ struct SettingsGroup<Content: View>: View {
 
 // MARK: Info glyph
 
-/// The annotation beside a label.
+/// The annotation beside a label — **a flyout under the pointer** (D10d;
+/// Alex, 2026-10-26: "hovering over the info icon on a setting should open
+/// its description as a flyout instead").
 ///
-/// A `.help` tooltip rather than a popover: the text is one sentence explaining
-/// a setting, the pointer is already on the glyph, and a popover for that is a
-/// dismissible window for something the system will show for free.
+/// A short rest opens it, and it stays while the pointer is on the glyph or
+/// on the flyout itself — a reader can move into it to read — and goes a
+/// moment after the pointer leaves both. A click pins it open until a click
+/// elsewhere or Escape, the popover's own ways out. VoiceOver hears the same
+/// words as the glyph's hint.
 struct InfoGlyph: View {
     var help: String
 
+    @Environment(\.motion) private var motion
+    @State private var isShown = false
+    @State private var isPinned = false
+    @State private var isOverGlyph = false
+    @State private var isOverFlyout = false
+    @State private var timer: Task<Void, Never>?
+
+    /// How long the pointer rests before the flyout opens, and how long it
+    /// stays after the pointer leaves — long enough to cross into it.
+    static let dwell = Duration.milliseconds(260)
+    static let grace = Duration.milliseconds(180)
+
     var body: some View {
-        Image(systemName: "info.circle.fill")
-            .font(.system(size: 12))
-            .foregroundStyle(Ink.tertiary)
-            .help(help)
-            .accessibilityLabel("About this setting")
-            .accessibilityHint(help)
+        Button {
+            isPinned.toggle()
+            isShown = isPinned || isOverGlyph
+            Haptics.tick()
+        } label: {
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(isShown ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary))
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isOverGlyph = hovering
+            settle()
+        }
+        .animation(motion.hover, value: isShown)
+        .popover(
+            isPresented: Binding(
+                get: { isShown },
+                set: { shown in
+                    // The popover's own dismissal — a click outside, Escape.
+                    if !shown {
+                        isShown = false
+                        isPinned = false
+                    }
+                }
+            ),
+            arrowEdge: .bottom
+        ) {
+            Text(help)
+                .font(.system(.callout))
+                .foregroundStyle(InkColor.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 280, alignment: .leading)
+                .padding(.horizontal, Spacing.snug)
+                .padding(.vertical, Spacing.base + Spacing.hair)
+                .onHover { inside in
+                    isOverFlyout = inside
+                    settle()
+                }
+        }
+        .accessibilityLabel("About this setting")
+        .accessibilityHint(help)
+    }
+
+    /// Opens after a rest, closes after a grace — and never while pinned.
+    private func settle() {
+        timer?.cancel()
+        let wanted = isPinned || isOverGlyph || isOverFlyout
+        guard wanted != isShown else { return }
+        timer = Task {
+            try? await Task.sleep(for: wanted ? Self.dwell : Self.grace)
+            guard !Task.isCancelled else { return }
+            let stillWanted = isPinned || isOverGlyph || isOverFlyout
+            if stillWanted != isShown { isShown = stillWanted }
+        }
     }
 }
 
@@ -128,6 +244,7 @@ struct CardHeaderRow: View {
         RowLabel(title: title, help: help)
             .padding(.horizontal, SettingsMetrics.cardContentInset)
             .frame(maxWidth: .infinity, minHeight: SettingsMetrics.headerRowHeight, alignment: .leading)
+            .settingsAnchor(title)
     }
 }
 
@@ -154,6 +271,7 @@ struct SettingsControlRow<Control: View>: View {
         .padding(.leading, SettingsMetrics.cardContentInset)
         .padding(.trailing, SettingsMetrics.controlTrailing)
         .frame(maxWidth: .infinity, minHeight: SettingsMetrics.toggleRowHeight)
+        .settingsAnchor(title)
     }
 }
 
@@ -239,16 +357,46 @@ struct SettingsIconTile: View {
     var side: CGFloat
     var radius: CGFloat
 
+    /// The glyph's point size, as a share of the tile.
+    static let glyphSize: CGFloat = 0.58
+    /// The widest a glyph may draw, as a share of the tile — what leaves the
+    /// squircle's rounded corners their margin.
+    static let glyphLimit: CGFloat = 0.76
+
     var body: some View {
         RoundedRectangle(cornerRadius: radius, style: .continuous)
             .fill(tint.gradient)
             .frame(width: side, height: side)
             .overlay {
                 Image(symbol: symbolName)
-                    .font(.system(size: side * 0.58, weight: .medium))
+                    .font(.system(size: side * Self.glyphSize, weight: .medium))
                     .foregroundStyle(.white)
+                    .scaleEffect(Self.fit(symbolName, side: side))
             }
     }
+
+    /// How far a glyph is scaled down to stay inside its tile: 1 for most.
+    ///
+    /// **A symbol at a point size is as wide as its artwork**, and the wide
+    /// ones spilled past the squircle on both sides — Community Overview's
+    /// `person.3.fill` (Alex, 2026-10-26). Scaled rather than set smaller, so
+    /// every square glyph keeps exactly the size and weight it had; measured
+    /// off the symbol's own image once per name and size.
+    static func fit(_ symbolName: String, side: CGFloat) -> CGFloat {
+        let key = "\(symbolName)@\(side)"
+        if let known = fits[key] { return known }
+        var scale: CGFloat = 1
+        if let image = NSImage.symbol(named: symbolName)?.withSymbolConfiguration(
+            .init(pointSize: side * glyphSize, weight: .medium)
+        ) {
+            let extent = max(image.size.width, image.size.height)
+            if extent > 0 { scale = min(1, side * glyphLimit / extent) }
+        }
+        fits[key] = scale
+        return scale
+    }
+
+    private static var fits: [String: CGFloat] = [:]
 }
 
 // MARK: Segmented control
@@ -294,74 +442,25 @@ struct SettingsSegmentedControl<Value: Hashable>: View {
     @Binding var selection: Value
     var options: [Option]
 
+    /// **The system's own segmented control** (D10f; Alex, 2026-10-14: "we
+    /// already use that segmented picker in areas such as the inbox"), spanning
+    /// the card with its segments equal. Words only: the HIG asks for text or
+    /// images in one control, not a mix, and a settings choice is read rather
+    /// than recognised — except a row of skin tones, where the swatch *is* the
+    /// choice.
     var body: some View {
-        HStack(spacing: 0) {
-            // `indices`, not `Array(enumerated())`: the latter allocates a
-            // second array of pairs on every evaluation to recover an index the
-            // range already has.
-            ForEach(options.indices, id: \.self) { index in
-                let option = options[index]
-                // No separator beside the selected cell: its own lifted fill is
-                // the edge there, and drawing both reads as a double rule.
-                if index > 0,
-                   options[index - 1].value != selection,
-                   option.value != selection {
-                    SettingsSurface.controlHairline
-                        .frame(width: SettingsMetrics.hairline)
-                } else if index > 0 {
-                    Color.clear.frame(width: SettingsMetrics.hairline)
-                }
-                Cell(option: option, isSelected: option.value == selection) {
-                    selection = option.value
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: SettingsMetrics.controlRowHeight)
-        .background(SettingsSurface.controlTrough)
-    }
-
-    private struct Cell: View {
-        var option: Option
-        var isSelected: Bool
-        var select: () -> Void
-        @Environment(\.motion) private var motion
-        @State private var isHovered = false
-
-        var body: some View {
-            Button(action: select) {
-                HStack(spacing: Spacing.tight + 2) {
-                    if let symbolName = option.symbolName {
-                        Image(symbol: symbolName)
-                            .font(.system(size: 12))
-                            .foregroundStyle(isSelected ? Ink.primary : Ink.secondary)
-                    }
-                    if let glyph = option.glyph {
-                        Text(glyph).font(.system(.title3))
-                    }
-                    if !option.title.isEmpty {
-                        Text(option.title)
-                            .font(SettingsType.controlLabel)
-                            .foregroundStyle(isSelected ? Ink.primary : Ink.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .background(fill)
-            .animation(motion.hover, value: isHovered)
-            .animation(motion.standard, value: isSelected)
-            .onHover { isHovered = $0 }
-            .accessibilityLabel(option.accessibilityTitle)
-            .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-        }
-
-        private var fill: Color {
-            if isSelected { SettingsSurface.controlSelected }
-            else if isHovered { SettingsSurface.rowHover }
-            else { .clear }
-        }
+        SegmentedPicker(
+            options: options.map { option in
+                .init(option.value, option.glyph ?? option.title)
+            },
+            selection: $selection,
+            fillsWidth: true
+        )
+        .padding(.horizontal, SettingsMetrics.cardContentInset)
+        .padding(.top, Spacing.tight)
+        .padding(.bottom, SettingsMetrics.cardContentInset)
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -421,7 +520,7 @@ struct SettingsValueRow: View {
 
 // MARK: Action row
 
-/// A label and a standard bordered button.
+/// A label and a glass capsule — the button every pane uses (INVARIANTS).
 struct SettingsActionRow: View {
     var title: String
     var help: String?
@@ -446,7 +545,8 @@ struct SettingsActionRow: View {
     var body: some View {
         SettingsControlRow(title, help: help) {
             Button(actionTitle, role: role, action: action)
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
         }
     }
@@ -475,21 +575,24 @@ struct SettingsFootnote: View {
     }
 
     var body: some View {
+        // Secondary ink, not tertiary: a footnote is one short line now (D10e),
+        // and pale grey under a card read as disabled text (Alex's rule).
         HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
             if let symbolName {
                 Image(symbol: symbolName)
                     .font(.system(size: 11))
-                    .foregroundStyle(Ink.tertiary)
+                    .foregroundStyle(Ink.secondary)
             }
             text
                 .font(SettingsType.footnote)
-                .foregroundStyle(Ink.tertiary)
+                .foregroundStyle(Ink.secondary)
                 .tint(Palette.accent)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, SettingsMetrics.cardContentInset)
         .padding(.top, Spacing.snug)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .containerValue(\.isSettingsFootnote, true)
     }
 }
 
@@ -683,5 +786,35 @@ private struct InfoLabel: View {
                 .foregroundStyle(Ink.primary)
             if let help { InfoGlyph(help: help) }
         }
+    }
+}
+
+// MARK: - Shown from a search
+
+/// Makes a row findable: an id the pane can scroll to, and a short glow when a
+/// search result brought the reader here.
+private struct SettingsAnchorModifier: ViewModifier {
+    var title: String
+
+    @Environment(\.settingsHighlight) private var highlight
+    @Environment(\.motion) private var motion
+
+    func body(content: Content) -> some View {
+        let isLit = highlight == title
+        content
+            .background {
+                RoundedRectangle(cornerRadius: SettingsMetrics.cardRadius - 2, style: .continuous)
+                    .fill(Palette.accent.opacity(isLit ? 0.18 : 0))
+                    .padding(2)
+                    .allowsHitTesting(false)
+            }
+            .animation(isLit ? motion.standard : .easeOut(duration: 0.8), value: isLit)
+            .id(SettingsAnchor.id(title))
+    }
+}
+
+extension View {
+    func settingsAnchor(_ title: String) -> some View {
+        modifier(SettingsAnchorModifier(title: title))
     }
 }

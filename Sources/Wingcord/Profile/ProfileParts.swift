@@ -72,6 +72,8 @@ struct BadgeRow: View {
     @State private var onBadge: ProfileBadge.ID?
     @State private var onCard: ProfileBadge.ID?
     @State private var dismissal: Task<Void, Never>?
+    /// The panel waiting for a badge's card to finish going — see `present`.
+    @State private var nextPanel: (() -> Void)?
 
     private static let side: CGFloat = 18
 
@@ -117,20 +119,32 @@ struct BadgeRow: View {
                         // line.** That is Discord's own split rather than a
                         // preference: it is the only badge it says more than a
                         // sentence about, and the only one that opens a page.
-                        if let userID, let entry = model.catalogBadge(forProfileBadge: badge.id, of: userID) {
-                            BadgeCard(badge: entry, label: badge.label, iconURL: badge.iconURL)
-                                .onHover { pointer(badge.id, onCard: true, inside: $0) }
-                        } else if let tenure {
-                            TenureBadgeFlyout(
-                                tenure: tenure,
-                                premiumSince: premiumSince,
-                                open: { open(tenure) },
-                                hovering: { pointer(badge.id, onCard: true, inside: $0) }
-                            )
-                        } else if userID != nil {
-                            BadgeCard(badge: nil, label: badge.label, iconURL: badge.iconURL)
-                        } else {
-                            BadgeFlyout(label: badge.label)
+                        Group {
+                            if let userID, let entry = model.catalogBadge(forProfileBadge: badge.id, of: userID) {
+                                BadgeCard(badge: entry, label: badge.label, iconURL: badge.iconURL)
+                                    .onHover { pointer(badge.id, onCard: true, inside: $0) }
+                            } else if let tenure {
+                                TenureBadgeFlyout(
+                                    tenure: tenure,
+                                    premiumSince: premiumSince,
+                                    open: { open(tenure) },
+                                    hovering: { pointer(badge.id, onCard: true, inside: $0) }
+                                )
+                            } else if userID != nil {
+                                BadgeCard(badge: nil, label: badge.label, iconURL: badge.iconURL)
+                            } else {
+                                BadgeFlyout(label: badge.label)
+                            }
+                        }
+                        // **The pointer owns this card, so a click does not.**
+                        // A transient popover spends the first click outside it
+                        // on closing itself, and the click never reaches what
+                        // is under it — pressing a badge took two.
+                        .interactiveDismissDisabled()
+                        .onDisappear {
+                            guard let panel = nextPanel else { return }
+                            nextPanel = nil
+                            panel()
                         }
                     }
                     // **A presentation paints the APP's material, not the
@@ -146,9 +160,10 @@ struct BadgeRow: View {
             }
             if badges.count > Self.shownLimit {
                 Button("+\(badges.count - Self.shownLimit)") {
+                    guard userID != nil else { return }
                     directoryBadge = nil
                     rowPanel = .directory
-                    showsDirectory = userID != nil
+                    present { showsDirectory = true }
                 }
                 .buttonStyle(.plain)
                 .font(.system(.caption, weight: .semibold))
@@ -159,7 +174,7 @@ struct BadgeRow: View {
             if isEditing, userID != nil {
                 Button {
                     pencilPanel = .customize
-                    showsCustomizer = true
+                    present { showsCustomizer = true }
                 } label: {
                     Image(systemName: "pencil")
                         .font(.system(size: 12, weight: .semibold))
@@ -179,18 +194,24 @@ struct BadgeRow: View {
     }
 
     /// The directory or the customizer, switching in place.
-    @ViewBuilder
+    ///
+    /// **In the scheme of the window it opens in**, as a badge's own card is:
+    /// from a light profile it drew dark words on the app's dark glass. On the
+    /// panel and not the row, whose "+N" and pencil sit on the card's own ground.
     private func badgePanel(_ panel: Binding<BadgePanel>, userID: UserID) -> some View {
-        switch panel.wrappedValue {
-        case .directory:
-            BadgeDirectory(userID: userID, initialBadgeID: directoryBadge) {
-                panel.wrappedValue = .customize
-            }
-        case .customize:
-            BadgeCustomizer(userID: userID) {
-                panel.wrappedValue = .directory
+        Group {
+            switch panel.wrappedValue {
+            case .directory:
+                BadgeDirectory(userID: userID, initialBadgeID: directoryBadge) {
+                    panel.wrappedValue = .customize
+                }
+            case .customize:
+                BadgeCustomizer(userID: userID) {
+                    panel.wrappedValue = .directory
+                }
             }
         }
+        .appColorScheme()
     }
 
     /// Opens the directory on `badge` — or, with no person behind the row,
@@ -200,11 +221,27 @@ struct BadgeRow: View {
             open(tenure)
             return
         }
-        dismiss()
         model.loadBadgeCatalog(of: userID)
         directoryBadge = BadgeKind.forProfileID(badge.id)?.rawValue
         rowPanel = .directory
-        showsDirectory = true
+        present { showsDirectory = true }
+    }
+
+    /// Puts up a panel, waiting for a badge's card to be gone if one is up.
+    ///
+    /// **A badge cannot be pressed without being hovered**, so its card is always
+    /// up when it is pressed — and a popover asked for while another is closing
+    /// is not presented, without a word. Pressing a badge took its card away and
+    /// opened nothing; only "+N", which has no card, ever opened the directory.
+    /// **Opened when the card has gone, not after a guess at how long that
+    /// takes**: about 300 milliseconds here.
+    private func present(_ panel: @escaping () -> Void) {
+        guard shown != nil else {
+            panel()
+            return
+        }
+        nextPanel = panel
+        dismiss()
     }
 
     /// Where the pointer is, from either surface, and what that means for the
@@ -217,6 +254,15 @@ struct BadgeRow: View {
     /// it. Cancelled the moment either surface reports the pointer back, so a
     /// reader who keeps moving never sees the delay.
     private func pointer(_ id: ProfileBadge.ID, onCard isCard: Bool, inside: Bool) {
+        // **The directory has the floor.** A badge's flyout is a popover too,
+        // and one raised from this window takes down the one already up — so
+        // the pointer crossing a badge on its way into the directory closed
+        // the directory under it (Alex's screenshot 33). While it, or the
+        // customizer, is up, the row's marks raise nothing.
+        guard !showsDirectory, !showsCustomizer, nextPanel == nil else {
+            if shown != nil { dismiss() }
+            return
+        }
         if isCard {
             onCard = inside ? id : (onCard == id ? nil : onCard)
         } else {
@@ -1289,7 +1335,8 @@ struct PartialProfileNotice: View {
             Spacer(minLength: Spacing.base)
             if let retry {
                 Button("Retry", action: retry)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
             }
         }

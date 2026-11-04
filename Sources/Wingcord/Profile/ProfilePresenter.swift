@@ -198,7 +198,7 @@ struct ProfilePresenter: ViewModifier {
             .onChange(of: editorLayer) { refreshEditorIfUntouched() }
             .environment(flyouts)
             .environment(editor)
-            .sheet(item: $picker) { picker in
+            .modal(item: $picker) { picker in
                 if picker == .connection {
                     AddConnectionSheet(dismiss: { self.picker = nil })
                 }
@@ -206,7 +206,7 @@ struct ProfilePresenter: ViewModifier {
             // Add App, over the app's profile — Discord's authorize modal over
             // its own. Its own value, not the directory's, so discovery's sheet
             // and this one can never both be asked for at once.
-            .sheet(item: Binding(
+            .modal(item: Binding(
                 get: { model.profileApplicationInstall },
                 set: { model.profileApplicationInstall = $0 }
             )) { install in
@@ -302,7 +302,7 @@ struct ProfilePresenter: ViewModifier {
         if let guildID = scope.guildID {
             model.sessionController.loadProfile(of: userID, inGuild: guildID)
         }
-        return ProfileEditor(
+        let editor = ProfileEditor(
             profile: base,
             // The raw board, which is what the write route takes —
             // `boardPresentation` has already resolved it into tiles and
@@ -312,6 +312,8 @@ struct ProfilePresenter: ViewModifier {
             accountName: model.users[userID]?.preferredName,
             typingIndicatorStyle: model.ownTypingIndicatorStyle
         )
+        editor.appliesNameStyle = model.profileEditCapability(for: scope).canApplyNameStyle
+        return editor
     }
 
     /// Moves the editor to another profile.
@@ -482,10 +484,15 @@ extension AppModel {
         /// layer a message or a profile raises and under the quick switcher.
         case goLive
         case quickSwitcher
+        /// One of the window's cards — a sheet, an alert, a dialog — drawn by
+        /// `.hostsModals()`, applied after every presenter: whatever raised it
+        /// is under it, the quick switcher included.
+        case modal
     }
 
     /// Which of them is on top right now, or nil when none is open.
     var escapeLayer: EscapeLayer? {
+        if isModalShown { return .modal }
         if isQuickSwitchShown { return .quickSwitcher }
         if isGoLiveSheetOpen { return .goLive }
         if tenureBadgeRequest != nil { return .tenureBadge }

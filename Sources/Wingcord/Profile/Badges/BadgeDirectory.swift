@@ -145,7 +145,7 @@ struct BadgeDirectory: View {
                     }
                     BadgeArtwork(url: badge.artwork(reducesMotion: false) ?? URL(filePath: "/"), side: 170)
                         .frame(height: 170)
-                    if let name = badge.name, badge.kind?.isLevelled == true {
+                    if let name = badge.eyebrow {
                         Text(name)
                             .font(.system(.title3, weight: .medium))
                             .foregroundStyle(InkColor.secondary)
@@ -234,19 +234,33 @@ struct BadgeDirectory: View {
                                 BadgeArtwork(url: url, side: 34)
                                     .opacity(reached ? 1 : 0.5)
                             }
-                            Text(tier.name)
+                            // Discord's: the level's name with the lock
+                            // beside it, then what it takes — and where a
+                            // level has no name (the booster's nine), only
+                            // what it takes, the lock moving beside that.
+                            let levelName = badge.levelName(tier)
+                            if let levelName {
+                                Label {
+                                    Text(levelName)
+                                } icon: {
+                                    if !reached { Image(systemName: "lock.fill") }
+                                }
                                 .font(.system(.subheadline, weight: .semibold))
                                 .foregroundStyle(reached ? InkColor.primary : InkColor.secondary)
+                                .labelStyle(.titleAndIcon)
                                 .lineLimit(1)
+                            }
                             if let milestone = tier.milestoneText {
                                 Label {
                                     Text(milestone)
                                 } icon: {
-                                    if !reached { Image(systemName: "lock.fill") }
+                                    if !reached, levelName == nil { Image(systemName: "lock.fill") }
                                 }
-                                .font(.system(.caption))
-                                .foregroundStyle(InkColor.secondary)
+                                .font(levelName == nil ? .system(.caption, weight: .semibold) : .system(.caption))
+                                .foregroundStyle(levelName == nil && reached ? InkColor.primary : InkColor.secondary)
                                 .labelStyle(.titleAndIcon)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                             }
                         }
                     }

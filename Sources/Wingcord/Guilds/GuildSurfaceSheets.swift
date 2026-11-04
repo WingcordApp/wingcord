@@ -23,14 +23,14 @@ struct GuildSurfacePresenter: ViewModifier {
         let steps = model.gameServerInstructions
         let rules = model.serverRulesPresentation
         return content
-            .sheet(item: $model.gameServerConnect) { request in
+            .modal(item: $model.gameServerConnect) { request in
                 GameServerConnectSheet(
                     server: request.server,
                     steps: steps,
                     dismiss: { model.gameServerConnect = nil }
                 )
             }
-            .sheet(isPresented: rulesBinding) {
+            .modal(isPresented: rulesBinding) {
                 if let rules {
                     ServerRulesSheet(
                         presentation: rules,
@@ -106,8 +106,6 @@ struct GameServerConnectSheet: View {
             }
             footer
         }
-        // The system's sheet, as the HIG has it: its own ground and corners,
-        // not a card painted inside a transparent one.
         .frame(width: Self.width)
         .animation(motion.panel, value: parsed)
         .task(id: steps) {
@@ -116,22 +114,13 @@ struct GameServerConnectSheet: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.tight) {
-            Text(server.name)
-                .font(.system(.title3, weight: .bold))
-                .foregroundStyle(Ink.primary)
-                .lineLimit(2)
-            Text(parsed.isEmpty
+        ModalHeader(
+            title: server.name,
+            subtitle: Text(parsed.isEmpty
                 ? "Add this address in your game to join."
-                : "Follow these steps in your game to join.")
-                .font(.system(.callout))
-                .foregroundStyle(Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Spacing.group)
-        .padding(.top, Spacing.group)
-        .padding(.bottom, Spacing.margin)
+                : "Follow these steps in your game to join."),
+            close: dismiss
+        )
     }
 
     private func addressBlock(_ address: String) -> some View {
@@ -154,11 +143,9 @@ struct GameServerConnectSheet: View {
     private var footer: some View {
         HStack(spacing: Spacing.base) {
             Spacer(minLength: 0)
-            SurfaceFilledButton(title: "Done", systemImage: nil, action: dismiss)
-                .keyboardShortcut(.defaultAction)
+            ModalButton(title: "Done", symbolName: "checkmark", role: .act, action: dismiss)
         }
-        .padding(.horizontal, Spacing.group)
-        .padding(.bottom, Spacing.group)
+        .padding(Spacing.margin)
     }
 
     /// `**Favorites**` to a bold run.
@@ -221,20 +208,11 @@ struct ServerRulesSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: Spacing.tight) {
-                Text("Server Rules")
-                    .font(.system(.title3, weight: .bold))
-                    .foregroundStyle(Ink.primary)
-                Text(presentation.detail
-                    ?? "What \(presentation.serverName) asks of everyone here.")
-                    .font(.system(.callout))
-                    .foregroundStyle(Ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Spacing.group)
-            .padding(.top, Spacing.group)
-            .padding(.bottom, Spacing.margin)
+            ModalHeader(
+                title: "Server Rules",
+                subtitle: Text(presentation.detail ?? "What \(presentation.serverName) asks of everyone here."),
+                close: dismiss
+            )
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -275,24 +253,26 @@ struct ServerRulesSheet: View {
                     // and the words have to be where the pointer already is.
                     Text("Pressing this records that you have read and agreed.")
                         .font(.system(.caption))
-                        .foregroundStyle(Ink.tertiary)
+                        .foregroundStyle(Ink.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: Spacing.base)
-                if presentation.isWorking {
-                    ProgressView().controlSize(.small)
-                }
                 if presentation.canAgree || presentation.isWorking {
-                    SurfaceFilledButton(title: "Agree", systemImage: nil, action: agree)
-                        .disabled(presentation.isWorking)
-                        .keyboardShortcut(.defaultAction)
+                    ModalButton(
+                        title: "Agree",
+                        symbolName: "checkmark.seal.fill",
+                        role: .act,
+                        isWorking: presentation.isWorking,
+                        action: agree
+                    )
                 } else {
-                    SurfaceFilledButton(title: "Done", systemImage: nil, action: dismiss)
-                        .keyboardShortcut(.defaultAction)
+                    ModalButton(title: "Done", symbolName: "checkmark", role: .act, action: dismiss)
                 }
             }
         }
-        .padding(Spacing.group)
+        .padding(.horizontal, Spacing.group)
+        .padding(.top, Spacing.margin)
+        .padding(.bottom, Spacing.margin)
     }
 }
 

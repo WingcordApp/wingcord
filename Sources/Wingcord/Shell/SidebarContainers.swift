@@ -11,6 +11,14 @@ struct SidebarColumnContent: View {
     /// A takeover (the join gate, discovery) keeps the rail and drops the list.
     var isTakenOver: Bool
 
+    /// The bars' height, for the lists' bottom padding — `sidebarBarsInset`.
+    ///
+    /// **Measured, because the call card's height is its content's**: a
+    /// silent-microphone line or a longer channel name changes it, and the now
+    /// bar under it is the one fixed height. The bars are always on screen
+    /// while the pages are, so the number cannot outlive what it measured.
+    @State private var barsHeight: CGFloat = 0
+
     var body: some View {
         Group {
             if isTakenOver {
@@ -40,12 +48,22 @@ struct SidebarColumnContent: View {
                     // pager's `scrollEdgeEffectHidden` removed it. Nothing is
                     // painted behind these bars either: an opaque ground under
                     // the now bar's glass leaves it nothing to refract.
+                    .environment(\.sidebarBarsInset, barsHeight + Spacing.base)
                     .safeAreaInset(edge: .bottom, spacing: 0) {
                         VStack(spacing: Spacing.base) {
                             VoiceHUDContainer()
                             NowBarContainer()
                         }
                         .padding(.horizontal, Spacing.base)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                            // Guarded, because an equal write still invalidates
+                            // every page; unanimated, because a measurement can
+                            // move mid-transition and the lists would lurch.
+                            guard abs(barsHeight - height) > 0.5 else { return }
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) { barsHeight = height }
+                        }
                     }
             }
         }
@@ -171,6 +189,7 @@ struct ChannelSidebarContainer: View {
                 }
             },
             createChannel: { model.openChannelCreation(inCategory: $0) },
+            setBoostProgressBar: { model.setBoostProgressBar($1, in: $0) },
         )
         .equatable()
     }

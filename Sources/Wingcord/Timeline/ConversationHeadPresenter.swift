@@ -10,37 +10,48 @@ struct ConversationHeadPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .alert(
-                "Deauthorize Application",
-                isPresented: Binding(
-                    get: { model.headDeauthorization != nil },
-                    set: { if !$0 { model.headDeauthorization = nil } }
-                ),
-                presenting: model.headDeauthorization
-            ) { app in
-                Button("Cancel", role: .cancel) {}
-                Button("Deauthorize", role: .destructive) { model.sessionController.deauthorizeApp(app) }
-            } message: { app in
-                Text("This action will remove the link between your Discord account and \(app.name)")
+            // Deliberately chosen, so the act's colour; it cannot be undone,
+            // so no Return (D11b).
+            .modal(item: Binding(
+                get: { model.headDeauthorization },
+                set: { if $0 == nil { model.headDeauthorization = nil } }
+            ), style: .alert) { app in
+                ModalAlert(
+                    hero: .symbol("link.badge.plus"),
+                    title: "Deauthorize Application",
+                    message: Text("This action will remove the link between your Discord account and \(app.name)"),
+                    actions: [
+                        .cancel(),
+                        .act("Deauthorize", symbol: "xmark.shield", irreversible: true) {
+                            model.sessionController.deauthorizeApp(app)
+                        },
+                    ]
+                )
             }
-            .alert(
-                "Edit Group",
+            .modal(
                 isPresented: Binding(
                     get: { model.groupRename != nil },
                     set: { if !$0 { model.groupRename = nil } }
-                )
+                ),
+                style: .alert
             ) {
-                // Discord's placeholder: the name the group has without one.
-                TextField(memberNames(model.groupRename), text: $groupName)
-                Button("Cancel", role: .cancel) {}
-                Button("Save") {
-                    guard let channelID = model.groupRename else { return }
-                    model.sessionController.renameGroup(channelID, to: groupName)
+                ModalAlert(
+                    hero: .symbol("person.3.fill"),
+                    title: "Edit Group",
+                    actions: [
+                        .cancel(),
+                        .act("Save", symbol: "checkmark", enabled: groupName != currentName(model.groupRename)) {
+                            guard let channelID = model.groupRename else { return }
+                            model.sessionController.renameGroup(channelID, to: groupName)
+                        },
+                    ]
+                ) {
+                    // Discord's placeholder: the name the group has without one.
+                    ModalTextField(placeholder: memberNames(model.groupRename), text: $groupName, symbolName: "pencil")
                 }
-                .disabled(groupName == currentName(model.groupRename))
             }
             .onChange(of: model.groupRename) { _, channelID in groupName = currentName(channelID) }
-            .sheet(isPresented: Binding(
+            .modal(isPresented: Binding(
                 get: { model.groupInvite != nil },
                 set: { if !$0 { model.groupInvite = nil } }
             )) {
@@ -76,7 +87,7 @@ private struct GroupInviteSheet: View {
     var channelID: ChannelID
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var query = ""
     @State private var picked: [UserID] = []
 
@@ -93,44 +104,42 @@ private struct GroupInviteSheet: View {
                 || $0.username.localizedCaseInsensitiveContains(query) }
             .sorted { $0.preferredName.localizedCaseInsensitiveCompare($1.preferredName) == .orderedAscending }
 
-        VStack(alignment: .leading, spacing: Spacing.snug) {
-            VStack(alignment: .leading, spacing: Spacing.tight) {
-                Text("Add Friends to DM")
-                    .font(.system(.title3, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
-                Text(room == 1 ? "You can add 1 more person." : "You can add \(room) more people.")
-                    .font(.system(.subheadline))
-                    .foregroundStyle(Ink.secondary)
-            }
-            TextField("Search", text: $query)
-                .textFieldStyle(.roundedBorder)
-            if friends.isEmpty {
-                Text("No results found.")
-                    .font(.system(.subheadline))
-                    .foregroundStyle(Ink.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(friends) { friend in
-                            row(friend, isDisabled: room == 0 && !picked.contains(friend.id))
+        VStack(alignment: .leading, spacing: 0) {
+            ModalHeader(
+                title: "Add Friends to DM",
+                subtitle: Text(room == 1 ? "You can add 1 more person." : "You can add \(room) more people."),
+                close: { dismiss() }
+            )
+            VStack(alignment: .leading, spacing: Spacing.snug) {
+                SearchField(prompt: "Search friends", text: $query)
+                if friends.isEmpty {
+                    Text("No results found.")
+                        .font(.system(.subheadline))
+                        .foregroundStyle(Ink.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(friends) { friend in
+                                row(friend, isDisabled: room == 0 && !picked.contains(friend.id))
+                            }
                         }
                     }
+                    .softScrollEdgesVertical()
                 }
             }
+            .padding(.horizontal, Spacing.group)
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Add") {
+                ModalButton(title: "Add", symbolName: "person.badge.plus", role: .act) {
                     model.sessionController.addGroupRecipients(picked, to: channelID)
                     dismiss()
                 }
-                .keyboardShortcut(.defaultAction)
                 .disabled(picked.isEmpty)
             }
+            .padding(Spacing.margin)
         }
-        .padding(Spacing.group)
-        .frame(width: 400, height: 460)
+        .frame(width: 420, height: 500)
     }
 
     private func row(_ friend: User, isDisabled: Bool) -> some View {

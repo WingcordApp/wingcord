@@ -62,12 +62,13 @@ struct BoostPerksPane: View {
                 }
                 CardDivider()
                 ImageWell(
-                    title: settings.bannerHash == nil ? "Upload Background" : "Change Background",
+                    title: settings.bannerHash == nil ? "No banner yet" : "Banner",
                     detail: "",
                     url: settings.bannerHash.flatMap {
                         CDN.guildBanner(guildID: settings.id, hash: $0, width: 240)
                     },
                     isCircular: false,
+                    aspectRatio: 16 / 9,
                     allowsAnimated: BoostTier.unlocks(
                         .animatedBanner,
                         features: settings.features,
@@ -96,12 +97,13 @@ struct BoostPerksPane: View {
                 }
                 CardDivider()
                 ImageWell(
-                    title: settings.splashHash == nil ? "Upload Background" : "Change Background",
+                    title: settings.splashHash == nil ? "No background yet" : "Background",
                     detail: "",
                     url: settings.splashHash.flatMap {
                         CDN.guildSplash(guildID: settings.id, hash: $0, width: 240)
                     },
                     isCircular: false,
+                    aspectRatio: 16 / 9,
                     allowsAnimated: false,
                     onPick: { image in Task { await store.saveBoostPerks(splash: .some(image)) } },
                     onRemove: settings.splashHash == nil
@@ -149,7 +151,9 @@ private struct CustomInviteLinkSection: View {
                     HStack(spacing: Spacing.snug) {
                         if code != current {
                             Button("Save Changes") { save(code) }
-                                .buttonStyle(.borderedProminent)
+                                .buttonStyle(.glassProminent)
+                                .buttonBorderShape(.capsule)
+                                .tint(Palette.accent)
                                 .controlSize(.small)
                         }
                         if !current.isEmpty {

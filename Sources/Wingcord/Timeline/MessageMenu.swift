@@ -143,6 +143,22 @@ struct MessageMenu: View {
         }
     }
 
+    /// A row's words. Look Up names what it will look up, as macOS's own
+    /// text menu does — `Look Up “word”`.
+    private func title(of kind: MessageActionKind) -> String {
+        guard kind == .lookUp, let text = model.messageMenu?.selectedText else { return kind.title }
+        return "Look Up “\(Self.excerpt(text))”"
+    }
+
+    /// The selection cut to what a menu row can carry: one line, and an
+    /// ellipsis past a few words.
+    static func excerpt(_ text: String, limit: Int = 24) -> String {
+        let line = text.split(whereSeparator: \.isNewline).joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        guard line.count > limit else { return line }
+        return line.prefix(limit).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
     private var divider: some View {
         Rectangle()
             .fill(Ink.quaternary)
@@ -166,7 +182,7 @@ struct MessageMenu: View {
                 Image(symbol: kind.symbolName)
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
-                Text(kind.title)
+                Text(title(of: kind))
                     .font(.system(.subheadline))
                     .lineLimit(1)
                 Spacer(minLength: Spacing.base)

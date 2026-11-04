@@ -56,6 +56,23 @@ extension DiscordREST {
         ).domain
     }
 
+    /// Named servers, as discovery describes them — a game profile's
+    /// Communities (`c82450…`'s `tl`: `GET /discoverable-guilds` with
+    /// `guild_ids`, the answer's `guilds`).
+    ///
+    /// **One key per id**, as the browse's `categories` is, and pagination is
+    /// ignored for `guild_ids` (the docs, and point 2 above) — so one request
+    /// carries the whole list.
+    public func discoverableGuilds(ids: [GuildID]) async throws -> [DiscoverableGuild] {
+        guard !ids.isEmpty else { return [] }
+        return try await get(
+            "/discoverable-guilds",
+            route: "discoverable-guilds",
+            query: ids.map { URLQueryItem(name: "guild_ids", value: String($0.rawValue)) },
+            as: DiscoverBrowseDTO.self
+        ).domain.guilds
+    }
+
     /// Servers matching what somebody typed.
     ///
     /// **A proxy for Algolia, and the only search there is.** Discord revoked the
@@ -255,6 +272,7 @@ struct DiscoverableGuildDTO: Decodable, Sendable {
     var approximate_member_count: Int?
     var approximate_presence_count: Int?
     var premium_subscription_count: Int?
+    var preferred_locale: String?
 
     var domain: DiscoverableGuild? {
         guard let id, let name, !name.isEmpty else { return nil }
@@ -272,7 +290,8 @@ struct DiscoverableGuildDTO: Decodable, Sendable {
             features: Set(features ?? []),
             memberCount: approximate_member_count ?? 0,
             onlineCount: approximate_presence_count ?? 0,
-            boostCount: premium_subscription_count ?? 0
+            boostCount: premium_subscription_count ?? 0,
+            preferredLocale: (preferred_locale?.isEmpty ?? true) ? nil : preferred_locale
         )
     }
 }

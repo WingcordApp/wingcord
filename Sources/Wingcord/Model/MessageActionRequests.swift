@@ -241,6 +241,14 @@ struct AutoModActionHover: Hashable, Sendable {
     var frame: CGRect
 }
 
+/// The "(edited)" after a changed message's words, under the pointer, and
+/// where it is in the transcript's clip view — the space its tooltip is laid
+/// out in, for the reason `ReactionHover.chipFrame` is.
+struct EditedMarkHover: Hashable, Sendable {
+    var editedAt: Date
+    var frame: CGRect
+}
+
 /// One chip's reactors, as the tooltip asks for them.
 struct ReactorKey: Hashable, Sendable {
     var messageID: MessageID

@@ -172,7 +172,8 @@ struct InboxFlyout: View {
                     Label("Mark All As Read", systemImage: "checkmark.circle")
                         .labelStyle(.iconOnly)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .help("Mark everything as read")
                 .disabled(!model.canMarkAllInboxRead)
             }
@@ -212,7 +213,8 @@ struct InboxFlyout: View {
                 }
             }
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
         .help(showing ? "Back to the inbox" : "View friend requests")
         // Spoken as one thing. Without this VoiceOver reads the label and then
         // the badge as two unrelated nodes.
@@ -383,7 +385,8 @@ struct InboxNotice: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let retry {
                 Button("Try Again", action: retry)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .padding(.top, Spacing.tight)
             }
         }

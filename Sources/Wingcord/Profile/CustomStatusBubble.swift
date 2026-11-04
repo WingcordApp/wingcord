@@ -61,8 +61,27 @@ struct CustomStatusBubble: View {
     var margin: CGFloat = Spacing.margin
 
     @Environment(\.motion) private var motion
-    /// Whether the pointer is on it, which lifts the two-line clamp.
+    /// Whether the pointer is on it — or on its answer pill, or just left one
+    /// of the two — which lifts the two-line clamp and shows the pill.
     @State private var isExpanded = false
+    /// The pause before the pill goes, so the pointer can cross from the
+    /// bubble to it. See `settleHover()`.
+    @State private var hideTask: Task<Void, Never>?
+    /// Where the pointer is. **Two latches, because each surface reports only
+    /// its own edges** — the pill hangs over the bubble's frame, so moving from
+    /// the pill back onto the bubble says "off the pill" and nothing else: the
+    /// pointer never left the bubble. One flag took the pill away from a pointer
+    /// still on the bubble, and it stayed away until the pointer left and came
+    /// back. `BadgeRow` keeps its two for the same reason.
+    @State private var isOnBubble = false
+    @State private var isOnControls = false
+    /// **The pill's flyouts, held here rather than on the pill.** They were the
+    /// pill's own state, and the pill existed only while the bubble was
+    /// hovered — so moving into the emoji picker or the reply field left the
+    /// bubble, took the pill away, and closed the flyout with it (Alex,
+    /// 2026-10-26: "closes it at once"). They hang from the bubble, which stays.
+    @State private var isPickingEmoji = false
+    @State private var isReplying = false
 
     /// Where every piece goes. See `StatusBubbleLayout` — the numbers are
     /// measured off a reference, and they live in one value so a test can hold
@@ -71,10 +90,9 @@ struct CustomStatusBubble: View {
         StatusBubbleLayout(
             avatarSide: avatarSide,
             avatarDrop: avatarDrop,
-            decorationOverhang: ProfileAvatar.decorationOverhang(side: avatarSide),
             cardWidth: cardWidth,
             margin: margin,
-            gap: Spacing.base
+            surface: surface
         )
     }
 
@@ -83,6 +101,8 @@ struct CustomStatusBubble: View {
     /// bubble with no ground behind it does not have to say so, and declared
     /// last because a memberwise initialiser takes its arguments in order.
     var fill: Color = Palette.statusBubble
+    /// Which of the two arrangements it hangs in — see `StatusBubbleLayout`.
+    var surface: StatusBubbleLayout.Surface = .card
     /// The ink on that plate — see `ProfileGround.statusBubbleInk`. Defaulted
     /// for the surfaces that draw a bubble with no themed ground behind it.
     var ink: Color = InkColor.primary
@@ -97,10 +117,11 @@ struct CustomStatusBubble: View {
 
     var body: some View {
         bubble
-            // **Above the bubble's own trailing corner, on hover.** Discord
-            // floats a small pill there rather than putting the controls inside
-            // the bubble: what is inside is what somebody said, and a button in
-            // it would read as part of the sentence.
+            // **Over the bubble's own top edge, near its end, on hover** —
+            // Discord's `.popover` (`top: -20px`, `inset-inline-end: min(8px,
+            // 50% - 60px)`), rather than the controls inside the bubble: what is
+            // inside is what somebody said, and a button in it would read as part
+            // of the sentence.
             //
             // **Attached to the bubble, not to the cluster.** It was on the
             // outer view — which carries the tail's overhang at its top and the
@@ -109,27 +130,69 @@ struct CustomStatusBubble: View {
             // the pill floated off on its own. The only frame this can be placed
             // from is the one it is about.
             .overlay(alignment: .topTrailing) {
-                if let answer, isExpanded {
-                    StatusAnswerControls(
-                        answer: answer,
-                        // **Never wider than the bubble it belongs to.** A
-                        // status of one emoji draws a 42-point bubble, and a
-                        // fixed 64-point pill on it hung off both ends and
-                        // covered the thing it was about. The controls shrink
-                        // to fit instead — down to a floor, because a button
-                        // smaller than a fingertip is a button nobody can hit.
-                        side: Self.controlSide(
-                            forBubbleWidth: layout.bubbleWidth(contentWidth: contentWidth)
+                // **The guides are on the `Group`, outside the `if`.** Inside an
+                // overlay's conditional a guide is ignored without a word
+                // (`INVARIANTS.md`): this one was, twice, and the pill sat square
+                // on the words both times.
+                Group {
+                    // Gone while either flyout is up, as Discord's toolbar is
+                    // (`isVisible: y && !x`): the flyout is the answer now.
+                    if answer != nil, isExpanded, !isPickingEmoji, !isReplying {
+                        StatusAnswerControls(
+                            // **Never wider than the bubble it belongs to.** A
+                            // status of one emoji draws a small bubble, and a
+                            // fixed 64-point pill on it hung off both ends. The
+                            // controls shrink to fit instead — down to a floor,
+                            // because a button smaller than a fingertip is a
+                            // button nobody can hit.
+                            side: Self.controlSide(
+                                forBubbleWidth: layout.bubbleWidth(contentWidth: contentWidth)
+                            ),
+                            react: { open(&isPickingEmoji) },
+                            reply: { open(&isReplying) }
                         )
-                    )
-                        // Sat on the bubble's top edge, tucked in from its right
-                        // end — the pill's foot overlaps the bubble so the two
-                        // read as one object rather than as a toolbar hovering
-                        // nearby.
-                        .alignmentGuide(.top) { $0[.bottom] - Self.controlsOverlap }
-                        .alignmentGuide(.trailing) { $0[.trailing] + Spacing.base }
+                        .onHover { isOnControls = $0; settleHover() }
                         .transition(.opacity)
+                    }
                 }
+                // **Straddling the top edge, never down to the words** — it sat
+                // on them (Alex, 2026-10-26, screenshot 28: "sits on top of it").
+                // It reaches no further into the bubble than the bubble's own
+                // padding. On a narrow bubble it is centred, as Discord's
+                // `50% - 60px` centres its 120.
+                .alignmentGuide(.top) { [overlap = layout.bubbleVerticalPadding] in
+                    $0.height - overlap
+                }
+                .alignmentGuide(.trailing) { [
+                    bubble = layout.bubbleWidth(contentWidth: contentWidth),
+                    inset = Self.controlsInset
+                ] in
+                    $0.width + min(inset, bubble / 2 - $0.width / 2)
+                }
+            }
+            // **Hung from the bubble, not from the pill**, where Discord hangs
+            // them (`eA` in `217424`): the emoji to its left, the field under it.
+            // From the pill's buttons they came down over the words, and they
+            // went when the hover did — the pointer on a flyout is off the
+            // bubble, and the pill they hung from left with it (Alex, 2026-10-26).
+            .popover(isPresented: $isPickingEmoji, arrowEdge: .leading) {
+                ExpressionPicker(
+                    mode: .emoji,
+                    onPick: { item in
+                        isPickingEmoji = false
+                        guard case .insert(let text) = item.pick else { return }
+                        answer?.send(text)
+                    },
+                    onPickGIF: { _ in }
+                )
+                .presentationBackground(.clear)
+            }
+            .popover(isPresented: $isReplying, arrowEdge: .bottom) {
+                StatusReplyField(name: answer?.name ?? "") { text in
+                    isReplying = false
+                    answer?.send(text)
+                }
+                .presentationBackground(.clear)
             }
             // **Behind the bubble, not beside it.** The large disc straddles its
             // top edge, and a disc drawn *over* it would show its own rim
@@ -140,7 +203,8 @@ struct CustomStatusBubble: View {
             // frame — a background is not clipped by its parent, but an
             // ancestor that clips would take them.
             .padding(.top, layout.topOverhang)
-            .padding(.leading, layout.leadingInset + layout.leadingOverhang)
+            // The discs' overhang is inside this: the face is wider than they are.
+            .padding(.leading, layout.leadingInset)
         // **One height for every status, and the content aligned to its top.**
         //
         // Two bugs, one cause. The cluster is placed bottom-leading against the
@@ -158,7 +222,7 @@ struct CustomStatusBubble: View {
         .frame(height: layout.topOverhang + collapsedHeight, alignment: .top)
         // Placed from the avatar's own drop, so the cluster leaves the face at
         // the same angle on both surfaces.
-        .offset(y: layout.verticalOffset)
+        .offset(y: layout.verticalOffset(collapsedHeight: collapsedHeight))
         // **The clamp lifts under the pointer, in place.** Discord expands the
         // bubble itself rather than opening a second surface to read it in, and
         // the flyout this replaces was answering a question by putting the
@@ -167,10 +231,7 @@ struct CustomStatusBubble: View {
         // Unconditional on purpose: a status that already fits in two lines is
         // unchanged by lifting a limit it never reached, so there is no
         // "is it truncated" to measure and get wrong.
-        .onHover { hovering in
-            guard isExpanded != hovering else { return }
-            isExpanded = hovering
-        }
+        .onHover { isOnBubble = $0; settleHover() }
         .animation(motion.hover, value: isExpanded)
         .accessibilityElement(children: .ignore)
         // VoiceOver gets the WHOLE status regardless of what is drawn. A visual
@@ -185,12 +246,8 @@ struct CustomStatusBubble: View {
     /// states them — both are absolutely positioned against it. Their offsets
     /// are negative upward, so this reads the same way the CSS does.
     private var tail: some View {
-        ZStack(alignment: .topLeading) {
-            disc(layout.dotLarge)
-                .offset(x: layout.largeDotOrigin.x, y: layout.largeDotOrigin.y)
-            disc(layout.dotSmall)
-                .offset(x: layout.smallDotOrigin.x, y: layout.smallDotOrigin.y)
-        }
+        disc(layout.dotSmall)
+            .offset(x: layout.smallDotOrigin.x, y: layout.smallDotOrigin.y)
     }
 
     /// **The same fill as the bubble, or the tail stops belonging to it.** The
@@ -199,13 +256,14 @@ struct CustomStatusBubble: View {
     private func disc(_ side: CGFloat) -> some View {
         Circle()
             .fill(fill)
+            .overlay { Circle().stroke(rim, lineWidth: 1) }
             .frame(width: side, height: side)
     }
 
     private var bubble: some View {
         HStack(spacing: layout.contentGap) {
             if let emoji {
-                ExpressionGlyph(emoji: emoji, side: layout.emojiSide)
+                ExpressionGlyph(emoji: emoji, side: emojiSide)
             }
             if let placeholder, text?.isEmpty != false, emoji == nil {
                 // The plus is the affordance: an empty bubble with grey words in
@@ -247,11 +305,24 @@ struct CustomStatusBubble: View {
         // the space it is offered rather than hugging, which is what stretched a
         // bubble holding one emoji into a lozenge the width of the card.
         .frame(width: layout.bubbleWidth(contentWidth: contentWidth), alignment: .leading)
-        .background(
-            fill,
-            in: .rect(cornerRadius: layout.bubbleCorner, style: .continuous)
-        )
+        // **The bubble and its large disc are one outline**, filled once and
+        // ringed once — Discord's 1-pixel border (the 2 in its 181) runs
+        // round the bump rather than across it, which is what makes the two
+        // one shape (screenshot 29).
+        .background {
+            let shape = StatusBubbleShape(corner: layout.bubbleCorner, disc: largeDisc)
+            shape.fill(fill)
+                .overlay { shape.stroke(rim, lineWidth: 1) }
+        }
     }
+
+    /// The large disc, in the bubble's own space.
+    private var largeDisc: CGRect {
+        CGRect(origin: layout.largeDotOrigin, size: CGSize(width: layout.dotLarge, height: layout.dotLarge))
+    }
+
+    /// The hairline round the bubble and its trail: the plate's own ink, faint.
+    private var rim: Color { ink.opacity(0.12) }
 
     /// How wide what is inside the bubble actually is.
     ///
@@ -268,7 +339,7 @@ struct CustomStatusBubble: View {
                 + TimelineLayoutEngine.measure(placeholder, font: Self.textFont)
         }
         var width: CGFloat = 0
-        if emoji != nil { width += layout.emojiSide }
+        if emoji != nil { width += emojiSide }
         if let text, !text.isEmpty {
             if width > 0 { width += layout.contentGap }
             width += TimelineLayoutEngine.measure(text, font: Self.textFont)
@@ -296,11 +367,41 @@ struct CustomStatusBubble: View {
         return (font.ascender - font.descender + font.leading).rounded(.up)
     }
 
-    /// How far the hover pill's foot sits inside the bubble's top edge.
+    /// The hover pill's end, in from the bubble's: Discord's 8.
     ///
     /// `nonisolated` because an alignment guide's closure is `Sendable` — a
     /// main-actor constant cannot be read from one.
-    nonisolated static let controlsOverlap: CGFloat = 6
+    nonisolated static let controlsInset: CGFloat = 8
+
+    /// An emoji on its own is the whole status, and is drawn as one.
+    private var emojiSide: CGFloat {
+        text?.isEmpty == false ? layout.emojiSide : layout.loneEmojiSide
+    }
+
+    /// The pointer arriving on the bubble or its pill, or leaving one.
+    ///
+    /// **Arriving shows at once; leaving waits a beat**, so the frames spent
+    /// crossing from one to the other do not take the pill away. Either one
+    /// arriving cancels the wait.
+    private func settleHover() {
+        hideTask?.cancel()
+        if isOnBubble || isOnControls {
+            if !isExpanded { isExpanded = true }
+            return
+        }
+        hideTask = Task {
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            isExpanded = false
+        }
+    }
+
+    /// A press on the pill: the flyout opens and the pill goes, under a pointer
+    /// that will never report leaving it.
+    private func open(_ flyout: inout Bool) {
+        isOnControls = false
+        flyout = true
+    }
 
     /// How big each control may be, given the bubble it sits on.
     ///
@@ -325,6 +426,20 @@ struct CustomStatusBubble: View {
     }
 }
 
+/// A status bubble's outline: its rounded square and the large disc that
+/// straddles its top edge, as one path — so a fill and a hairline treat them
+/// as the one shape they are.
+nonisolated private struct StatusBubbleShape: Shape {
+    var corner: CGFloat
+    /// The disc, in the bubble's own space.
+    var disc: CGRect
+
+    func path(in rect: CGRect) -> Path {
+        Path(roundedRect: rect, cornerRadius: corner, style: .continuous)
+            .union(Path(ellipseIn: disc.offsetBy(dx: rect.minX, dy: rect.minY)))
+    }
+}
+
 // MARK: - Answering somebody's status
 
 /// What the bubble's hover controls do.
@@ -344,42 +459,15 @@ struct CustomStatusAnswering {
 
 /// The smiley and the arrow above a status bubble.
 private struct StatusAnswerControls: View {
-    var answer: CustomStatusAnswering
     /// How big each button draws — see `CustomStatusBubble.controlSide`.
     var side: CGFloat
-
-    @Environment(\.motion) private var motion
-    @State private var isPickingEmoji = false
-    @State private var isReplying = false
+    var react: () -> Void
+    var reply: () -> Void
 
     var body: some View {
         HStack(spacing: 2) {
-            control("face.smiling", label: "React to this status") {
-                isPickingEmoji = true
-            }
-            .popover(isPresented: $isPickingEmoji, arrowEdge: .bottom) {
-                ExpressionPicker(
-                    mode: .emoji,
-                    onPick: { item in
-                        isPickingEmoji = false
-                        guard case .insert(let text) = item.pick else { return }
-                        answer.send(text)
-                    },
-                    onPickGIF: { _ in }
-                )
-                .presentationBackground(.clear)
-            }
-
-            control("arrowshape.turn.up.left", label: "Reply to this status") {
-                isReplying = true
-            }
-            .popover(isPresented: $isReplying, arrowEdge: .bottom) {
-                StatusReplyField(name: answer.name) { text in
-                    isReplying = false
-                    answer.send(text)
-                }
-                .presentationBackground(.clear)
-            }
+            control("face.smiling", label: "React to this status", act: react)
+            control("arrowshape.turn.up.left", label: "Reply to this status", act: reply)
         }
         .padding(3)
         // In-window glass, not a popover's: this sits inside the card and

@@ -256,7 +256,8 @@ struct GuildProfileCard: View {
             )
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
         .controlSize(.large)
         .disabled(isEntering)
         .padding(.horizontal, Spacing.margin)
@@ -300,7 +301,8 @@ struct GuildProfileCard: View {
                 Label("Open Server", systemImage: "arrow.forward")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .controlSize(.large)
             .padding(.horizontal, Spacing.margin)
             .padding(.top, Spacing.snug)

@@ -73,7 +73,7 @@ struct ClipsLibraryView: View {
         .onChange(of: section, initial: true) { _, section in apply(section ?? .all) }
         .onAppear { openPendingEdit() }
         .onReceive(NotificationCenter.default.publisher(for: ClipsWindow.didRequestEdit)) { _ in openPendingEdit() }
-        .sheet(item: $sharing) { request in
+        .modal(item: $sharing) { request in
             ClipShareSheet(request: request) { sharing = nil }
         }
     }
@@ -334,7 +334,9 @@ private struct AutoClipsReview: View {
                         Spacer(minLength: Spacing.base)
                         Button("Discard All", role: .destructive) { store.discard(Set(store.review.map(\.url))) }
                         Button("Keep All") { store.keep(Set(store.review.map(\.url))) }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.glassProminent)
+                            .buttonBorderShape(.capsule)
+                            .tint(Palette.accent)
                     }
                     LazyVGrid(columns: columns, spacing: Spacing.group) {
                         ForEach(store.review) { item in
@@ -345,7 +347,9 @@ private struct AutoClipsReview: View {
                                     Button("Discard", role: .destructive) { store.discard([item.url]) }
                                     Spacer()
                                     Button("Keep") { store.keep([item.url]) }
-                                        .buttonStyle(.borderedProminent)
+                                        .buttonStyle(.glassProminent)
+                                        .buttonBorderShape(.capsule)
+                                        .tint(Palette.accent)
                                 }
                                 .controlSize(.small)
                             }

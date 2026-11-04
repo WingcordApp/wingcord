@@ -189,7 +189,10 @@ extension AppModel {
             directMessageChannelID: user.id == currentUserID
                 ? nil
                 : directMessageChannel(with: user.id),
-            isLoading: profilesLoading.contains(user.id),
+            // **A skeleton only for a first load.** A profile already on the
+            // card keeps drawing while it is asked for again; the answer
+            // replaces it in place when it lands.
+            isLoading: profilesLoading.contains(user.id) && !hasProfile(of: user.id),
             // Read through the filtered decoration like the frame itself, so a
             // reader who switched frames off is never held for one.
             isFrameLoading: decoration?.profileFrameSKU.map(collectiblesLoading.contains) ?? false
@@ -495,6 +498,8 @@ extension AppModel {
             // **Only meaningful in a server, and false outside one.** There is
             // no nickname on an account profile to permit.
             canChangeNickname: scope.guildID.map(permissionGate.canChangeNickname(in:)) ?? false,
+            animatesAvatar: entitlements.has(.animatedAvatar),
+            wearsCollectibles: entitlements.has(.collectibles),
             isServerScope: scope.guildID != nil
         )
     }
@@ -607,4 +612,18 @@ extension AppModel {
     /// beside a row does not interrupt the window — so there is nothing for the
     /// bar to be inconsistent with. See `ProfilePresenter.dismissLayer`.
     var isFullProfileShown: Bool { profileRequest?.depth == .full }
+}
+
+/// Which profile was asked for: somebody's, as the account or in one server.
+struct ProfileFetchKey: Hashable, Sendable {
+    var userID: UserID
+    var guildID: GuildID?
+}
+
+extension AppModel {
+    /// Whether any of somebody's profile has arrived this session — the
+    /// account's or a server's, which carries the account's too.
+    func hasProfile(of userID: UserID) -> Bool {
+        profileFetchedAt.keys.contains { $0.userID == userID }
+    }
 }

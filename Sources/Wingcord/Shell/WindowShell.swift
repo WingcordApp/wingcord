@@ -80,7 +80,7 @@ struct WindowShell: View {
         .onChange(of: model.selectedChannelID, initial: true) { _, channelID in
             WallpaperStore.shared.openConversation = channelID
         }
-        .sheet(item: Binding(
+        .modal(item: Binding(
             get: { WallpaperStore.shared.editing },
             set: { WallpaperStore.shared.editing = $0 }
         )) { request in
@@ -92,19 +92,19 @@ struct WindowShell: View {
         }
         // New Folder… and Rename Folder… for the conversation folders — asked
         // from menus, which cannot host a sheet of their own.
-        .sheet(item: Binding(
+        .modal(item: Binding(
             get: { DirectMessageFolders.shared.nameRequest },
             set: { DirectMessageFolders.shared.nameRequest = $0 }
         )) { request in
             FolderNameSheet(request: request)
         }
-        .sheet(isPresented: Binding(
+        .modal(isPresented: Binding(
             get: { AddFriendRequest.shared.isShown },
             set: { AddFriendRequest.shared.isShown = $0 }
         )) {
             AddFriendSheet()
         }
-        .sheet(isPresented: Binding(
+        .modal(isPresented: Binding(
             get: { NewMessageRequest.shared.isShown },
             set: { NewMessageRequest.shared.isShown = $0 }
         )) {
@@ -118,7 +118,6 @@ private struct FolderNameSheet: View {
     var request: DirectMessageFolders.NameRequest
 
     @State private var name = ""
-    @FocusState private var isFocused: Bool
 
     private var isNew: Bool {
         if case .create = request.purpose { return true }
@@ -128,31 +127,18 @@ private struct FolderNameSheet: View {
     private var canCommit: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.base * 1.5) {
-            Text(isNew ? "New Folder" : "Rename Folder")
-                .font(.headline)
-            Text("Folders keep conversations together. They stay on this Mac.")
-                .font(.subheadline)
-                .foregroundStyle(Ink.secondary)
-            TextField("Folder name", text: $name)
-                .textFieldStyle(.roundedBorder)
-                .focused($isFocused)
-                .onSubmit(commit)
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { DirectMessageFolders.shared.nameRequest = nil }
-                    .keyboardShortcut(.cancelAction)
-                Button(isNew ? "Create" : "Rename", action: commit)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canCommit)
-            }
+        FormSheet(
+            title: isNew ? "New Folder" : "Rename Folder",
+            subtitle: Text("Folders keep conversations together. They stay on this Mac."),
+            confirmTitle: isNew ? "Create" : "Rename",
+            canConfirm: canCommit,
+            width: 380,
+            confirmSymbol: isNew ? "folder.badge.plus" : "pencil",
+            confirm: commit
+        ) {
+            ModalTextField(placeholder: "Folder name", text: $name, symbolName: "folder", onSubmit: commit)
         }
-        .padding(20)
-        .frame(width: 340)
-        .onAppear {
-            name = request.initialName
-            isFocused = true
-        }
+        .onAppear { name = request.initialName }
     }
 
     private func commit() {
@@ -558,7 +544,7 @@ private struct DetailColumn: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 DetailHeader(layout: layout)
             }
-            .sheet(isPresented: Binding(
+            .modal(isPresented: Binding(
                 get: { model.channelChrome.isTopicShown },
                 set: { if !$0 { model.openTopicChannelID = nil } }
             )) {

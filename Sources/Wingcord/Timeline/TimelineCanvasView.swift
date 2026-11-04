@@ -472,6 +472,9 @@ final class TimelineCanvasView: NSView {
     var onResend: ((MessageID) -> Void)?
     /// A reply's quoted line was clicked: go to what it quotes.
     var onOpenReplyTarget: ((MessageID) -> Void)?
+    /// The chip on a "used" line was pressed, with its rect in the hosting
+    /// root's space: `AppModel.pressCommandChip` says what that does.
+    var onOpenCommand: ((MessageID, CGRect) -> Void)?
     /// The open topic's marker was clicked: bring its panel back.
     var onOpenTopicMarker: (() -> Void)?
     /// The welcome header's Edit Channel button.
@@ -518,6 +521,12 @@ final class TimelineCanvasView: NSView {
     var onHoverAutoModAction: ((AutoModActionHover?) -> Void)?
     /// The mark last published through `onHoverAutoModAction`.
     private var hoveredAutoModAction: AutoModActionHover?
+    /// The pointer moved onto, or off, the "(edited)" after a message's
+    /// words — Discord's tooltip saying when. Its frame is in the CLIP VIEW's
+    /// space, for the reason `onHoverReaction`'s is.
+    var onHoverEditedMark: ((EditedMarkHover?) -> Void)?
+    /// The marker last published through `onHoverEditedMark`.
+    private var hoveredEditedMark: EditedMarkHover?
 
     private var trackingArea: NSTrackingArea?
     /// See `apply(isCovered:)`.
@@ -1494,7 +1503,7 @@ final class TimelineCanvasView: NSView {
                     }
                     if selection != nil, let block = message.textBlock {
                         state.selectedRange = selectedRange(
-                            of: message.id, length: block.text.attributed.length
+                            of: message.id, length: block.text.selectableLength
                         )
                     }
                     state.avatarFrame = avatarFilm.avatarFrame(forRow: message.id.rawValue)
@@ -1783,6 +1792,12 @@ final class TimelineCanvasView: NSView {
             return
         }
         guard case .message(let row) = rows[index].kind else { return }
+        // **The row's, bound here, because the name is taken.** A row-space rect
+        // offset by a bare `frame` compiles against this view's own and anchors
+        // hundreds of points away — off the window, where a popover does not
+        // appear at all: Add Reaction, an invite's "+ N more" and a command's
+        // chip each did nothing, with nothing to say why.
+        let frame = rowFrame(at: index)
 
         switch target(in: row, at: point, rowIndex: index) {
         case .spoiler(let spoilerIndex):
@@ -1902,6 +1917,8 @@ final class TimelineCanvasView: NSView {
             // A strip with nothing behind it still swallows the click: falling
             // through would open the profile of whoever is underneath.
             if let target { onOpenReplyTarget?(target) }
+        case .interactionCommand(let rect):
+            onOpenCommand?(row.id, anchorInHostingRoot(rect.offsetBy(dx: frame.minX, dy: frame.minY)))
         case nil:
             if beginSelection(in: row, rowIndex: index, at: point, clicks: event.clickCount) { return }
             if event.clickCount == 2 { onActivateMessage?(row.id) }
@@ -1941,7 +1958,7 @@ final class TimelineCanvasView: NSView {
                          TextPoint(messageID: row.id, index: NSMaxRange(word)))
         case 3...:
             selection = (TextPoint(messageID: row.id, index: 0),
-                         TextPoint(messageID: row.id, index: block.text.attributed.length))
+                         TextPoint(messageID: row.id, index: block.text.selectableLength))
         default:
             selection = (start, start)
             isSelecting = true
@@ -1997,7 +2014,7 @@ final class TimelineCanvasView: NSView {
         }
         for above in stride(from: index - 1, through: 0, by: -1) {
             if case .message(let row) = rows[above].kind, let block = row.textBlock {
-                return TextPoint(messageID: row.id, index: block.text.attributed.length)
+                return TextPoint(messageID: row.id, index: block.text.selectableLength)
             }
         }
         for below in (index + 1)..<rows.count {
@@ -2051,12 +2068,36 @@ final class TimelineCanvasView: NSView {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
+    /// macOS's Look Up over the selected words — the dictionary's panel, with
+    /// the words lit where they are drawn. The message menu's Look Up ends
+    /// here, through `TimelineCoordinator.lookUpSelection`.
+    ///
+    /// **The first message's words only**: the panel looks up one run of
+    /// text, and a selection across messages is several.
+    func lookUpSelection() {
+        guard let ordered = orderedSelection,
+              rows.indices.contains(ordered.startRow),
+              case .message(let row) = rows[ordered.startRow].kind,
+              let block = row.textBlock,
+              let range = selectedRange(of: row.id, length: block.text.selectableLength),
+              let baseline = block.baselineOrigin(at: range.location)
+        else { return }
+        let frame = rowFrame(at: ordered.startRow)
+        showDefinition(
+            for: block.text.attributed.attributedSubstring(from: range),
+            at: CGPoint(
+                x: frame.minX + row.textOrigin.x + baseline.x,
+                y: frame.minY + row.textOrigin.y + baseline.y
+            )
+        )
+    }
+
     func selectedText() -> String? {
         guard let ordered = orderedSelection else { return nil }
         var parts: [String] = []
         for index in ordered.startRow...ordered.endRow {
             guard case .message(let row) = rows[index].kind, let block = row.textBlock,
-                  let range = selectedRange(of: row.id, length: block.text.attributed.length)
+                  let range = selectedRange(of: row.id, length: block.text.selectableLength)
             else { continue }
             parts.append(Self.plainText(of: block.text, in: range))
         }
@@ -2206,6 +2247,9 @@ final class TimelineCanvasView: NSView {
         /// strip that says "original message was deleted" is not a hole in the
         /// row.
         case replyHeader(MessageID?)
+        /// A pressable chip on a "used" line. Its rect in row space — the origin
+        /// for the painter to light, the size for the flyout's anchor.
+        case interactionCommand(rect: CGRect)
     }
 
     private func target(in row: MessageRow, at point: CGPoint, rowIndex index: Int) -> Target? {
@@ -2217,6 +2261,16 @@ final class TimelineCanvasView: NSView {
         // nil check on everything else.
         if let header = row.replyHeader, header.rect.contains(local) {
             return .replyHeader(header.targetID)
+        }
+        // A "used" line: the chip does what its kind does (Alex's screenshots 31
+        // and 32), and the face and the name open whoever ran it, as Discord's do.
+        if let header = row.interactionHeader {
+            if header.chip.isPressable, header.chipRect.contains(local) {
+                return .interactionCommand(rect: header.chipRect)
+            }
+            for rect in [header.avatarRect, header.nameRect] where rect.contains(local) {
+                return .person(header.userID, rect.offsetBy(dx: frame.minX, dy: frame.minY))
+            }
         }
 
         // A drawn card's words first — the channel's chip and the names in
@@ -2547,6 +2601,7 @@ final class TimelineCanvasView: NSView {
         var reaction: ReactionHover?
         var markHover: GuildMarkHover?
         var autoModHover: AutoModActionHover?
+        var editedHover: EditedMarkHover?
         var onReactions = false
         if let index, rows.indices.contains(index), case .message(let row) = rows[index].kind {
             // **Resolved from the geometry, not from the click target.** The
@@ -2566,6 +2621,15 @@ final class TimelineCanvasView: NSView {
                 autoModHover = AutoModActionHover(
                     action: tip.action,
                     frame: tip.rect.offsetBy(dx: rowFrame(at: index).minX - clip.x, dy: offsets[index] - clip.y)
+                )
+            }
+            // "(edited)" answers the pointer with when — Discord's tooltip on
+            // it. See `onHoverEditedMark`.
+            if let mark = row.editedMark, mark.rect.contains(local) {
+                let clip = enclosingScrollView?.contentView.bounds.origin ?? .zero
+                editedHover = EditedMarkHover(
+                    editedAt: mark.editedAt,
+                    frame: mark.rect.offsetBy(dx: rowFrame(at: index).minX - clip.x, dy: offsets[index] - clip.y)
                 )
             }
             // A file stays hovered while the pointer is on its Download, which
@@ -2657,6 +2721,9 @@ final class TimelineCanvasView: NSView {
                 // A quote with nothing behind it swallows the click and goes
                 // nowhere, so it must not offer a hand that says it does.
                 cursor = target == nil ? nil : .pointingHand
+            case .interactionCommand(let rect):
+                component = rect.origin
+                cursor = .pointingHand
             case .favoriteGIF:
                 cursor = .pointingHand
             case .downloadAttachment(_, let rect):
@@ -2680,7 +2747,8 @@ final class TimelineCanvasView: NSView {
                 cursor = .pointingHand
             case nil:
                 // Body text reads as text: the I-beam says it can be selected.
-                if textPoint(in: row, rowIndex: index, at: point, clamped: false) != nil {
+                // "(edited)" cannot be, as Discord's `user-select: none` cannot.
+                if editedHover == nil, textPoint(in: row, rowIndex: index, at: point, clamped: false) != nil {
                     cursor = .iBeam
                 }
             }
@@ -2727,6 +2795,7 @@ final class TimelineCanvasView: NSView {
         publishReactionHover(reaction)
         publishMarkHover(markHover)
         publishAutoModHover(autoModHover)
+        publishEditedMarkHover(editedHover)
 
         // A write of an equal value still costs a redraw request, and the
         // pointer generates these at event rate.
@@ -2841,12 +2910,19 @@ final class TimelineCanvasView: NSView {
         onHoverAutoModAction?(hover)
     }
 
+    private func publishEditedMarkHover(_ hover: EditedMarkHover?) {
+        guard hover != hoveredEditedMark else { return }
+        hoveredEditedMark = hover
+        onHoverEditedMark?(hover)
+    }
+
     /// Every floating answer about the thing under the pointer, withdrawn
     /// together — `INVARIANTS.md` §5: nothing outlives what it names.
     private func clearTooltips() {
         publishReactionHover(nil)
         publishMarkHover(nil)
         publishAutoModHover(nil)
+        publishEditedMarkHover(nil)
     }
 
     // MARK: Highlight

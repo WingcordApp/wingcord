@@ -13,8 +13,12 @@ nonisolated enum TimelineMetrics {
     ///
     /// Shorter than the line it sits on: it is a token inside a sentence, and a
     /// chip as tall as its row reads as a button rather than as a word.
-    static let interactionChipHeight: CGFloat = 17
-    static let interactionChipPadding: CGFloat = 5
+    static let interactionChipHeight: CGFloat = 15
+    static let interactionChipPadding: CGFloat = 3
+    /// The command's mark at the head of its chip — Discord's apps icon
+    /// (`AppsGlyph`) — and the air between it and the name: `.appsIcon`'s 3 pixels.
+    static let interactionGlyphSide: CGFloat = 10
+    static let interactionGlyphGap: CGFloat = 3
 
     /// Leading and trailing margin of the transcript.
     static let horizontalMargin: CGFloat = 16

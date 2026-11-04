@@ -386,7 +386,7 @@ struct SavedThemeGallery: View {
                     SettingsValueRow(
                         title: "None yet",
                         value: "—",
-                        help: "When somebody shares a custom theme in a conversation, Save on its card keeps it here."
+                        help: "Save a theme someone shares in a chat and it lands here."
                     )
                 }
             } else {
@@ -405,7 +405,7 @@ struct SavedThemeGallery: View {
             }
         }
         .task { model.sessionController.loadAccountCustomThemes() }
-        .sheet(item: $shareRequest) { request in
+        .modal(item: $shareRequest) { request in
             ThemeShareSheet(theme: request.theme) { shareRequest = nil }
         }
     }

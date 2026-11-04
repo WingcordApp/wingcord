@@ -68,16 +68,70 @@ struct ProfileEditGatingTests {
         #expect(free.canEditAccentColor)
         #expect(free.canEditBio)
         #expect(free.canEditPronouns)
-        // `theme_colors`, `banner` and `profile_effect_id` are all marked
-        // premium.
+        // The theme pair and the banner image are premium.
         #expect(!free.canEditThemeColors)
         #expect(!free.canEditBanner)
-        #expect(!free.canEditProfileEffect)
+        // **Effects and frames are not**, whatever the published table says:
+        // Discord's editor draws Change Effect and Change Frame for every
+        // account, and locks a single item (`canWear`) — the gate that kept
+        // Alex from wearing his own effect and frame (2026-10-26).
+        #expect(free.canEditProfileEffect)
+        #expect(free.canEditCurrentEffect)
 
         let paid = model(tier: .nitro).profileEditCapability(for: .account)
         #expect(paid.canEditThemeColors)
         #expect(paid.canEditBanner)
         #expect(paid.canEditProfileEffect)
+    }
+
+    /// `ANIMATED_AVATAR` is in Classic's row of Discord's perk table and
+    /// `PROFILE_PREMIUM_FEATURES` is not — so Classic moves its avatar and keeps
+    /// a still banner (if it may set one at all).
+    @Test("Classic wears a moving avatar; only Nitro a moving banner")
+    func movingPictures() {
+        let expectations: [(PremiumTier, avatar: Bool, banner: Bool)] = [
+            (.none, false, false), (.basic, false, false), (.classic, true, false), (.nitro, true, true),
+        ]
+        for (tier, avatar, banner) in expectations {
+            let capability = model(tier: tier).profileEditCapability(for: .account)
+            #expect(capability.canUseAnimatedAvatar == avatar, "\(tier) moving avatar")
+            #expect(capability.canUseAnimatedBanner == banner, "\(tier) moving banner")
+        }
+    }
+
+    /// Discord's lock: `!canUseCollectibles(user) && purchaseType ===
+    /// PREMIUM_PURCHASE`. Everything else an account owns, it wears.
+    @Test("Only an item claimed through Nitro locks, and only without it")
+    func collectibleLock() {
+        let claimed = OwnedCollectible(skuID: "1", name: "Claimed", kind: .profileEffect, asset: "a", isNitroExclusive: true)
+        let bought = OwnedCollectible(skuID: "2", name: "Bought", kind: .profileFrame, asset: "b")
+        for tier in [PremiumTier.none, .basic, .classic] {
+            let capability = model(tier: tier).profileEditCapability(for: .account)
+            #expect(!capability.canWear(claimed), "\(tier) may not wear a Nitro claim")
+            #expect(capability.canWear(bought), "\(tier) wears what it bought")
+        }
+        let nitro = model(tier: .nitro).profileEditCapability(for: .account)
+        #expect(nitro.canWear(claimed) && nitro.canWear(bought))
+    }
+
+    /// Discord opens its styles to every account and swaps Apply for a Nitro
+    /// footer; here a pick is tried on — the card shows it, nothing is saved.
+    @Test("A display name style is tried on without Nitro and saved with it")
+    func nameStyleTryOn() throws {
+        #expect(!model(tier: .none).profileEditCapability(for: .account).canApplyNameStyle)
+        #expect(!model(tier: .classic).profileEditCapability(for: .account).canApplyNameStyle)
+        #expect(model(tier: .nitro).profileEditCapability(for: .account).canApplyNameStyle)
+
+        let demo = AppModel()
+        DemoFixtures.populate(demo)
+        let me = try #require(demo.currentUserID)
+        let base = try #require(demo.profileEditBase(for: .account, userID: me))
+        let editor = ProfileEditor(profile: base, widgets: [], scope: .account, accountName: base.displayName)
+        editor.appliesNameStyle = false
+        editor.displayNameStyle = DisplayNameStyle(font: .sakura, effect: .neon, colors: [0xFF0000])
+        #expect(!editor.isDirty, "a try-on raises no save bar")
+        editor.appliesNameStyle = true
+        #expect(editor.isDirty)
     }
 
     @Test("One colour on a free account, the theme pair on Nitro")
@@ -98,13 +152,16 @@ struct ProfileEditGatingTests {
         #expect(!free.canEditCurrentBanner)
         #expect(!free.canEditCurrentTheme)
         #expect(!free.canEditCurrentEffect)
-        #expect(!free.canUseAnimatedPictures)
+        #expect(!free.canUseAnimatedAvatar && !free.canUseAnimatedBanner)
+        #expect(!free.canApplyNameStyle)
         #expect(free.canEditGuildPronouns)
+        // Classic's moving avatar is the account's; a server's is Nitro's.
+        #expect(!model(tier: .classic).profileEditCapability(for: .guild(guildID)).canUseAnimatedAvatar)
 
         let paid = model(tier: .nitro).profileEditCapability(for: .guild(guildID))
         #expect(!paid.cosmeticsLocked)
         #expect(paid.canEditCurrentBio && paid.canEditCurrentBanner && paid.canEditCurrentTheme)
-        #expect(paid.canUseAnimatedPictures)
+        #expect(paid.canUseAnimatedAvatar && paid.canUseAnimatedBanner)
 
         // The account's own profile is never "locked" — its gates are field
         // by field.

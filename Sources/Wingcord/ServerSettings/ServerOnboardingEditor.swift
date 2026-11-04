@@ -87,7 +87,7 @@ struct OnboardingQuestionsEditor: View {
                 .padding(.top, Spacing.margin)
             }
         }
-        .sheet(item: $editing) { prompt in
+        .modal(item: $editing) { prompt in
             OnboardingPromptSheet(prompt: prompt, store: store) { edited in
                 var next = working
                 if let index = next.prompts.firstIndex(where: { $0.id == edited.id }) {
@@ -122,7 +122,8 @@ struct OnboardingQuestionsEditor: View {
                 Label("Add a Question", systemImage: "plus")
                     .font(SettingsType.rowLabel)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .controlSize(.small)
         }
     }
@@ -216,7 +217,7 @@ struct OnboardingPromptSheet: View {
             commit(working)
         } content: {
             TextField("Enter a question...", text: $working.title)
-                .textFieldStyle(.roundedBorder)
+                .modalField()
 
             SheetField(title: "Answers", isRequired: true) {
                 VStack(alignment: .leading, spacing: Spacing.base) {

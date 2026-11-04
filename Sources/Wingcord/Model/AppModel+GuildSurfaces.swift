@@ -276,6 +276,10 @@ struct GameServersPresentation: Hashable, Sendable {
     /// them — the address, the status's word, the game line — so a second
     /// projection would be a copy with nothing added.
     var servers: [GameServer]
+    /// Each server's game, resolved for drawing — its name and box art — by
+    /// application id. Absent until `/games` answers, and for a server that
+    /// names no game: its card keeps the plate.
+    var games: [ApplicationID: BoardGame] = [:]
     var isLoading: Bool
 }
 
@@ -738,9 +742,22 @@ extension AppModel {
 
     var gameServersPresentation: GameServersPresentation? {
         guard let guildID = selectedGuildID else { return nil }
+        let servers = gameServers[guildID] ?? []
+        var resolved: [ApplicationID: BoardGame] = [:]
+        for id in Set(servers.compactMap(\.gameID)) {
+            guard let game = games[id] else { continue }
+            resolved[id] = BoardGame(
+                gameID: id,
+                name: game.name,
+                coverURL: gameArtURL(game, kind: .cover, side: GameServerArt.width * 2),
+                isCoverArt: gameArtIsCover(game, kind: .cover),
+                tags: []
+            )
+        }
         return GameServersPresentation(
             guildID: guildID,
-            servers: gameServers[guildID] ?? [],
+            servers: servers,
+            games: resolved,
             isLoading: gameServers[guildID] == nil
                 && loadingGuildSurfaces.contains(
                     GuildSurfaceFetch(guildID: guildID, subject: .gameServers)

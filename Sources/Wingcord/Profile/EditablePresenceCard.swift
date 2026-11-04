@@ -392,7 +392,7 @@ private struct PresenceField: View {
         VStack(alignment: alignment == .center ? .center : .leading, spacing: 2) {
             if isBoxed {
                 TextField(placeholder, text: $text, prompt: Text(placeholder))
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
                     .font(font)
             } else {
                 TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundStyle(InkColor.tertiary))

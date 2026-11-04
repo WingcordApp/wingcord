@@ -101,14 +101,77 @@ extension AppModel {
             return emojiCatalogCache.value
         }
 
-        var sections: [ExpressionSection] = []
         // Fake Nitro sends what is locked as a link, so nothing is — the
         // permission included, as the plugin bypasses it too.
-        let allowsExternal = isFakeNitro || selectedChannelID.map(canUseExternalEmoji(in:)) ?? true
-        // An animated emoji is the subscription's in its own server too.
-        let allowsAnimated = isFakeNitro || entitlements.has(.animatedEmoji)
-        let home = selectedGuildID
+        let catalog = buildEmojiCatalog(
+            home: selectedGuildID,
+            allowsExternal: isFakeNitro || selectedChannelID.map(canUseExternalEmoji(in:)) ?? true,
+            // An animated emoji is the subscription's in its own server too.
+            allowsAnimated: isFakeNitro || entitlements.has(.animatedEmoji),
+            emojiTable: emojiTable,
+            guildTable: guildTable
+        )
+        emojiCatalogCache = (key, catalog)
+        return catalog
+    }
 
+    /// The emoji a **reaction** may use in a channel — Discord's own rule,
+    /// which Fake Nitro cannot bend.
+    ///
+    /// A message's emoji Fake Nitro sends as a link to the picture; a reaction
+    /// names the emoji itself, and Discord refuses one the account may not
+    /// use. So another server's emoji needs Nitro and the channel's
+    /// `USE_EXTERNAL_EMOJIS`, and an animated one needs Nitro anywhere —
+    /// whatever Fake Nitro says (Alex, 2026-10-26: it let him react with
+    /// external emoji he could not use). Built on demand: the picker is open
+    /// on one message at a time, and its channel need not be the selected one.
+    func reactionEmojiCatalog(in channelID: ChannelID) -> ExpressionCatalog {
+        // Memoized as the composer's is, and for its reason: the picker reads
+        // its catalog from four places a frame. Fake Nitro is no input here.
+        let key = ExpressionMemoKey(
+            channelID: channelID,
+            expressionRevision: expressionRevision,
+            skinTone: AppSettings.shared.skinTone,
+            entitlements: entitlements,
+            isFakeNitro: false
+        )
+        let emojiTable = guildEmojis
+        let guildTable = guilds
+        if let reactionEmojiCatalogCache, reactionEmojiCatalogCache.key == key {
+            return reactionEmojiCatalogCache.value
+        }
+        let catalog = buildEmojiCatalog(
+            home: channelIndex.guildID(of: channelID),
+            allowsExternal: canUseExternalEmoji(in: channelID),
+            allowsAnimated: entitlements.has(.animatedEmoji),
+            emojiTable: emojiTable,
+            guildTable: guildTable
+        )
+        reactionEmojiCatalogCache = (key, catalog)
+        return catalog
+    }
+
+    /// Whether a reaction may use this emoji here — the same rule as
+    /// `reactionEmojiCatalog`, for a reaction that did not come from the
+    /// picker: a quick reaction off the hover bar, a chip somebody else began.
+    func canReact(with emoji: EmojiRef, in channelID: ChannelID) -> Bool {
+        guard let id = emoji.id else { return true }
+        if emoji.isAnimated, !entitlements.has(.animatedEmoji) { return false }
+        let isHome = channelIndex.guildID(of: channelID)
+            .flatMap { guildEmojis[$0] }?
+            .contains { $0.id == id } ?? false
+        return isHome || canUseExternalEmoji(in: channelID)
+    }
+
+    /// The emoji sections, locked by the rule the caller states.
+    private func buildEmojiCatalog(
+        home: GuildID?,
+        allowsExternal: Bool,
+        allowsAnimated: Bool,
+        emojiTable: [GuildID: [EmojiRef]],
+        guildTable: [GuildID: Guild]
+    ) -> ExpressionCatalog {
+        var sections: [ExpressionSection] = []
         for guildID in Self.homeFirst(orderedGuildIDs, home: home) where emojiTable[guildID] != nil {
             guard let guild = guildTable[guildID], let emojis = emojiTable[guildID] else { continue }
             var items: [ExpressionItem] = []
@@ -145,10 +208,7 @@ extension AppModel {
         }
 
         sections.append(contentsOf: Self.unicodeSections(tone: AppSettings.shared.skinTone))
-
-        let catalog = ExpressionCatalog(sections: sections)
-        emojiCatalogCache = (key, catalog)
-        return catalog
+        return ExpressionCatalog(sections: sections)
     }
 
 

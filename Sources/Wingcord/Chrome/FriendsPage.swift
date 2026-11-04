@@ -246,7 +246,7 @@ private struct FriendRow: View {
                 Button("Start a Call") { model.callPerson(row.id) }
                 Divider()
                 Button("Remove Friend", role: .destructive) { model.toggleFriend(with: row.id) }
-                Button("Block", role: .destructive) { model.setBlocked(true, userID: row.id) }
+                Button("Block", role: .destructive) { model.askToBlock(row.id) }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 13, weight: .bold))

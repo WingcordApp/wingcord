@@ -194,7 +194,7 @@ enum DirectMessageFolderMenu {
 ///
 /// `nonisolated` because `NSMenuItem`'s initialisers are; its action arrives
 /// on the main thread, where a menu is tracked.
-private nonisolated final class ActionMenuItem: NSMenuItem {
+nonisolated final class ActionMenuItem: NSMenuItem {
     private let handler: @MainActor () -> Void
 
     init(_ title: String, handler: @escaping @MainActor () -> Void) {

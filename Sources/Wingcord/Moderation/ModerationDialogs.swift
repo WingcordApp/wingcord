@@ -20,7 +20,7 @@ struct KickDialog: View {
     var guildID: GuildID
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var reason = ""
 
     var body: some View {
@@ -59,7 +59,7 @@ struct BanDialog: View {
     var guildID: GuildID
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var reason: BanReason?
     @State private var otherReason = ""
     @State private var deletion = BanMessageDeletion.default
@@ -149,7 +149,7 @@ struct TimeoutDialog: View {
     var guildID: GuildID
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var duration = TimeoutDuration.sixtySeconds
     @State private var reason = ""
     @State private var isWorking = false
@@ -218,7 +218,7 @@ struct RemoveTimeoutDialog: View {
     var guildID: GuildID
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var now = Date.now
     @State private var isWorking = false
 
@@ -275,7 +275,7 @@ struct NicknameDialog: View {
     var current: String?
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var nickname: String
     @State private var refusal: String?
     @State private var isWorking = false
@@ -369,7 +369,7 @@ struct PruneDialog: View {
     var guildID: GuildID
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var days = 7
     @State private var roleIDs: Set<RoleID> = []
     /// Nil while Discord is counting.

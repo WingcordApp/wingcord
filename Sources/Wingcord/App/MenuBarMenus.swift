@@ -69,10 +69,10 @@ struct ChannelProfileMenu: View {
                     EmptyView()
                 }
                 Button(model.isIgnored(userID) ? "Unignore" : "Ignore") {
-                    model.setIgnored(!model.isIgnored(userID), userID: userID)
+                    model.askToIgnore(userID)
                 }
                 Button(model.isBlocked(userID) ? "Unblock" : "Block") {
-                    model.setBlocked(!model.isBlocked(userID), userID: userID)
+                    model.askToBlock(userID)
                 }
             }
         }

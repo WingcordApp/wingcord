@@ -63,7 +63,8 @@ struct GameDecodeTests {
         }
       },
       "opencritic_url": "https://opencritic.com/game/572/the-sims-4",
-      "l30_rank": 43
+      "l30_rank": 43,
+      "community_guild_ids": ["1193841000111136244", "1100000000000000001", "1100000000000000002"]
     }]
     """
 
@@ -77,6 +78,8 @@ struct GameDecodeTests {
     func simsDecodes() throws {
         let game = try decode(sims)
         #expect(game.name == "The Sims 4")
+        // The Communities tab's servers, as ids — three is the tab's threshold.
+        #expect(game.communityGuildIDs.map(\.rawValue) == [1_193_841_000_111_136_244, 1_100_000_000_000_000_001, 1_100_000_000_000_000_002])
         #expect(game.genreLine == "Role-Playing, Simulation")
         #expect(game.globalRank == 43)
         #expect(game.publishers == ["Electronic Arts"])

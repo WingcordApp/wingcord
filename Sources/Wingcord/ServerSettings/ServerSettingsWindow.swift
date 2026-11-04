@@ -166,7 +166,7 @@ struct ServerSettingsView: View {
         }
         // A channel opened onto starts on its first page.
         .onChange(of: store.openChannelID) { channelTab = .overview }
-        .sheet(isPresented: $isDeletingServer) {
+        .modal(isPresented: $isDeletingServer) {
             DeleteServerSheet(store: store, guildName: guildName) {
                 dismissWindow()
             }

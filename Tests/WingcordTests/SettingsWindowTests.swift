@@ -53,9 +53,9 @@ struct SettingsWindowTests {
             let window = mount(SettingsView().resolvesMotion().environment(AppModel()))
             defer { window.close() }
 
-            SettingsWindow.request(.privacy)
+            SettingsWindow.request(.privacySafety)
             settle()
-            #expect(SettingsWindow.lastSection == .privacy)
+            #expect(SettingsWindow.lastSection == .privacySafety)
         }
     }
 
@@ -234,7 +234,7 @@ private struct ServerSidebarHost: View {
 
 /// Answers every request with no network, so a store's loads fail at once
 /// rather than reaching Discord from a test.
-private nonisolated final class OfflineProtocol: URLProtocol, @unchecked Sendable {
+nonisolated final class OfflineProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {

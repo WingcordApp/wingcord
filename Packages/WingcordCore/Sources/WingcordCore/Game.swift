@@ -21,6 +21,10 @@ public struct Game: Hashable, Sendable, Identifiable {
     /// Discord's `GAME_DISABLED` (`game_flags` bit 0): a game whose profile
     /// Discord will not open, though it answers for it. Module `921138`.
     public var isProfileDisabled = false
+    /// The servers Discord lists for this game — the profile's Communities tab,
+    /// shown once there are three (`c82450…`'s `eM`). Ids only; the cards come
+    /// from `GET /discoverable-guilds?guild_ids=…`.
+    public var communityGuildIDs: [GuildID] = []
     /// The game's own application — its `linked_applications` entry of type
     /// `OFFICIAL` (2; `LINKED` is 1 and `NVIDIA` 3), Discord's
     /// `getOfficialApplicationId`. It is the application a reader links their

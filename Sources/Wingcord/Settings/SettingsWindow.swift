@@ -88,7 +88,7 @@ enum SettingsWindow {
     static var lastSection: SettingsSection {
         get {
             UserDefaults.standard.string(forKey: lastSectionKey)
-                .flatMap(SettingsSection.init(rawValue:)) ?? .general
+                .flatMap(SettingsSection.init(stored:)) ?? .general
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: lastSectionKey) }
     }

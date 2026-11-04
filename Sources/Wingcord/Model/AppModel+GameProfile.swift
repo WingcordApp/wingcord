@@ -66,7 +66,8 @@ extension AppModel {
                     tags: []
                 )
             },
-            isLoading: gameProfilesLoading.contains(gameID)
+            isLoading: gameProfilesLoading.contains(gameID),
+            hasCommunities: game.communityGuildIDs.count >= Self.communitiesThreshold
         )
     }
 

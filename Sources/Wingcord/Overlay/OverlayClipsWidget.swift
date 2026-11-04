@@ -122,7 +122,8 @@ struct OverlayClipsWidget: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 2)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
         .controlSize(.large)
     }
 }

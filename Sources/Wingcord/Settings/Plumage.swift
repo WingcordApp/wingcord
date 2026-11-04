@@ -68,11 +68,9 @@ struct PlumageCard: View {
         VStack(alignment: .leading, spacing: 0) {
             CardHeaderRow(
                 title: "Plumage",
-                help: "Two to five colours make a theme: the largest bead is the "
-                    + "lit end, down where the composer is, and the light walks "
-                    + "back through the others to the darkest, behind the "
-                    + "toolbar. Hue across, depth down. Drag any — the window "
-                    + "behind this one is the preview."
+                help: "Two to five colours, from the lit foot of the window (the big "
+                    + "bead) to the dark top. Drag any \u{2014} hue across, depth down \u{2014} "
+                    + "and watch the window behind."
             )
 
             PlumageField(
@@ -106,8 +104,7 @@ struct PlumageCard: View {
                         PlumageRoundButton(
                             systemName: "plus",
                             label: "Add a colour",
-                            help: "Adds a colour on the widest stretch between "
-                                + "two others, exactly where the gradient already is."
+                            help: "Adds a colour in the widest gap, without changing the blend."
                         ) { addColour() }
                         .disabled(seed.middle.count >= ThemeSeed.maximumMiddle)
                         PlumageRoundButton(
@@ -141,7 +138,7 @@ struct PlumageCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(SettingsSurface.card)
         .clipShape(.settingsRect(SettingsMetrics.cardRadius))
-        .sheet(item: $shareRequest) { request in
+        .modal(item: $shareRequest) { request in
             ThemeShareSheet(theme: request.theme) { shareRequest = nil }
         }
     }

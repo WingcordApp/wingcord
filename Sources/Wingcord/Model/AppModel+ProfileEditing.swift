@@ -33,13 +33,24 @@ extension AppModel {
 
     /// The four GIFs on Choose GIF's tile — trending ones, asked once. Discord
     /// draws four bundled GIFs there; this client ships none of Discord's art.
+    ///
+    /// **`/gifs/trending-gifs`, not the landing.** `/gifs/trending` answers the
+    /// categories and ONE trending preview, so the tile drew a single quarter
+    /// and three empty ones on a real account (Alex, 2026-10-26) — `--demo`
+    /// answers both from its own loops, which is why it never showed. Videos
+    /// are passed over: an image decoder draws nothing from an MP4.
     func loadGIFMosaic() {
         guard !gifMosaicRequested else { return }
         gifMosaicRequested = true
         Task {
-            let landing = try? await sessionController.gifLanding()
-            gifMosaic = Array((landing?.trending ?? []).compactMap(\.previewURL).prefix(4))
+            let trending = (try? await sessionController.trendingGIFs()) ?? []
+            gifMosaic = Self.gifMosaic(from: trending)
         }
+    }
+
+    /// The tile's GIFs out of a trending page: pictures only, four at most.
+    nonisolated static func gifMosaic(from trending: [GIF]) -> [URL] {
+        Array(trending.filter { !$0.isVideo }.compactMap(\.previewURL).prefix(4))
     }
 
     /// Asks for an effect's or a frame's product, once, where nothing has

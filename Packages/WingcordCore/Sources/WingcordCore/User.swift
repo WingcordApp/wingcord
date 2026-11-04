@@ -181,7 +181,7 @@ public struct ConnectedAccount: Hashable, Sendable, Codable, Identifiable {
                   withAllowedCharacters: .urlPathAllowed
               )
         else { return nil }
-        return URL(string: template.prefix + encoded)
+        return URL(string: template.prefix + encoded + template.suffix)
     }
 
     private struct Template {
@@ -190,6 +190,9 @@ public struct ConnectedAccount: Hashable, Sendable, Codable, Identifiable {
         /// display name. Steam and Spotify are both — a Steam profile is a
         /// 64-bit id and the visible name is not addressable at all.
         var usesID: Bool
+        /// After the name — Letterboxd's profile is `letterboxd.com/{name}/`,
+        /// as Discord's own table builds it.
+        var suffix = ""
     }
 
     private static func template(for service: String) -> Template? {
@@ -208,6 +211,7 @@ public struct ConnectedAccount: Hashable, Sendable, Codable, Identifiable {
         case "ebay": Template(prefix: "https://www.ebay.com/usr/", usesID: false)
         case "paypal": Template(prefix: "https://www.paypal.me/", usesID: false)
         case "soundcloud": Template(prefix: "https://soundcloud.com/", usesID: false)
+        case "letterboxd": Template(prefix: "https://letterboxd.com/", usesID: false, suffix: "/")
         // Everything else — PlayStation, Xbox, Battle.net, Riot, Epic, Crunchyroll,
         // Facebook, Roblox — has no address a client can build. They copy.
         default: nil

@@ -34,7 +34,7 @@ struct NewPostSheet: View {
         ) {
             SheetField(title: "Title", isRequired: true) {
                 TextField("What is it about?", text: $title)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
                     .focused($isTitleFocused)
             }
 

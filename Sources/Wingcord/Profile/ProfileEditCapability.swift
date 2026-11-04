@@ -1,12 +1,14 @@
 import Foundation
+import WingcordCore
 
 /// What the reader is actually allowed to change, field by field.
 ///
-/// **Every line here is documented rather than guessed**, off
-/// `docs.discord.food`'s `PATCH /users/@me/profile` and
-/// `PATCH /guilds/{id}/members/@me` parameter tables — each of which carries a
-/// per-field "can only be changed for premium users" note and, for the
-/// nickname, a permission column.
+/// **Every line here is read out of Discord's own client** (build 649389:
+/// the perk table `836714`, the collectible checks `993408`, the editor's
+/// sections `9ec6cb…`), and where the published parameter tables disagree the
+/// client wins — they still mark `profile_effect_id` premium, while Discord's
+/// editor offers effects and frames to every account and locks single items.
+/// The nickname's permission column is the tables', and still holds.
 ///
 /// It exists because the server answers far too late. Discord refuses a gated
 /// field with `400 50035 · Invalid Form Body`, *after* every ungated edit in the
@@ -37,6 +39,11 @@ struct ProfileEditCapability: Equatable {
     /// or `MANAGE_NICKNAMES`, either one. Meaningless in the account scope,
     /// where there is no nickname.
     var canChangeNickname: Bool
+    /// `ANIMATED_AVATAR` — a moving avatar on the account. **Nitro Classic
+    /// carries it as well as Nitro**, so it is not `customizesProfile`.
+    var animatesAvatar = false
+    /// The `collectibles` perk — wearing what was claimed through Nitro.
+    var wearsCollectibles = false
     /// Whether the profile being edited is a server's rather than the
     /// account's.
     var isServerScope = false
@@ -54,10 +61,15 @@ struct ProfileEditCapability: Equatable {
     var canEditBio: Bool { true }
     var canEditPronouns: Bool { true }
 
-    /// `theme_colors`, `banner` and `profile_effect_id` are all marked premium.
+    /// The theme pair and the banner image are `PROFILE_PREMIUM_FEATURES`.
     var canEditThemeColors: Bool { customizesProfile }
     var canEditBanner: Bool { customizesProfile }
-    var canEditProfileEffect: Bool { customizesProfile }
+    /// **Open to every account.** Discord's editor draws Change Effect and
+    /// Change Frame with no premium mark and no disabled state; what locks is
+    /// a single item claimed through Nitro — `canWear` — never the section.
+    /// Gating the section on Nitro is what kept Alex from wearing his own
+    /// effect and frame (2026-10-26).
+    var canEditProfileEffect: Bool { true }
 
     // MARK: Per-server — `PATCH /guilds/{id}/members/@me`
 
@@ -87,11 +99,26 @@ struct ProfileEditCapability: Equatable {
     /// The two-colour theme — Nitro in either scope; the one free colour is
     /// `canEditAccentColor`.
     var canEditCurrentTheme: Bool { isServerScope ? customizesServerProfile : canEditThemeColors }
-    /// Effect and frame — Nitro in either scope.
+    /// Effect and frame — every account on its own profile; Nitro in a
+    /// server, where every cosmetic is.
     var canEditCurrentEffect: Bool { isServerScope ? customizesServerProfile : canEditProfileEffect }
-    /// A moving avatar or banner — "If you wanna upload a fun animated avatar,
-    /// you should subscribe to Nitro" (Discord's own line).
-    var canUseAnimatedPictures: Bool { isServerScope ? customizesServerProfile : customizesProfile }
+    /// A moving avatar — Classic or Nitro on the account, Nitro in a server.
+    var canUseAnimatedAvatar: Bool { isServerScope ? customizesServerProfile : animatesAvatar }
+    /// A moving banner — wherever the banner itself may be set.
+    var canUseAnimatedBanner: Bool { canEditCurrentBanner }
+    /// Whether a display name style is SAVED. **Anybody may try one on** —
+    /// Discord's styles modal opens for every account and swaps its Apply for
+    /// a Nitro footer — so without the perk a pick shows on the card and the
+    /// save leaves the name as it was (`ProfileEditor.appliesNameStyle`).
+    var canApplyNameStyle: Bool { isServerScope ? customizesServerProfile : customizesProfile }
+
+    /// Whether an owned decoration, effect, frame or nameplate may be worn.
+    ///
+    /// **Only an item claimed through Nitro locks**, and only without the
+    /// perk: Discord's `!canUseCollectibles(user) && purchaseType ===
+    /// PREMIUM_PURCHASE`. Bought, gifted, free, Orbs and quest items are worn
+    /// by anybody who owns them.
+    func canWear(_ item: OwnedCollectible) -> Bool { !item.isNitroExclusive || wearsCollectibles }
 
     /// The line shown against a control the account cannot use.
     static let nitroNote = "Nitro only."
@@ -99,5 +126,7 @@ struct ProfileEditCapability: Equatable {
     static let serverProfileNote = "Without Nitro, a server profile is your nickname and pronouns."
     /// Against a moving picture the account cannot wear.
     static let animatedNote = "Moving pictures need Nitro. This one will be saved still."
+    /// In the style flyout, for an account trying a style on.
+    static let nameStyleNote = "Try any style on here. Saving keeps your name as it is — styles are a Nitro perk."
     static let nicknameNote = "This server doesn't let you change your nickname."
 }

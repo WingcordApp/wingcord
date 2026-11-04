@@ -11,17 +11,28 @@ struct SharedClientThemeDTO: Codable, Sendable {
     var base_mix: Double?
     var base_theme: Int?
 
-    /// Nil for one Discord would not keep: no colours, or a room it does not
-    /// know (`74396`'s check).
+    /// The theme a message shares — **drawn whenever it has colours**, as
+    /// Discord's card is (`0c2828db2e3ee692.js`'s `renderShareClientTheme`:
+    /// `null != e.sharedClientTheme`). Its room is read only when Preview is
+    /// pressed, so a room it does not name — none sent, or 0, proto's unset —
+    /// is taken as dark rather than costing the card: that check dropped
+    /// whole themes and left their messages blank (Alex's screenshots 20, 21).
     var domain: SharedClientTheme? {
         let parsed = (colors ?? []).compactMap(SharedClientTheme.color(fromHex:))
-        let theme = SharedClientTheme(
+        guard !parsed.isEmpty else { return nil }
+        return SharedClientTheme(
             colors: parsed,
             gradientAngle: gradient_angle ?? 0,
             baseMix: base_mix ?? SharedClientTheme.defaultBaseMix,
-            baseTheme: base_theme ?? 0
+            baseTheme: base_theme.flatMap { (1...4).contains($0) ? $0 : nil } ?? 1
         )
-        return theme.isValid ? theme : nil
+    }
+
+    /// One the account keeps — `74396`'s check, which is the saved list's and
+    /// not the card's: colours, and a room it knows.
+    var savedDomain: SharedClientTheme? {
+        guard let base_theme, (1...4).contains(base_theme) else { return nil }
+        return domain
     }
 
     /// **Field by field, and never failing**: this rides on a message, and a
@@ -49,6 +60,6 @@ extension DiscordREST {
     public func customThemes() async throws -> [SharedClientTheme] {
         struct Reply: Decodable { var custom_themes: [SharedClientThemeDTO]? }
         return try await get("/users/@me/custom-themes", route: "users/@me/custom-themes", as: Reply.self)
-            .custom_themes?.compactMap(\.domain) ?? []
+            .custom_themes?.compactMap(\.savedDomain) ?? []
     }
 }

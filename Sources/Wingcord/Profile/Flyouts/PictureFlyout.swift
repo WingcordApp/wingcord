@@ -114,9 +114,15 @@ struct PictureFlyout: View {
         }
     }
 
+    /// Whether this picture may move: an avatar on Classic or Nitro, a banner
+    /// wherever the banner itself may be set.
+    private var movesHere: Bool {
+        kind == .avatar ? capability.canUseAnimatedAvatar : capability.canUseAnimatedBanner
+    }
+
     /// Said once, at the top — never an upsell.
     private var gifNote: String? {
-        guard !capability.canUseAnimatedPictures else { return nil }
+        guard !movesHere else { return nil }
         return kind == .avatar
             ? "Moving avatars need Nitro, so a GIF is saved as its first frame."
             : "Moving banners need Nitro, so a GIF is saved as its first frame."
@@ -289,7 +295,7 @@ struct PictureFlyout: View {
     private func prepare(_ picked: ImageData, reopening reopen: ProfileFlyouts.Request? = nil) {
         var image = picked
         var said: String?
-        if PictureFile.isAnimated(picked), !capability.canUseAnimatedPictures,
+        if PictureFile.isAnimated(picked), !movesHere,
            let still = PictureFile.still(picked) {
             image = still
             said = ProfileEditCapability.animatedNote
@@ -325,9 +331,16 @@ private struct GIFMosaicTile: View {
     var body: some View {
         Button(action: open) {
             ZStack {
-                Grid(horizontalSpacing: 0, verticalSpacing: 0) {
-                    GridRow { cell(0); cell(1) }
-                    GridRow { cell(2); cell(3) }
+                // **Four, or one across the whole tile** — never quarters
+                // standing empty beside a GIF, which read as a picture that
+                // failed to scale.
+                if gifs.count >= 4 {
+                    Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+                        GridRow { cell(0); cell(1) }
+                        GridRow { cell(2); cell(3) }
+                    }
+                } else {
+                    cell(0, side: 160)
                 }
                 Rectangle().fill(.black.opacity(0.35))
                 VStack(spacing: Spacing.tight) {
@@ -356,18 +369,20 @@ private struct GIFMosaicTile: View {
         .accessibilityLabel(Text("Choose GIF"))
     }
 
+    /// One GIF, cover-cropped into its box — a quarter's 80 points, or the
+    /// whole tile's, decoded at the size it is drawn (INVARIANTS §4.6).
     @ViewBuilder
-    private func cell(_ index: Int) -> some View {
+    private func cell(_ index: Int, side: CGFloat = 80) -> some View {
         Color.clear
             .overlay {
                 if gifs.indices.contains(index) {
                     let url = gifs[index]
-                    RemoteImage(url: url, side: 80, bucket: .attachment) {
+                    RemoteImage(url: url, side: side, bucket: .attachment) {
                         Rectangle().fill(Palette.surfaceRaised)
                     }
                     .aspectRatio(contentMode: .fill)
                     if isHovering {
-                        AnimatedDecoration(url: url, side: 80, gravity: .resizeAspectFill)
+                        AnimatedDecoration(url: url, side: side, gravity: .resizeAspectFill)
                     }
                 } else {
                     Rectangle().fill(Palette.surfaceRaised)

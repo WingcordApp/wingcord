@@ -32,6 +32,20 @@ struct AccountEntitlementsTests {
         }
     }
 
+    /// Discord's table (`836714`): `ANIMATED_AVATAR` sits in Classic's row and
+    /// Nitro's; `collectibles` only in Nitro's.
+    @Test("Classic moves its avatar; only Nitro wears Nitro's collectibles")
+    func avatarAndCollectibles() {
+        #expect(PremiumTier.classic.grants(.animatedAvatar))
+        #expect(PremiumTier.nitro.grants(.animatedAvatar))
+        #expect(!PremiumTier.basic.grants(.animatedAvatar))
+        #expect(!PremiumTier.none.grants(.animatedAvatar))
+        #expect(PremiumTier.nitro.grants(.collectibles))
+        for tier in [PremiumTier.none, .basic, .classic] {
+            #expect(!tier.grants(.collectibles))
+        }
+    }
+
     @Test("An answer that did not carry a field keeps what was known")
     func absentFieldsMerge() {
         let known = AccountEntitlements().updated(premiumType: 2, ageVerificationStatus: 4)

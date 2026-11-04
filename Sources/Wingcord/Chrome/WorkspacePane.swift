@@ -331,11 +331,12 @@ private struct DiscoveryContainer: View {
             loadMore: { model.loadMoreDiscovery() },
             dismiss: { model.closeDiscovery() }
         )
-        // **The install sheet is raised here, not by the launcher.** Adding an
-        // app from the rail has no composer behind it, so the flyout's own
-        // sheet never presented — the button did nothing at all. The page stays
-        // up underneath, which is what the reader came back to.
-        .sheet(item: $model.applicationInstallRequest) { request in
+        // **The install card is raised here, and only here.** Discovery is
+        // what raises the request (`addDiscoveredApp`); the composer's
+        // launcher kept a sheet of its own for it, which never presented —
+        // a popover's sheet — and was dropped with the move to cards. The page
+        // stays up underneath, which is what the reader came back to.
+        .modal(item: $model.applicationInstallRequest) { request in
             AddApplicationSheet(request: request, channelID: nil) {
                 model.applicationInstallRequest = nil
             }

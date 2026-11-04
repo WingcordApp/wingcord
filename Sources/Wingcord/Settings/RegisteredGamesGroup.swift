@@ -27,12 +27,14 @@ struct RegisteredGamesGroup: View {
                         help: "A game appears here the first time it runs."
                     )
                 } else {
+                    let anyRemovable = games.contains(where: \.isAddedByHand)
                     ForEach(Array(games.enumerated()), id: \.element.id) { index, game in
                         if index > 0 { CardDivider() }
                         RegisteredGameRow(
                             game: game,
                             isRunning: model.sessionController.games.runningGame?.id.rawValue == game.id,
                             path: settings.manualGames.first { $0.id == game.id }?.path,
+                            reservesRemoval: anyRemovable,
                             change: { change(game, $0) }
                         )
                     }
@@ -40,8 +42,7 @@ struct RegisteredGamesGroup: View {
             }
             AddGameRow()
             SettingsFootnote(
-                "A game with detection off is never shown as your activity and brings up neither "
-                    + "the overlay, clips nor Game Mode. Overlay and clips switch just those off.",
+                "Detection off hides a game completely. Overlay and Clips switch off just those.",
                 symbolName: "gamecontroller"
             )
         }
@@ -78,6 +79,9 @@ private struct RegisteredGameRow: View {
     var isRunning: Bool
     /// The executable, for a game added by hand: its icon comes from there.
     var path: String?
+    /// Whether any row in the list has a ✕: every row keeps its slot then, so
+    /// the three switches stand in one column whichever rows can be removed.
+    var reservesRemoval = false
     var change: (Edit) -> Void
 
     var body: some View {
@@ -118,10 +122,15 @@ private struct RegisteredGameRow: View {
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 11, weight: .semibold))
+                            .frame(width: Self.removalWidth)
                     }
                     .buttonStyle(.borderless)
                     .help("Remove \(game.name)")
                     .accessibilityLabel("Remove \(game.name)")
+                } else if reservesRemoval {
+                    Color.clear
+                        .frame(width: Self.removalWidth, height: 1)
+                        .accessibilityHidden(true)
                 }
             }
         }
@@ -129,6 +138,8 @@ private struct RegisteredGameRow: View {
         .frame(minHeight: SettingsMetrics.toggleRowHeight + 8)
         .accessibilityElement(children: .contain)
     }
+
+    private static let removalWidth: CGFloat = 16
 
     /// Discord's "Now playing!" and "Last played …".
     private var subtitle: String {
@@ -152,21 +163,40 @@ private struct RegisteredGameRow: View {
         }
     }
 
-    /// A native button toggle, drawn as its symbol — on, or struck through.
+    /// A switch drawn as its symbol — on, or struck through — in the glass
+    /// capsule every button is: the accent's prominent glass while on, plain
+    /// glass while off (INVARIANTS, buttons; the system's button toggle drew a
+    /// solid blue square).
+    @ViewBuilder
     private func switchButton(
         isOn: Bool, on: String, off: String, help: String, label: String,
         set: @escaping (Bool) -> Void
     ) -> some View {
-        Toggle(isOn: Binding(get: { isOn }, set: set)) {
+        let button = Button {
+            set(!isOn)
+            Haptics.tick()
+        } label: {
+            // **One box for every glyph.** A capsule takes its height from its
+            // label, and an eye is half as tall as two stacked rectangles —
+            // so without a height of its own the middle pill stood taller than
+            // its neighbours (Alex, 2026-10-27).
             Image(systemName: isOn ? on : off)
                 .font(.system(size: 12, weight: .medium))
-                .frame(width: 18)
+                .frame(width: 18, height: 16)
         }
-        .toggleStyle(.button)
+        Group {
+            if isOn {
+                button.buttonStyle(.glassProminent).tint(Palette.accent)
+            } else {
+                button.buttonStyle(.glass)
+            }
+        }
+        .buttonBorderShape(.capsule)
         .controlSize(.small)
         .help(help)
         .accessibilityLabel(label)
         .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityAddTraits(.isToggle)
     }
 }
 
@@ -192,9 +222,8 @@ struct GameModeSettingsGroup: View {
     private var state: String {
         guard gameMode.isEnabled else { return "Off. Everything plays as usual while you game." }
         guard gameMode.isActive, let game = gameMode.game else {
-            return "While a game is running and you are in it — not in Wingcord — animated "
-                + "emoji, avatars, a video wallpaper and motion hold still. They come back "
-                + "the moment you return."
+            return "While you\u{2019}re in a game, animated emoji, avatars, video wallpapers and "
+                + "motion hold still. They\u{2019}re back the moment you return."
         }
         if gameMode.isThrottling {
             return "On now — \(game.name) is in front, so animated emoji, avatars, the video "

@@ -173,6 +173,12 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
         return dateAndTimeFormatter.string(from: date)
     }
 
+    /// The whole moment — weekday, date and the time on the reader's clock —
+    /// what a tooltip over a time says (Discord's `LLLL`).
+    func fullTimestampLabel(_ date: Date) -> String {
+        dayFormatter.string(from: date) + " at " + time(date)
+    }
+
     /// A fixed, locale-independent value for tests and previews.
     ///
     /// Pinned to `en_US_POSIX` on purpose: a test that formatted against the

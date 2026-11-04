@@ -264,7 +264,8 @@ struct CurrentActivityCard: View {
                             .lineLimit(1)
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.large)
                     .accessibilityHint(Text("Opens \(pair.1.host ?? "a website") in your browser"))
                 }
@@ -282,7 +283,8 @@ struct CurrentActivityCard: View {
                     .lineLimit(1)
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .controlSize(.large)
             .accessibilityHint(Text("Opens \(stream.host ?? "the stream") in your browser"))
         }
@@ -317,7 +319,8 @@ struct CurrentActivityCard: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
         .controlSize(.large)
     }
 
@@ -350,7 +353,8 @@ struct CurrentActivityCard: View {
             Button { openURL(offer.url) } label: {
                 storeLabel(offer.store, text: offer.store.callToAction)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .controlSize(.large)
             .help("Open \(offer.store.title) in your browser")
             .accessibilityHint(Text("Opens \(offer.store.title) in your browser"))
@@ -369,7 +373,8 @@ struct CurrentActivityCard: View {
                 storeLabel(nil, text: "Play")
             }
             .menuStyle(.button)
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .controlSize(.large)
             .menuIndicator(.hidden)
             .frame(maxWidth: .infinity)

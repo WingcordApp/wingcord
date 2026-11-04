@@ -55,7 +55,7 @@ struct StartStageSheet: View {
     var channelID: ChannelID
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var topic = ""
     @State private var notifyEveryone = false
     @State private var isWorking = false
@@ -87,7 +87,7 @@ struct StartStageSheet: View {
                     .font(.system(.subheadline, weight: .semibold))
                     .foregroundStyle(Ink.primary)
                 TextField("Stage Topic", text: $topic, prompt: Text("The debate is over: diet is better than regular"))
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
                     .onSubmit(submit)
                     .onChange(of: topic) { _, text in
                         if text.count > Self.limit { topic = String(text.prefix(Self.limit)) }
@@ -175,7 +175,7 @@ struct StageEventStartSheet: View {
     var channelID: ChannelID
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var notifyEveryone = true
     @State private var isWorking = false
     @State private var error: String?
@@ -342,7 +342,8 @@ struct StageBlockedSheet: View {
 /// Discord's first-visit sheet (module 456947): what a stage is, in three
 /// lines, and Got it!
 struct StageWelcomeSheet: View {
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
+    @Environment(\.isTopModal) private var isTop
 
     var body: some View {
         VStack(spacing: Spacing.margin) {
@@ -355,14 +356,16 @@ struct StageWelcomeSheet: View {
                 line("You can leave and rejoin anytime without making noise.", symbol: "door.left.hand.open", tint: AnyShapeStyle(Ink.secondary))
                 line("Request to speak to join the conversation!", symbol: "hand.raised.fill", tint: AnyShapeStyle(Ink.secondary))
             }
-            Button("Got it!") { dismiss() }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .keyboardShortcut(.defaultAction)
+            ModalButton(title: "Got it!", symbolName: "hand.thumbsup.fill", role: .act, fills: true) { dismiss() }
         }
         .padding(Spacing.group)
         .frame(width: 400)
-        .onExitCommand { dismiss() }
+        // Escape is Got it! too — the one way out answers both keys.
+        .background {
+            Button("", action: dismiss)
+                .keyboardShortcut(isTop ? .cancelAction : nil)
+                .hidden()
+        }
     }
 
     private func line(_ text: String, symbol: String, tint: AnyShapeStyle) -> some View {

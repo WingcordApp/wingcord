@@ -17,6 +17,10 @@ import WingcordVoice
 //   --settings <section>          opens Settings at a pane (`SettingsSection`'s raw value)
 //   --soundboard-wheel            opens the soundboard wheel at the pointer
 //   --overlay-open                with --overlay: unlocked, the meter on, to be looked at
+//   --game-profile                opens The Sims 4's profile
+//   --game-communities            the same, on its Communities tab — one word on purpose:
+//                                 AppKit reads a bare launch argument ("communities") as a
+//                                 document to open, and SwiftUI then opens no window at all
 //
 // Each writes one line per step to the diagnostics log (`selftest`), and the
 // files go to the demo's clips folder like any other.
@@ -33,6 +37,15 @@ enum DemoCaptureSelfTest {
         }
         if arguments.contains("--record-selftest") {
             Task { await record(model: model) }
+        }
+        // A game's profile, open at launch — the fixture game with communities.
+        if arguments.contains("--game-profile") || arguments.contains("--game-communities") {
+            let communities = arguments.contains("--game-communities")
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                model.openGameProfile(DemoFixtures.sims)
+                if communities { model.gameProfileInitialTab = .communities }
+            }
         }
         // A settings pane, open at launch — the way to look at one without a
         // keystroke reaching whatever is in front.

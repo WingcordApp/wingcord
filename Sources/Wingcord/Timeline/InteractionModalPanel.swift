@@ -92,19 +92,9 @@ private struct InteractionModalPanel: View {
                     .foregroundStyle(InkColor.primary)
             }
             Spacer(minLength: 0)
-            Button { model.interactionModal = nil } label: {
-                Image(systemName: "xmark")
-                    .font(.system(.body, weight: .semibold))
-                    .foregroundStyle(InkColor.solid)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    // A region inside the panel's material — glass on glass
-                    // is §4's first rule.
-                    .background(Circle().fill(Palette.hoverFill))
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .help("Cancel")
-            .accessibilityLabel(Text("Cancel"))
+            // The cards' round glass ✕ — on a solid panel, so it is glass on a
+            // ground, not glass on glass. Escape stays the layer's own.
+            ModalCloseButton(label: "Cancel", answersEscape: false) { model.interactionModal = nil }
         }
         .padding(Spacing.margin)
     }
@@ -119,7 +109,8 @@ private struct InteractionModalPanel: View {
             }
             Spacer(minLength: 0)
             Button("Cancel") { model.interactionModal = nil }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
             Button {
                 model.sessionController.submitInteractionModal()
             } label: {
@@ -129,7 +120,9 @@ private struct InteractionModalPanel: View {
                     Text("Submit")
                 }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.capsule)
+            .tint(Palette.accent)
             .keyboardShortcut(.defaultAction)
             .disabled(state.isSubmitting || !modal.isComplete(state.answers))
         }

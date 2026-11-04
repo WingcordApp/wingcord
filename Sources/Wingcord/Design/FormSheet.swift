@@ -1,21 +1,23 @@
 import SwiftUI
 
-/// The window's one form sheet: Discord's modal (`m.a` — title, a line under
-/// it, the form, then Cancel and the act) in this app's surfaces.
+/// The window's one form card: Discord's modal (`m.a` — title, a line under
+/// it, the form, then Cancel and the act) as Wingcord's Form card (D11b).
 ///
-/// **Every sheet wears it** — the moderation dialogs, the settings sheets, the
+/// **Every form wears it** — the moderation dialogs, the settings forms, the
 /// create and edit forms — so a Kick and a Create Channel put the same button
-/// in the same place, and a fix to one is a fix to all of them. The settings
-/// sheets used to be a bare headline over two glass buttons, which is why they
-/// read as unfinished next to the dialogs.
+/// in the same place, and a fix to one is a fix to all of them.
 ///
-/// **The system's sheet, with the system's buttons** (DESIGN-NOTES §2.2):
-/// no custom ground and no close glyph — Cancel is the way out, on Escape, and
-/// the act is the default button, on Return.
+/// **A card, with Liquid Glass capsules** (docs/SHEETS-SETTINGS.md D11, which
+/// retired DESIGN-NOTES §2.2's "the system's sheet, with the system's
+/// buttons"): Cancel leading, on Escape; the act trailing in the theme's
+/// accent, on Return — or ⌘Return where a text area wants Return for its
+/// lines. An act that cannot be undone (`isDestructive` — Kick, Ban, Delete)
+/// keeps the accent and gives up Return, so it is read before it is pressed;
+/// red is for a destruction nobody chose, which a form never asks for.
 ///
 /// **A tall form scrolls, a short one does not.** `ViewThatFits` offers the
 /// form as it is first and the scrolling copy only when the window cannot hold
-/// it: a `ScrollView` with no height of its own is how a sheet collapses to a
+/// it: a `ScrollView` with no height of its own is how a card collapses to a
 /// sliver.
 struct FormSheet<Content: View>: View {
     var title: String
@@ -24,7 +26,8 @@ struct FormSheet<Content: View>: View {
     /// Discord's words for the way out where they are not "Cancel" — "Never
     /// mind" over a notice.
     var cancelTitle = "Cancel"
-    /// Discord's `critical-primary` — Kick, Ban, Delete.
+    /// Discord's `critical-primary` — Kick, Ban, Delete: an act that cannot be
+    /// undone, so it takes no Return.
     var isDestructive = false
     /// A write in flight: the button spins and nothing can be pressed twice.
     var isWorking = false
@@ -38,10 +41,12 @@ struct FormSheet<Content: View>: View {
     /// Return for its own line breaks.
     var confirmShortcut: KeyboardShortcut = .defaultAction
     var width: CGFloat = 440
+    /// The act's symbol, beside its word.
+    var confirmSymbol: String? = nil
     var confirm: () -> Void
     @ViewBuilder var content: Content
 
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -68,7 +73,7 @@ struct FormSheet<Content: View>: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
             Text(verbatim: title)
-                .font(.system(.title3, weight: .semibold))
+                .font(.system(.title2, weight: .bold))
                 .foregroundStyle(Ink.primary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
@@ -86,27 +91,26 @@ struct FormSheet<Content: View>: View {
     }
 
     private var footer: some View {
-        HStack(spacing: Spacing.snug) {
-            Spacer(minLength: 0)
-            Button(cancelTitle, role: .cancel) { dismiss() }
-                .keyboardShortcut(.cancelAction)
-            Button(role: isDestructive ? .destructive : nil) {
-                confirm()
-                if closesOnConfirm { dismiss() }
-            } label: {
-                ZStack {
-                    // The title keeps the button's width while it spins.
-                    Text(verbatim: confirmTitle).opacity(isWorking ? 0 : 1)
-                    if isWorking { ProgressView().controlSize(.small) }
+        GlassEffectContainer(spacing: Spacing.snug) {
+            HStack(spacing: Spacing.snug) {
+                ModalButton(title: cancelTitle, symbolName: "xmark", role: .cancel) { dismiss() }
+                Spacer(minLength: 0)
+                ModalButton(
+                    title: confirmTitle,
+                    symbolName: confirmSymbol,
+                    role: .act,
+                    isIrreversible: isDestructive,
+                    isWorking: isWorking,
+                    shortcut: isDestructive ? nil : confirmShortcut
+                ) {
+                    confirm()
+                    if closesOnConfirm { dismiss() }
                 }
+                .disabled(!canConfirm)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(isDestructive ? Palette.destructive : nil)
-            .disabled(isWorking || !canConfirm)
-            .keyboardShortcut(confirmShortcut)
         }
-        .controlSize(.large)
-        .padding(.horizontal, Spacing.group)
-        .padding(.vertical, Spacing.margin)
+        .padding(.horizontal, Spacing.margin)
+        .padding(.top, Spacing.base)
+        .padding(.bottom, Spacing.margin)
     }
 }

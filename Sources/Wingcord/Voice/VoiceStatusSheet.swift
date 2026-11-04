@@ -43,7 +43,7 @@ struct VoiceStatusSheet: View {
     var request: VoiceStatusRequest
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var text = ""
     @State private var original = ""
     @State private var isFocused = true

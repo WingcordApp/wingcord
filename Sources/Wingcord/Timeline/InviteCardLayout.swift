@@ -564,10 +564,14 @@ nonisolated enum InviteCardLayoutEngine {
             return Content(label: label, glyph: glyph, emojiURL: emojiURL,
                            size: CGSize(width: min(width, maxChip), height: height))
         }
+        // **Hugged, every label.** A block is as wide as it was given (§4.85),
+        // so unhugged labels made every chip the 268-point cap — the card's whole
+        // width — and the overflow below gave every one of them up: a lone
+        // "+ 4 more" across the card (Alex's 2026-10-26 screenshot).
         let contents = traits.map { trait in
             content(
                 block(trait.label, font: font, color: style.primaryColor,
-                      width: maxChip - padX * 2 - emojiSide - gap, style: style),
+                      width: maxChip - padX * 2 - emojiSide - gap, style: style, hugs: true),
                 glyph: trait.glyph.map {
                     block($0, font: NSFont.systemFont(ofSize: 13), color: style.primaryColor,
                           width: emojiSide + 4, style: style)
@@ -575,41 +579,34 @@ nonisolated enum InviteCardLayoutEngine {
                 emojiURL: trait.emojiID.flatMap { CDN.emoji(id: $0, animated: trait.emojiAnimated, side: emojiSide) }
             )
         }
+        func moreChip(_ count: Int) -> Content {
+            content(block("+ \(count) more", font: font, color: style.primaryColor,
+                          width: maxChip - padX * 2, style: style, hugs: true))
+        }
 
-        // Greedy lines, stopping where a third would begin.
+        // Discord's own line breaking, reserving room for the overflow chip as
+        // its own does: measured at a count one digit wider than any it can show.
+        let breaking = TraitOverflow.layout(
+            widths: contents.map(\.size.width),
+            maxLines: 2,
+            gap: gap,
+            containerWidth: width,
+            overflowWidth: moreChip(Int("1\(contents.count)") ?? contents.count).size.width
+        )
+        let lineHeight = contents.map(\.size.height).max() ?? 0
+        var visible: [Int] = []
         var origins: [CGPoint] = []
-        var lineTops: [CGFloat] = [top]
-        var lineHeights: [CGFloat] = [0]
         var x = originX
-        for item in contents {
-            if x > originX, x + item.size.width > right {
-                guard lineTops.count < 2 else { break }
-                lineTops.append(lineTops[lineTops.count - 1] + lineHeights[lineHeights.count - 1] + gap)
-                lineHeights.append(0)
-                x = originX
-            }
-            origins.append(CGPoint(x: x, y: lineTops[lineTops.count - 1]))
-            lineHeights[lineHeights.count - 1] = max(lineHeights[lineHeights.count - 1], item.size.height)
+        var line = 0
+        for (index, item) in contents.enumerated() {
+            guard let itemLine = breaking.lines[index] else { continue }
+            if itemLine != line { line = itemLine; x = originX }
+            visible.append(index)
+            origins.append(CGPoint(x: x, y: top + CGFloat(line) * (lineHeight + gap)))
             x += item.size.width + gap
         }
-
-        // The count of the rest, which gives up chips from the end until it fits.
-        var overflow: Content?
-        if origins.count < contents.count {
-            var hidden = contents.count - origins.count
-            while true {
-                let chip = content(block(
-                    "+ \(hidden) more", font: font, color: style.primaryColor, width: maxChip, style: style
-                ))
-                let after = origins.last.map { $0.x + contents[origins.count - 1].size.width + gap } ?? originX
-                if after + chip.size.width <= right || origins.isEmpty {
-                    overflow = chip
-                    break
-                }
-                origins.removeLast()
-                hidden += 1
-            }
-        }
+        let hidden = traits.indices.filter { !visible.contains($0) }
+        let overflow = hidden.isEmpty ? nil : moreChip(hidden.count)
 
         var chips: [InviteCardSlot.Profile.Trait] = []
         func place(_ item: Content, at origin: CGPoint) {
@@ -628,14 +625,20 @@ nonisolated enum InviteCardLayoutEngine {
                                      y: rect.midY - item.label.size.height / 2)
             ))
         }
-        for (index, origin) in origins.enumerated() { place(contents[index], at: origin) }
+        for (index, origin) in zip(visible, origins) { place(contents[index], at: origin) }
         var more: InviteCardSlot.Profile.MoreTraits?
         if let overflow {
-            let at = origins.last.map {
-                CGPoint(x: $0.x + contents[origins.count - 1].size.width + gap, y: $0.y)
-            } ?? CGPoint(x: originX, y: top)
+            // After the last chip, where the reservation kept room for it — or,
+            // as Discord's wrapping row would, on the line under it.
+            var at = CGPoint(x: originX, y: top)
+            if let last = visible.last, let origin = origins.last {
+                let after = origin.x + contents[last].size.width + gap
+                at = after + overflow.size.width <= right
+                    ? CGPoint(x: after, y: origin.y)
+                    : CGPoint(x: originX, y: origin.y + lineHeight + gap)
+            }
             place(overflow, at: at)
-            more = .init(rect: CGRect(origin: at, size: overflow.size), traits: Array(traits[origins.count...]))
+            more = .init(rect: CGRect(origin: at, size: overflow.size), traits: hidden.map { traits[$0] })
         }
         let bottom = (chips.map(\.rect.maxY).max() ?? top)
         return (chips, bottom, more)
@@ -1207,4 +1210,46 @@ nonisolated enum InviteCardLayoutEngine {
 nonisolated struct InviteCardFold: Hashable, Sendable {
     var message: MessageID
     var code: String
+}
+
+/// Discord's overflow row for a server's traits (`3666`'s line walk), as a
+/// pure function: which line each chip takes, and where the visible run ends.
+///
+/// **Ported, not approximated** — the inbox taught that a rule inferred from a
+/// rendering is the wrong rule (INVARIANTS §5.7). Each chip is placed while it
+/// fits, rounded as the browser rounds; on the LAST line a chip must also leave
+/// room for the "+ N more" chip after it, unless it is the very last chip; a
+/// chip that fails moves to the next line, or ends the run on the last one. A
+/// chip wider than the whole row is skipped and goes to the flyout.
+nonisolated enum TraitOverflow {
+    struct Breaking: Equatable {
+        /// The line each chip sits on, or nil where it is not drawn.
+        var lines: [Int?]
+    }
+
+    static func layout(
+        widths: [CGFloat],
+        maxLines: Int,
+        gap: CGFloat,
+        containerWidth: CGFloat,
+        overflowWidth: CGFloat
+    ) -> Breaking {
+        var lines = [Int?](repeating: nil, count: widths.count)
+        var line = 0
+        var cursor: CGFloat = 0
+        for (index, width) in widths.enumerated() {
+            if width.isNaN || width > containerWidth { continue }
+            let isLastLine = line == maxLines - 1
+            let isLastChip = index == widths.count - 1
+            let reserve = isLastLine && !isLastChip ? overflowWidth + gap : 0
+            if !((cursor + width + reserve).rounded() < containerWidth.rounded()) {
+                if isLastLine { break }
+                line += 1
+                cursor = 0
+            }
+            lines[index] = line
+            cursor += width + gap
+        }
+        return Breaking(lines: lines)
+    }
 }

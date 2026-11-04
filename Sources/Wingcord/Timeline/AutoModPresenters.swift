@@ -7,18 +7,23 @@ struct AutoModCardPresenter: ViewModifier {
     @Environment(AppModel.self) private var model
 
     func body(content: Content) -> some View {
-        content.alert(
-            "Remove Mention Raid Restrictions",
+        content.modal(
             isPresented: Binding(
                 get: { model.mentionRaidRemoval != nil },
                 set: { if !$0 { model.mentionRaidRemoval = nil } }
-            )
+            ),
+            style: .alert
         ) {
-            Button("Confirm") { model.confirmMentionRaidRemoval() }
-            Button("Cancel", role: .cancel) { model.mentionRaidRemoval = nil }
-        } message: {
-            Text("Are you sure you want to remove all message restrictions that were placed on this server due to "
-                + "a suspected mention raid?")
+            ModalAlert(
+                hero: .symbol("shield.lefthalf.filled"),
+                title: "Remove Mention Raid Restrictions",
+                message: Text("Are you sure you want to remove all message restrictions that were placed on this server due to "
+                    + "a suspected mention raid?"),
+                actions: [
+                    .cancel(),
+                    .act("Confirm", symbol: "checkmark.shield") { model.confirmMentionRaidRemoval() },
+                ]
+            )
         }
     }
 }

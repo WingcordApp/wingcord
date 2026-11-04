@@ -50,7 +50,7 @@ struct PlaintextPreviewCard: View {
             guard !isMeasuring else { return }
             await model.loadPlaintextPreview(key)
         }
-        .sheet(isPresented: $showsWholeFile) {
+        .modal(isPresented: $showsWholeFile, style: .panel) {
             PlaintextFileSheet(key: key, state: state)
         }
         .accessibilityElement(children: .contain)
@@ -184,7 +184,8 @@ struct PlaintextPreviewCard: View {
                 } label: {
                     Image(systemName: state.isExpanded ? "chevron.up" : "chevron.down")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.large)
                 .help(title)
                 .accessibilityLabel(Text(title))
@@ -253,7 +254,7 @@ struct PlaintextFileSheet: View {
     var key: PlaintextCardKey
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var wrapsText: Bool
     @State private var language: String
     @State private var rendersMarkdown: Bool
@@ -299,8 +300,7 @@ struct PlaintextFileSheet: View {
                 )
                     .padding(.leading, 16)
                     .padding(.trailing, 16)
-                Button("Close") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                ModalCloseButton { dismiss() }
             }
             .padding(16)
         }

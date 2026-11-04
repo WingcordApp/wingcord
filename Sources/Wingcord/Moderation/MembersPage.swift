@@ -987,7 +987,7 @@ private struct ApplicationRow: View {
         }
         .padding(Spacing.snug)
         .background(Palette.groupedFill, in: .rect(cornerRadius: Radius.chip))
-        .sheet(isPresented: $isRejecting) {
+        .modal(isPresented: $isRejecting) {
             RejectApplicationSheet { reason in
                 store.resolve(request, approve: false, reason: reason)
             }
@@ -1115,6 +1115,7 @@ private struct RejectApplicationSheet: View {
             confirmTitle: "Reject",
             isDestructive: true,
             closesOnConfirm: true,
+            confirmSymbol: "xmark.circle",
             confirm: {
                 let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
                 reject(trimmed.isEmpty ? nil : trimmed)
@@ -1125,7 +1126,7 @@ private struct RejectApplicationSheet: View {
                 .lineLimit(2...4)
                 .font(.system(.body))
                 .padding(Spacing.snug)
-                .background(Palette.hoverFill, in: .rect(cornerRadius: Radius.chip, style: .continuous))
+                .modalFieldGround()
                 .onChange(of: reason) { _, value in
                     guard value.count > Self.limit else { return }
                     reason = String(value.prefix(Self.limit))

@@ -342,12 +342,18 @@ public enum TimelineReducer {
             // system event, a reply, too long a gap, or a fold's edge all break
             // the run. Each of these puts something between the two messages,
             // and a run whose members are not adjacent is not a run.
+            //
+            // **So does an answer to a command** (`isCommandType()`, first in
+            // Discord's grouping): it opens on its own "used" line, and three
+            // commands in a row from one app are three things somebody ran.
             let breaksRun = startsDay
                 || isUnreadBoundary
                 || startsMark
                 || foldIndex != previousFold
                 || previous?.authorID != message.authorID
                 || message.kind == .reply
+                || message.kind == .chatInputCommand
+                || message.kind == .contextMenuCommand
                 || message.isSystemEvent
                 || previous?.isSystemEvent == true
                 || runLength >= maximumRunLength

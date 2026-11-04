@@ -127,7 +127,9 @@ struct DemoFixtureTests {
         AppSettings.shared.voiceInviteCardStyle = .asDiscordDecides
         let model = self.model()
         let codes = try aboveTheClip(in: model).suffix(4).flatMap { InviteCard.codes(in: $0.content) }
-        #expect(codes == ["demo-crowd", "demo-hangout"])
+        // Pixel Forge's server invite follows them (the "+ N more" traits,
+        // SHEETS-SETTINGS Phase 1.2) — not a voice invite.
+        #expect(codes.filter { $0 != "demo-forge" } == ["demo-crowd", "demo-hangout"])
 
         let states = model.voiceInviteStates()
         #expect(states.count == 2, "both rooms drawn")
@@ -199,8 +201,9 @@ struct DemoFixtureTests {
     func experiments() throws {
         let model = self.model()
         #expect(model.experiments.user.count == 6)
-        // Native markdown, search feedback, and badge settings (Phase 8).
-        #expect(model.experiments.apex.count == 3)
+        // Native markdown, search feedback, badge settings (Phase 8), and
+        // Server Theme's account half, which the Boost goal counts.
+        #expect(model.experiments.apex.count == 4)
         #expect(model.badgeManagement == (enabled: true, tenureHideable: true))
         let open = try #require(model.selectedGuildID)
         // The opening server is a community: in Server Theme in full.

@@ -53,7 +53,7 @@ struct StagePane: View {
             AppSettings.shared.hasSeenStageWelcome = true
             sheet = .welcome
         }
-        .sheet(item: $sheet) { sheet in
+        .modal(item: $sheet) { sheet in
             switch sheet {
             case .start:
                 StartStageSheet(channelID: channelID)
@@ -65,18 +65,30 @@ struct StagePane: View {
                 StageBlockedSheet(channelID: channelID) { model.joinVoice(channelID) }
             }
         }
-        .alert(confirmation?.title ?? "", isPresented: $isConfirming, presenting: confirmation) { asked in
-            switch asked {
-            case .endStage:
-                Button("Cancel", role: .cancel) {}
-                Button("End Stage", role: .destructive) { endAndLeave() }
-            case .alsoEnd:
-                Button("No, just disconnect quietly") { model.leaveVoice() }
-                Button("Disconnect and End", role: .destructive) { endAndLeave() }
-                Button("Cancel", role: .cancel) {}
+        .modal(isPresented: $isConfirming, style: .alert) {
+            if let asked = confirmation {
+                ModalAlert(
+                    hero: .symbol("person.wave.2.fill"),
+                    title: asked.title,
+                    message: Text(asked.message),
+                    actions: {
+                        switch asked {
+                        case .endStage:
+                            [
+                                .cancel(),
+                                .act("End Stage", symbol: "stop.circle", irreversible: true) { endAndLeave() },
+                            ]
+                        case .alsoEnd:
+                            // Three, so they stack — the act first.
+                            [
+                                .cancel(),
+                                .secondary("No, just disconnect quietly", symbol: "phone.down") { model.leaveVoice() },
+                                .act("Disconnect and End", symbol: "stop.circle", irreversible: true) { endAndLeave() },
+                            ]
+                        }
+                    }()
+                )
             }
-        } message: { asked in
-            Text(asked.message)
         }
     }
 
@@ -193,9 +205,12 @@ struct StagePane: View {
                 .foregroundStyle(Ink.primary)
             Spacer(minLength: Spacing.base)
             Button("Accept") { model.answerStageInvite(accept: true, inChannel: channelID) }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
+                .tint(Palette.accent)
             Button("Decline") { model.answerStageInvite(accept: false, inChannel: channelID) }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
         }
         .padding(Spacing.snug)
         .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.card, style: .continuous))

@@ -50,8 +50,8 @@ extension AppModel {
 
     /// Open App, in a direct message with an app — Discord's
     /// `OPEN_APP_LAUNCHER`: the composer's app launcher, at the app's page.
-    func openApplicationLauncher(_ applicationID: ApplicationID) {
-        guard let channelID = selectedChannelID else { return }
+    func openApplicationLauncher(_ applicationID: ApplicationID, in channel: ChannelID? = nil) {
+        guard let channelID = channel ?? selectedChannelID else { return }
         profileRequest = nil
         activityLauncherPage = .app(applicationID)
         appLauncherRequest = AppLauncherRequest(

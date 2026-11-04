@@ -613,12 +613,15 @@ struct ActivityDetailPage: View {
                     }
                     .frame(minWidth: 96)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
+                .tint(Palette.accent)
                 .controlSize(.large)
                 .disabled(isLaunching)
             }
             Button("Add App", systemImage: "plus.app") { onAdd() }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.large)
             Button {
                 NSPasteboard.general.clearContents()
@@ -631,7 +634,8 @@ struct ActivityDetailPage: View {
                 // the two the same height and this one round.
                 Image(systemName: "link")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .buttonBorderShape(.circle)
             .controlSize(.large)
             .help("Copy a link to this app")
@@ -708,7 +712,8 @@ struct ActivityDetailPage: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.glassProminent)
+        .buttonBorderShape(.capsule)
         .tint(Palette.destructive)
         .controlSize(.large)
     }
@@ -1091,8 +1096,8 @@ private struct AppCommandRowView: View {
     }
 }
 
-/// The launch bar's two weights: the launch is the prominent button, Launch in
-/// DM beside it a bordered one.
+/// The launch bar's two weights: the launch is prominent glass in the accent,
+/// Launch in DM beside it plain glass — capsules, the app's button.
 ///
 /// A modifier rather than a branch at the call site, because the two styles are
 /// different types and a `ViewBuilder` `if` around them would give the button
@@ -1102,9 +1107,9 @@ private struct LaunchButtonWeight: ViewModifier {
 
     func body(content: Content) -> some View {
         if isSecondary {
-            content.buttonStyle(.bordered)
+            content.buttonStyle(.glass).buttonBorderShape(.capsule)
         } else {
-            content.buttonStyle(.borderedProminent)
+            content.buttonStyle(.glassProminent).buttonBorderShape(.capsule).tint(Palette.accent)
         }
     }
 }

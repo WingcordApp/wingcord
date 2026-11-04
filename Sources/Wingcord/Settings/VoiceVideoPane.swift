@@ -223,7 +223,6 @@ struct VoiceVideoPane: View {
                     )
                 }
             }
-            .padding(.top, SettingsMetrics.cardToHeader)
 
             SettingsCard {
                 // Discord's own description, for the mode the reader is in.
@@ -240,7 +239,6 @@ struct VoiceVideoPane: View {
                     isOn: $settings.showsSilentMicWarning
                 )
             }
-            .padding(.top, SettingsMetrics.cardToHeader)
         }
     }
 
@@ -293,7 +291,6 @@ struct VoiceVideoPane: View {
                     // The processor's own, and nothing without it.
                     .disabled(!settings.echoCancellation)
                 }
-                .padding(.top, SettingsMetrics.cardToHeader)
             }
 
             if settings.resolvedProcessing.echoCancellation {
@@ -306,7 +303,6 @@ struct VoiceVideoPane: View {
                         AVCaptureDevice.showSystemUserInterface(.microphoneModes)
                     }
                 }
-                .padding(.top, SettingsMetrics.cardToHeader)
             }
         }
     }
@@ -343,7 +339,9 @@ struct VoiceVideoPane: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: Spacing.base)
                     Button(isTestingMic ? "Stop Testing" : "Mic Test") { isTestingMic.toggle() }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(Palette.accent)
                 }
                 .padding(.leading, SettingsMetrics.cardContentInset)
                 .padding(.trailing, SettingsMetrics.controlTrailing)
@@ -421,7 +419,6 @@ struct VoiceVideoPane: View {
                     deviceID: settings.cameraDeviceID
                 )
             }
-            .padding(.top, SettingsMetrics.cardToHeader)
         }
     }
 
@@ -469,17 +466,11 @@ struct VoiceVideoPane: View {
             SettingsCard {
                 SettingsToggle(
                     title: "Play call sounds",
-                    help: "The short sounds a call makes: joining and leaving, muting, a camera or a screen share starting, and somebody beginning to watch your screen.",
+                    help: "The little sounds a call makes \u{2014} joins, leaves, mutes, cameras and screen shares, "
+                        + "and someone starting to watch yours.",
                     isOn: $settings.playsCallSounds
                 )
             }
-            SettingsFootnote(
-                "They come out of the output chosen above, not the system default — and while "
-                    + "you are in a call they go through the call's own mixer, so the echo "
-                    + "canceller knows about them and nobody hears your join sound back through "
-                    + "your microphone.",
-                symbolName: "speaker.wave.2"
-            )
         }
     }
 
@@ -662,7 +653,8 @@ private struct CameraTestRow: View {
                         rig.stop()
                     }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
             }
 
@@ -719,7 +711,8 @@ private struct PermissionDeniedState: View {
                 ) else { return }
                 NSWorkspace.shared.open(url)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .controlSize(.small)
         }
         .frame(maxWidth: .infinity)

@@ -35,12 +35,12 @@ struct MessageActionPresenter: ViewModifier {
             menuGroups.append([.apps])
         }
         // **A right-click over selected words leads with them**, as Discord's
-        // menu does: Copy, then Search with Google, each its own band, above
+        // menu does: Copy, then the two that ask about the words — macOS's
+        // Look Up and Search with Google, in a text view's order — above
         // everything about the message itself.
         if model.messageMenu?.selectedText != nil {
-            menuGroups.insert(contentsOf: [[.copySelection], [.searchWithGoogle]], at: 0)
+            menuGroups.insert(contentsOf: [[.copySelection], [.lookUp, .searchWithGoogle]], at: 0)
         }
-        let deletion = model.deleteRequest
 
         return content
             // Who reacted: a layer over the window rather than a presentation,
@@ -140,12 +140,13 @@ struct MessageActionPresenter: ViewModifier {
                     // answer for a reaction, which cannot be a GIF.
                     onPickGIF: { _ in },
                     // The switch exists only for an account that can send one.
-                    onPickSuperReaction: model.hasNitro ? { react($0, .burst) } : nil
+                    onPickSuperReaction: model.hasNitro ? { react($0, .burst) } : nil,
+                    reactingIn: request.channelID
                 )
                 .environment(model)
                 .presentationBackground(.clear)
             }
-            .sheet(item: $model.forwardRequest) { request in
+            .modal(item: $model.forwardRequest) { request in
                 ForwardSheet(
                     targets: model.forwardTargets(excluding: request.channelID),
                     send: { targets, comment in model.forward(to: targets, comment: comment) },
@@ -156,7 +157,7 @@ struct MessageActionPresenter: ViewModifier {
             }
             // Discord's forward modal with a person in it (`880867`): its own
             // title, the profile link beside Send, and nothing quoted.
-            .sheet(item: $model.shareProfileRequest) { request in
+            .modal(item: $model.shareProfileRequest) { request in
                 ForwardSheet(
                     title: "Share Profile",
                     subtitle: nil,
@@ -168,33 +169,33 @@ struct MessageActionPresenter: ViewModifier {
                     ProfileSharePreview(userID: request.userID)
                 }
             }
-            .sheet(item: $model.reportRequest) { request in
+            .modal(item: $model.reportRequest) { request in
                 ReportSheet(request: request)
                     .environment(model)
             }
-            .sheet(item: $model.pollEditor) { request in
+            .modal(item: $model.pollEditor) { request in
                 PollEditorSheet(request: request)
                     .environment(model)
             }
             // Kick, Ban, Timeout and the rest — raised from the person menu,
             // Mod View and the Members page alike.
-            .sheet(item: $model.moderationDialog) { dialog in
+            .modal(item: $model.moderationDialog) { dialog in
                 ModerationDialogView(dialog: dialog)
                     .environment(model)
             }
             // Create Event and Edit Event, from the server's events.
-            .sheet(item: $model.eventEditor) { request in
+            .modal(item: $model.eventEditor) { request in
                 EventEditorHost(request: request, model: model)
             }
             // A voice channel's status, from its menu or from the In voice
             // card on a profile.
-            .sheet(item: $model.voiceStatusEditor) { request in
+            .modal(item: $model.voiceStatusEditor) { request in
                 VoiceStatusSheet(request: request)
                     .environment(model)
             }
             // Create Channel and Create Category, from the server menu, a
             // category, or a channel's own menu.
-            .sheet(item: $model.channelCreation) { request in
+            .modal(item: $model.channelCreation) { request in
                 CreateChannelSheet(request: request)
                     .environment(model)
             }
@@ -204,13 +205,13 @@ struct MessageActionPresenter: ViewModifier {
             // Discord's Preview Camera, from the camera's ▾, the reader's own
             // menu in a call, or the camera switch while "Always preview
             // video" is on.
-            .sheet(isPresented: $model.isCameraPreviewOpen) {
+            .modal(isPresented: $model.isCameraPreviewOpen) {
                 CameraPreviewSheet()
                     .environment(model)
             }
             // Apply to Join — from a server's card, or an invite into a server
             // that reviews who joins.
-            .sheet(
+            .modal(
                 item: $model.joinApplicationRequest,
                 // A submitted application's coachmark waits for this.
                 onDismiss: { model.raiseQueuedApplicationCoachmark() }
@@ -221,13 +222,13 @@ struct MessageActionPresenter: ViewModifier {
             // The other end of the same application: approved, and seen for
             // the first time. Its only ways out — the button and Escape — both
             // acknowledge.
-            .sheet(item: $model.approvedApplication) { notice in
+            .modal(item: $model.approvedApplication, style: .alert) { notice in
                 ApplicationApprovedSheet(notice: notice)
                     .environment(model)
             }
             // A new member's greeting, where the server still has a Welcome
             // Screen — after the invite that brought them.
-            .sheet(item: $model.welcomeScreenNotice) { notice in
+            .modal(item: $model.welcomeScreenNotice) { notice in
                 WelcomeScreenSheet(
                     presentation: model.welcomeScreenPresentation(for: notice.guildID, screen: notice.screen),
                     openChannel: { model.openWelcomeScreenChannel($0) }
@@ -237,33 +238,31 @@ struct MessageActionPresenter: ViewModifier {
             // in this file — it lives here because this is where the window's
             // sheets are presented from, and a second presenter would be a
             // second place for two sheets to fight over the window.
-            .sheet(item: $model.activityConsent) { request in
+            .modal(item: $model.activityConsent) { request in
                 ActivityConsentSheet(request: request)
                     .environment(model)
             }
-            .alert(
-                deletion?.isOwn == true ? "Delete your message?" : "Delete this message?",
-                isPresented: Binding(
-                    get: { model.deleteRequest != nil },
-                    // **Only ever clears when the store is still showing this
-                    // one.** A setter that clears unconditionally can dismiss a
-                    // second request on its way in.
-                    set: { if !$0 { model.deleteRequest = nil } }
-                ),
-                presenting: deletion
-            ) { _ in
-                Button("Delete", role: .destructive) { model.confirmDelete() }
-                Button("Cancel", role: .cancel) { model.deleteRequest = nil }
-            } message: { request in
-                // **A system alert, deliberately, where everything else here is
-                // glass.** This is the one irreversible act in the set; it wants
-                // the platform's own destructive vocabulary, its Escape and
-                // Return handling and its VoiceOver announcement, none of which
-                // a hand-built panel would inherit.
-                Text(
-                    request.isOwn
-                        ? "“\(request.excerpt)” will be removed for everyone. This cannot be undone."
-                        : "\(request.authorName)'s message “\(request.excerpt)” will be removed for everyone. This cannot be undone."
+            // Ignore and Block, asked first — one card that turns between them.
+            .modal(item: $model.relationshipConfirmation, style: .alert) { request in
+                RelationshipConfirmationCard(request: request)
+                    .environment(model)
+            }
+            // The one irreversible act in the set, as a card: what goes, in
+            // the reader's words, and Delete in the act's colour with no
+            // Return — it is read before it is pressed (D11b).
+            .modal(item: $model.deleteRequest, style: .alert) { request in
+                ModalAlert(
+                    hero: .symbol("trash.fill"),
+                    title: request.isOwn ? "Delete your message?" : "Delete this message?",
+                    message: Text(
+                        request.isOwn
+                            ? "“\(request.excerpt)” will be removed for everyone. This cannot be undone."
+                            : "\(request.authorName)'s message “\(request.excerpt)” will be removed for everyone. This cannot be undone."
+                    ),
+                    actions: [
+                        .cancel(),
+                        .act("Delete", symbol: "trash", irreversible: true) { model.confirmDelete() },
+                    ]
                 )
             }
     }
@@ -286,29 +285,41 @@ private struct FakeNitroEmbedDialog: View {
 
     var body: some View {
         Color.clear
-            .confirmationDialog(
-                "Hold on!",
+            .modal(
                 isPresented: Binding(
                     get: { model.fakeNitroEmbedPrompt != nil },
                     set: { if !$0 { model.fakeNitroEmbedPrompt = nil } }
                 ),
-                titleVisibility: .visible,
-                presenting: model.fakeNitroEmbedPrompt
-            ) { prompt in
-                Button("Send Anyway") { prompt.proceed() }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("You are trying to send/edit a message that contains a FakeNitro emoji or sticker, however you do not have permissions to embed links in the current channel. Are you sure you want to send this message? Your FakeNitro items will appear as a link only.")
+                style: .alert
+            ) {
+                if let prompt = model.fakeNitroEmbedPrompt {
+                    ModalAlert(
+                        hero: .symbol("exclamationmark.triangle.fill", tint: .orange),
+                        title: "Hold on!",
+                        message: Text("You are trying to send/edit a message that contains a FakeNitro emoji or sticker, however you do not have permissions to embed links in the current channel. Are you sure you want to send this message? Your FakeNitro items will appear as a link only."),
+                        actions: [
+                            .cancel(),
+                            .act("Send Anyway", symbol: "paperplane.fill") { prompt.proceed() },
+                        ],
+                        // The plugin's own checkbox — its `disableEmbedPermissionCheck`.
+                        suppression: $settings.fakeNitroSkipsEmbedCheck
+                    )
+                }
             }
-            .dialogSuppressionToggle(isSuppressed: $settings.fakeNitroSkipsEmbedCheck)
             // The plugin's other "Hold on!", for an animated sticker.
-            .alert("Hold on!", isPresented: Binding(
-                get: { model.fakeNitroStickerRefused },
-                set: { model.fakeNitroStickerRefused = $0 }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("You cannot send this message because it contains an animated FakeNitro sticker, and you do not have permissions to attach files in the current channel. Please remove the sticker to proceed.")
+            .modal(
+                isPresented: Binding(
+                    get: { model.fakeNitroStickerRefused },
+                    set: { model.fakeNitroStickerRefused = $0 }
+                ),
+                style: .alert
+            ) {
+                ModalAlert(
+                    hero: .symbol("exclamationmark.triangle.fill", tint: .orange),
+                    title: "Hold on!",
+                    message: Text("You cannot send this message because it contains an animated FakeNitro sticker, and you do not have permissions to attach files in the current channel. Please remove the sticker to proceed."),
+                    actions: [.okay("OK")]
+                )
             }
     }
 }

@@ -15,6 +15,9 @@ struct SearchSuggestionRow: View {
                 .font(.system(.body, weight: .medium))
                 .foregroundStyle(Ink.primary)
                 .lineLimit(1)
+                // The title says what the row does; the example beside it is
+                // the one to give way.
+                .layoutPriority(1)
             if let detail = suggestion.detail {
                 Text(detail)
                     .font(.system(.body))

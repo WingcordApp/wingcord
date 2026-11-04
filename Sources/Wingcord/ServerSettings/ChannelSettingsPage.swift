@@ -117,13 +117,16 @@ struct ChannelSettingsSidebar: View {
         .onAppear {
             if !tabs.contains(selection), let first = tabs.first { selection = first }
         }
-        .alert(
-            "Cannot Delete Channel",
-            isPresented: Binding(get: { refusal != nil }, set: { if !$0 { refusal = nil } })
+        .modal(
+            isPresented: Binding(get: { refusal != nil }, set: { if !$0 { refusal = nil } }),
+            style: .alert
         ) {
-            Button("Okay", role: .cancel) {}
-        } message: {
-            Text(refusal?.message ?? "")
+            ModalAlert(
+                hero: .symbol("exclamationmark.lock.fill"),
+                title: "Cannot Delete Channel",
+                message: Text(refusal?.message ?? ""),
+                actions: [.okay()]
+            )
         }
         .destructiveConfirmation(
             isPresented: $isDeleting,
@@ -285,7 +288,8 @@ struct UnsavedChangesBar: View {
             Button("Reset", action: reset)
                 .buttonStyle(.link)
             Button("Save Changes", action: save)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
                 .tint(Palette.affirmative)
                 .disabled(!canSave)
                 .keyboardShortcut("s", modifiers: .command)

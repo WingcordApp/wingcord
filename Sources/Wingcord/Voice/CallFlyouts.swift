@@ -63,7 +63,8 @@ struct CallDeviceFlyout: View {
                         dismiss()
                         model.previewCamera()
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                 }
             }
         }

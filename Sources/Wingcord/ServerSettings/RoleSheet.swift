@@ -27,7 +27,8 @@ struct RoleSheet: View {
     @State private var draft: Role
     @State private var tab: Tab
     @State private var query = ""
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
+    @Environment(\.motion) private var motion
 
     private enum Tab: String, CaseIterable, Identifiable {
         case display = "Display"
@@ -52,11 +53,13 @@ struct RoleSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             if !isEveryone {
-                Picker("", selection: $tab) {
-                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                // The native strip every other set of tabs uses, not the old
+                // bordered `.segmented` box.
+                SegmentedPicker(
+                    options: Tab.allCases.map { .init($0, $0.rawValue) },
+                    selection: $tab.animation(motion.standard),
+                    fillsWidth: true
+                )
                 .padding(.horizontal, Spacing.margin)
                 .padding(.bottom, Spacing.snug)
             }
@@ -73,14 +76,15 @@ struct RoleSheet: View {
             footer
         }
         .frame(width: 520, height: 620)
-        .background(Palette.surface)
+        // Edits thrown away by a throw would be lost: Cancel is the way out.
+        .modalDismissDisabled(isDirty)
     }
 
     private var header: some View {
         HStack(spacing: Spacing.base) {
             RoleSwatch(role: draft)
             Text(verbatim: isEveryone ? "Default Permissions" : draft.name)
-                .font(.system(.headline))
+                .font(.system(.title3, weight: .bold))
                 .foregroundStyle(Ink.primary)
                 .lineLimit(1)
             Spacer()
@@ -98,7 +102,7 @@ struct RoleSheet: View {
             if !isEveryone {
                 SheetField(title: "Role name", isRequired: true) {
                     TextField("", text: $draft.name)
-                        .textFieldStyle(.roundedBorder)
+                        .modalField()
                 }
 
                 SheetField(
@@ -131,7 +135,8 @@ struct RoleSheet: View {
                             draft.colorValue = 0
                             draft.colors = RoleColors(primary: 0)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
                         .controlSize(.small)
                         .disabled(draft.colorValue == 0)
 
@@ -279,23 +284,21 @@ struct RoleSheet: View {
     // MARK: Footer
 
     private var footer: some View {
-        HStack(spacing: Spacing.base) {
-            Spacer()
-            Button("Cancel", role: .cancel) { dismiss() }
-                .buttonStyle(.bordered)
-                .keyboardShortcut(.cancelAction)
-            Button("Save") {
-                var next = draft
-                // The bits the catalog cannot draw, put back. Without this line
-                // every role edited here loses whatever Discord added since this
-                // build shipped.
-                next.permissions.formUnion(PermissionCatalog.unknownBits(in: role.permissions))
-                commit(next)
-                dismiss()
+        GlassEffectContainer(spacing: Spacing.snug) {
+            HStack(spacing: Spacing.snug) {
+                ModalButton(title: "Cancel", symbolName: "xmark", role: .cancel) { dismiss() }
+                Spacer()
+                ModalButton(title: "Save", symbolName: "checkmark", role: .act) {
+                    var next = draft
+                    // The bits the catalog cannot draw, put back. Without this line
+                    // every role edited here loses whatever Discord added since this
+                    // build shipped.
+                    next.permissions.formUnion(PermissionCatalog.unknownBits(in: role.permissions))
+                    commit(next)
+                    dismiss()
+                }
+                .disabled(!isDirty || draft.name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
-            .disabled(!isDirty || draft.name.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(Spacing.margin)
     }

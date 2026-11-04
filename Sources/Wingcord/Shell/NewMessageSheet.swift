@@ -16,7 +16,6 @@ struct NewMessageSheet: View {
     @Environment(AppModel.self) private var model
     @State private var query = ""
     @State private var highlighted: UserID?
-    @FocusState private var isFocused: Bool
 
     private struct Person: Identifiable, Hashable {
         var id: UserID
@@ -29,15 +28,26 @@ struct NewMessageSheet: View {
 
     var body: some View {
         let people = matches
+        VStack(alignment: .leading, spacing: 0) {
+            ModalHeader(title: "New Message", close: { NewMessageRequest.shared.isShown = false })
+            picker(people)
+                .padding(.horizontal, Spacing.group)
+                .padding(.bottom, Spacing.group)
+        }
+        .frame(width: 420)
+        .onChange(of: query) { _, _ in highlighted = nil }
+    }
+
+    private func picker(_ people: [Person]) -> some View {
         VStack(alignment: .leading, spacing: Spacing.base) {
-            Text("New Message")
-                .font(.title3.weight(.semibold))
-            TextField("To: a friend's name", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .focused($isFocused)
-                .onSubmit { if let first = highlighted ?? people.first?.id { open(first) } }
-                .onKeyPress(.downArrow) { move(1, in: people) }
-                .onKeyPress(.upArrow) { move(-1, in: people) }
+            // The system's search field on glass, leading the list it picks
+            // from: the arrows move through it and Return opens the one lit.
+            SearchField(
+                prompt: "To: a friend's name",
+                text: $query,
+                onMove: { move($0, in: people) },
+                onSubmit: { if let first = highlighted ?? people.first?.id { open(first) } }
+            )
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(people) { person in
@@ -52,7 +62,7 @@ struct NewMessageSheet: View {
                                     .foregroundStyle(Ink.primary)
                                 Text(person.handle)
                                     .font(.system(.callout))
-                                    .foregroundStyle(Ink.tertiary)
+                                    .foregroundStyle(Ink.secondary)
                                 Spacer(minLength: 0)
                             }
                             .padding(.horizontal, Spacing.tight)
@@ -69,16 +79,7 @@ struct NewMessageSheet: View {
                 }
             }
             .frame(height: 280)
-            HStack {
-                Spacer()
-                Button("Cancel") { NewMessageRequest.shared.isShown = false }
-                    .keyboardShortcut(.cancelAction)
-            }
         }
-        .padding(20)
-        .frame(width: 400)
-        .onAppear { isFocused = true }
-        .onChange(of: query) { _, _ in highlighted = nil }
     }
 
     /// The reader's friends, by name, narrowed by what is typed.
@@ -102,11 +103,10 @@ struct NewMessageSheet: View {
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    private func move(_ step: Int, in people: [Person]) -> KeyPress.Result {
-        guard !people.isEmpty else { return .ignored }
+    private func move(_ step: Int, in people: [Person]) {
+        guard !people.isEmpty else { return }
         let current = people.firstIndex { $0.id == (highlighted ?? people.first?.id) } ?? 0
         highlighted = people[min(max(current + step, 0), people.count - 1)].id
-        return .handled
     }
 
     private func open(_ userID: UserID) {

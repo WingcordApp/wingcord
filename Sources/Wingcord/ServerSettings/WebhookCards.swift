@@ -160,7 +160,7 @@ private struct WebhookCard: View {
             HStack(alignment: .top, spacing: Spacing.margin) {
                 SheetField(title: "Name") {
                     TextField("", text: $name)
-                        .textFieldStyle(.roundedBorder)
+                        .modalField()
                         .onSubmit(rename)
                         .onChange(of: name) { _, typed in
                             if typed.count > 80 { name = String(typed.prefix(80)) }
@@ -192,17 +192,21 @@ private struct WebhookCard: View {
                             isCopied = false
                         }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
                 }
                 Button("Delete Webhook", role: .destructive) { isDeleting = true }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
                     .tint(Palette.destructive)
                 Spacer()
                 if name != webhook.name, !name.trimmingCharacters(in: .whitespaces).isEmpty {
                     Button("Save Changes", action: rename)
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(Palette.accent)
                         .controlSize(.small)
                 }
             }
@@ -246,7 +250,8 @@ struct FollowedChannelsSection: View {
                             .background(SettingsSurface.controlTrough, in: .circle)
                     } trailing: {
                         Button("Unfollow", role: .destructive) { unfollowing = webhook }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.capsule)
                             .controlSize(.small)
                             .tint(Palette.destructive)
                     }

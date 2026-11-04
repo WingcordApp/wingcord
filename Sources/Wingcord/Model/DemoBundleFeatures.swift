@@ -19,6 +19,9 @@ import WingcordCore
 // | the reader's own indicator, worn | Edit Profile › Typing Indicator |
 // | Discord's experiments: the account's, three servers', the newer ones |
 // |   Settings › Experiments |
+// | the Boost progress bar, partway and travelling from the count last seen |
+// |   head of the channels the demo opens on; met, with its menu, on the |
+// |   first server the reader runs |
 
 extension DemoFixtures {
 
@@ -35,7 +38,9 @@ extension DemoFixtures {
 
         populateExperiments(model, channelRowGuild: crowd.flatMap { model.channelIndex.guildID(of: $0) })
         populateVoiceInvites(model, me: me, own: own, crowd: crowd)
+        populateServerInvite(model, inviter: sharer)
         populateSharedTheme(model, sharer: sharer)
+        populateBoostGoal(model)
 
         // The reader wears one, so the editor opens on a worn indicator and
         // Remove has something to take back.
@@ -58,6 +63,34 @@ extension DemoFixtures {
                 suggestion: .yapping
             ))
         }
+    }
+
+    // MARK: The Boost progress bar
+
+    /// **Two servers.** The one the demo opens on is level 2, three boosts from
+    /// level 3, with the count last seen put back five boosts on every launch
+    /// so the fill is seen to travel rather than only to rest — and the reader
+    /// is no administrator there, so it has no menu. The first server the
+    /// reader owns and runs has met its goal, 🎉 and all, and offers Discord's
+    /// "Enable Progress Bar".
+    private static func populateBoostGoal(_ model: AppModel) {
+        func boost(_ guildID: GuildID, level: Int, count: Int) {
+            guard var guild = model.guilds[guildID] else { return }
+            guild.premiumTier = level
+            guild.premiumSubscriptionCount = count
+            guild.premiumProgressBarEnabled = true
+            model.guilds[guildID] = guild
+        }
+        if let opened = model.selectedGuildID {
+            boost(opened, level: 2, count: 11)
+            BoostGoalMemory.remember(6, for: opened)
+        }
+        let owned = model.orderedGuildIDs.first { guildID in
+            guildID != model.selectedGuildID
+                && model.permissionGate.permissions(inGuild: guildID).contains(.administrator)
+        }
+        if let owned { boost(owned, level: 3, count: 41) }
+        model.sidebarRevision &+= 1
     }
 
     // MARK: Voice invites
@@ -93,6 +126,36 @@ extension DemoFixtures {
                    content: invite.words.isEmpty ? link : "\(invite.words) \(link)")
         }
         model.refreshVoiceInviteRosters()
+    }
+
+    // MARK: A server's invite, with its traits
+
+    /// **Short traits, as servers actually describe themselves**, enough of
+    /// them for the second line and a "+ N more" — the shape that came out as
+    /// one full-width "+ 4 more" before the chips were measured (Alex,
+    /// 2026-10-26). A server the reader is not in, so the card says Join.
+    private static func populateServerInvite(_ model: AppModel, inviter: UserID) {
+        guard let channelID = model.selectedChannelID else { return }
+        let guildID = GuildID(rawValue: 1_400_000_000_000_000_777)
+        let words: [(String, String)] = [
+            ("video_game", "Gaming"), ("pick", "Minecraft"), ("tools", "Modding"),
+            ("speech_balloon", "English"), ("art", "Pixel Art"), ("musical_note", "Music"),
+            ("sparkles", "Events"),
+        ]
+        let traits = words.enumerated().map { GuildTrait(id: $0.offset, emojiName: $0.element.0, label: $0.element.1) }
+        let author = model.users[inviter]
+        let code = "demo-forge"
+        model.inviteLookups[code] = .resolved(InviteCard(
+            code: code, kind: .server, guildID: guildID, name: "Pixel Forge",
+            features: ["COMMUNITY", "DISCOVERABLE"], memberCount: 18_402, onlineCount: 2_847,
+            profile: GuildProfile(
+                id: guildID, name: "Pixel Forge",
+                description: "Mods, maps and pixel art — and the people who make them.",
+                memberCount: 18_402, onlineCount: 2_847, traits: traits, features: ["COMMUNITY", "DISCOVERABLE"]
+            ),
+            inviterID: inviter, inviterName: author?.displayName, inviterUsername: author?.username
+        ))
+        append(in: channelID, model: model, author: inviter, content: "come build with us https://discord.gg/\(code)")
     }
 
     // MARK: A shared theme
@@ -199,6 +262,9 @@ extension DemoFixtures {
             // Badge settings on, Nitro's own badge hideable too — so
             // "Customize your badges" can be tried (Phase 8).
             .init(hash: hash("2026-08-badge-management"), variantID: 1, isOverride: false, revision: 1),
+            // The account half of Server Theme, so the demo's community
+            // servers count the theme's three boosts toward their Boost Goal.
+            .init(hash: hash(AppModel.serverThemeAccountExperiment), variantID: 1, isOverride: false, revision: 2),
         ]
         model.experiments = ExperimentSnapshot(
             user: user,

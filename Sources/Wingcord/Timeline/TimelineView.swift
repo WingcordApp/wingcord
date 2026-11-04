@@ -236,6 +236,12 @@ final class TimelineCoordinator: NSObject {
     /// Posted when the system is short of memory, to every transcript.
     static let shedRecentLayouts = Notification.Name("TimelineCoordinator.shedRecentLayouts")
     private var shedObserver: NSObjectProtocol?
+    /// Posted by the message menu's Look Up, with the channel under
+    /// `channelKey`: the transcript showing it raises macOS's panel over the
+    /// selected words.
+    static let lookUpSelection = Notification.Name("TimelineCoordinator.lookUpSelection")
+    static let channelKey = "channel"
+    private var lookUpObserver: NSObjectProtocol?
     /// highlight.js answering for blocks this transcript drew plain.
     private var highlightObserver: NSObjectProtocol?
 
@@ -360,6 +366,10 @@ final class TimelineCoordinator: NSObject {
                 anchor: canvas.anchorInHostingRoot(rect),
                 inGuild: self.channelID.flatMap { self.model.channelIndex.guildID(of: $0) }
             )
+        }
+        canvas.onOpenCommand = { [weak self] messageID, anchor in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.pressCommandChip(on: messageID, in: channelID, anchor: anchor)
         }
         canvas.onOpenEmoji = { [weak self] emoji, rect in
             guard let self, let canvas = self.canvas else { return }
@@ -516,6 +526,10 @@ final class TimelineCoordinator: NSObject {
         canvas.onHoverAutoModAction = { [weak self] hover in
             guard let self, self.model.autoModActionHover != hover else { return }
             self.model.autoModActionHover = hover
+        }
+        canvas.onHoverEditedMark = { [weak self] hover in
+            guard let self, self.model.editedMarkHover != hover else { return }
+            self.model.editedMarkHover = hover
         }
         canvas.onCardAction = { [weak self] messageID, action, anchor in
             guard let self, let channelID = self.channelID else { return }
@@ -684,6 +698,17 @@ final class TimelineCoordinator: NSObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.recentRowCaches.removeAll() }
         }
+        lookUpObserver = NotificationCenter.default.addObserver(
+            forName: TimelineCoordinator.lookUpSelection,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let channelID = note.userInfo?[TimelineCoordinator.channelKey] as? ChannelID
+            MainActor.assumeIsolated {
+                guard let self, channelID == self.channelID else { return }
+                self.canvas?.lookUpSelection()
+            }
+        }
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -742,7 +767,7 @@ final class TimelineCoordinator: NSObject {
         let center = NotificationCenter.default
         for observer in [
             boundsObserver, frameObserver, scrollBeganObserver, scrollEndedObserver,
-            activationObserver, shedObserver, highlightObserver,
+            activationObserver, shedObserver, highlightObserver, lookUpObserver,
         ] {
             if let observer { center.removeObserver(observer) }
         }
@@ -753,6 +778,7 @@ final class TimelineCoordinator: NSObject {
         activationObserver = nil
         shedObserver = nil
         highlightObserver = nil
+        lookUpObserver = nil
         rowCache.removeAll(keepingCapacity: false)
         alternateRowCache = nil
         recentRowCaches.removeAll()
@@ -789,6 +815,8 @@ final class TimelineCoordinator: NSObject {
         canvas?.onHoverReaction = nil
         canvas?.onHoverMark = nil
         canvas?.onHoverAutoModAction = nil
+        canvas?.onHoverEditedMark = nil
+        canvas?.onOpenCommand = nil
         canvas?.onCardAction = nil
         canvas?.onInviteButton = nil
         canvas?.onOpenInviteChannel = nil

@@ -87,8 +87,8 @@ struct StreamerModePane: View {
                 )
             }
             SettingsFootnote(
-                "Gone from the overlay while Streamer Mode is on — for you as well as for your "
-                    + "stream — and back as they were when it goes off.",
+                "Hidden from the overlay while Streamer Mode is on \u{2014} for you too \u{2014} and back "
+                    + "when it\u{2019}s off.",
                 symbolName: "rectangle.on.rectangle.slash"
             )
         }
@@ -111,9 +111,9 @@ struct StreamerModePane: View {
 
     private var keyNote: String {
         let key = AppSettings.shared.hotkey(for: .toggleStreamerMode)?.displayString
-        let menu = "It is also in the Wingcord menu."
+        let menu = "It\u{2019}s also in the Wingcord menu."
         guard let key else {
-            return "Toggle Streamer Mode has no key yet — give it one in Shortcuts. " + menu
+            return "Toggle Streamer Mode has no key yet \u{2014} give it one in Shortcuts. " + menu
         }
         return "\(key) turns it on and off from anywhere. " + menu
     }

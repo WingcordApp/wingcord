@@ -234,4 +234,29 @@ struct ProfileEditWriteTests {
         #expect(decoration.palette == nil)
         #expect(decoration.isNitroExclusive)
     }
+
+    /// **The purchase decides whether an item locks, not the product** —
+    /// Discord's `gA`: `purchaseType === PREMIUM_PURCHASE` (7). Discord's own
+    /// record reads `purchase_type` beside `premium_type`; a payload without it
+    /// (the capture above) falls back to the product's mark.
+    @Test("Only an item claimed through Nitro is Nitro's to wear")
+    func purchaseTypeDecides() throws {
+        let json = """
+        [
+          {"sku_id":"1","name":"Claimed","type":1,"premium_type":2,"purchase_type":7,
+           "items":[{"type":1,"asset":"effect-a"}]},
+          {"sku_id":"2","name":"Orbs","type":1,"premium_type":0,"purchase_type":12,
+           "items":[{"type":1,"asset":"effect-b"}]},
+          {"sku_id":"3","name":"Quest","type":3,"premium_type":0,"purchase_type":10,
+           "items":[{"type":3,"asset":"frame-c"}]},
+          {"sku_id":"4","name":"Bought","type":0,"premium_type":0,"purchase_type":1,
+           "items":[{"type":0,"asset":"a_deco"}]}
+        ]
+        """
+        let owned = try JSONDecoder()
+            .decode([CollectiblePurchaseDTO].self, from: Data(json.utf8))
+            .compactMap(\.domain)
+        #expect(owned.count == 4)
+        #expect(owned.filter(\.isNitroExclusive).map(\.skuID) == ["1"])
+    }
 }

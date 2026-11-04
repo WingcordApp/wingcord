@@ -49,29 +49,36 @@ struct ChannelPermissionsTab: View {
             privacy(isPrivate: isPrivate)
             AdvancedPermissionsEditor(store: store, model: model, channel: channel)
         }
-        .confirmationDialog(
-            "Sync permissions?",
-            isPresented: $isSyncing
-        ) {
-            Button("Sync Permissions") { sync() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            if let category = parent {
-                Text("Would you like to sync \(model.displayName(of: channel)) permissions with \(category.name)?")
-            }
+        .modal(isPresented: $isSyncing, style: .alert) {
+            ModalAlert(
+                hero: .symbol("arrow.triangle.2.circlepath"),
+                title: "Sync permissions?",
+                message: parent.map { category in
+                    Text("Would you like to sync \(model.displayName(of: channel)) permissions with \(category.name)?")
+                },
+                actions: [
+                    .cancel(),
+                    .act("Sync Permissions", symbol: "arrow.triangle.2.circlepath") { sync() },
+                ]
+            )
         }
-        .confirmationDialog(
-            "Delete Permission Settings",
-            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
+        .modal(
+            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+            style: .alert
         ) {
-            Button("Okay", role: .destructive) {
-                guard let removing else { return }
-                Task { await store.removeOverwrite(removing.id, in: channel.id) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
             if let removing {
-                Text("Are you sure you want to delete \(removing.name) permissions? This action cannot be undone.")
+                ModalAlert(
+                    hero: .symbol("lock.slash.fill"),
+                    title: "Delete Permission Settings",
+                    message: Text("Are you sure you want to delete \(removing.name) permissions? This action cannot be undone."),
+                    actions: [
+                        .cancel(),
+                        // Discord's word; no Return — it cannot be undone.
+                        .act("Okay", symbol: "trash", irreversible: true) {
+                            Task { await store.removeOverwrite(removing.id, in: channel.id) }
+                        },
+                    ]
+                )
             }
         }
     }
@@ -99,7 +106,8 @@ struct ChannelPermissionsTab: View {
                 Spacer(minLength: Spacing.base)
                 if !synced {
                     Button("Sync Now") { isSyncing = true }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
                         .controlSize(.small)
                 }
             }

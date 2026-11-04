@@ -305,36 +305,50 @@ struct ChannelOptionsPresenter: ViewModifier {
             }
             // Discord's delete modal (`572874`): a refusal first where the
             // server needs the channel, otherwise the confirmation.
-            .alert(
-                model.channelDeletion?.title ?? "",
+            .modal(
                 isPresented: Binding(
                     get: { model.channelDeletion != nil },
                     set: { if !$0 { model.channelDeletion = nil } }
                 ),
-                presenting: model.channelDeletion
-            ) { request in
-                if request.refusal == nil {
-                    Button(request.confirmTitle, role: .destructive) { model.confirmChannelDeletion() }
-                    Button("Cancel", role: .cancel) { model.channelDeletion = nil }
-                } else {
-                    Button("Okay", role: .cancel) { model.channelDeletion = nil }
+                style: .alert
+            ) {
+                if let request = model.channelDeletion {
+                    ModalAlert(
+                        hero: .symbol(request.refusal == nil ? "trash.fill" : "exclamationmark.lock.fill"),
+                        title: request.title,
+                        message: Text(request.message),
+                        actions: request.refusal == nil
+                            ? [
+                                .cancel(),
+                                .act(request.confirmTitle, symbol: "trash", irreversible: true) {
+                                    model.confirmChannelDeletion()
+                                },
+                            ]
+                            : [.okay()]
+                    )
                 }
-            } message: { request in
-                Text(request.message)
             }
             // Discord's End Stage from the channel menu.
-            .alert(
-                "Do you want to end the Stage?",
+            .modal(
                 isPresented: Binding(
                     get: { model.stageEnding != nil },
                     set: { if !$0 { model.stageEnding = nil } }
                 ),
-                presenting: model.stageEnding
-            ) { channelID in
-                Button("End Stage", role: .destructive) { model.endStage(inChannel: channelID) }
-                Button("Cancel", role: .cancel) { model.stageEnding = nil }
-            } message: { _ in
-                Text("A Stage with no speakers will automatically end after a few minutes.")
+                style: .alert
+            ) {
+                if let channelID = model.stageEnding {
+                    ModalAlert(
+                        hero: .symbol("person.wave.2.fill"),
+                        title: "Do you want to end the Stage?",
+                        message: Text("A Stage with no speakers will automatically end after a few minutes."),
+                        actions: [
+                            .cancel(),
+                            .act("End Stage", symbol: "stop.circle", irreversible: true) {
+                                model.endStage(inChannel: channelID)
+                            },
+                        ]
+                    )
+                }
             }
     }
 }

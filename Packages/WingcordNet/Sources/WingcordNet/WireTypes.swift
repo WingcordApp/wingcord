@@ -649,6 +649,8 @@ struct GuildDTO: Decodable, Sendable {
     var owner_id: UserID?
     var premium_tier: Int?
     var premium_subscription_count: Int?
+    /// Whether the channel list shows the server's Boost progress bar.
+    var premium_progress_bar_enabled: Bool?
     var features: [String]?
     var member_count: Int?
     var rules_channel_id: ChannelID?
@@ -726,6 +728,10 @@ struct GuildDTO: Decodable, Sendable {
         var splash: String?
         var owner_id: UserID?
         var premium_tier: Int?
+        /// Nested here on READY too — §5.9. The count was read from the top
+        /// level only, so on READY every server counted zero boosts.
+        var premium_subscription_count: Int?
+        var premium_progress_bar_enabled: Bool?
         var features: [String]?
         var rules_channel_id: ChannelID?
         var public_updates_channel_id: ChannelID?
@@ -777,7 +783,7 @@ struct GuildDTO: Decodable, Sendable {
     }
 
     var domain: Guild {
-        Guild(
+        var guild = Guild(
             id: id,
             name: name ?? properties?.name ?? "Unknown",
             iconHash: icon ?? properties?.icon,
@@ -785,7 +791,7 @@ struct GuildDTO: Decodable, Sendable {
             splashHash: splash ?? properties?.splash,
             ownerID: owner_id ?? properties?.owner_id ?? UserID(rawValue: 0),
             premiumTier: premium_tier ?? properties?.premium_tier ?? 0,
-            premiumSubscriptionCount: premium_subscription_count ?? 0,
+            premiumSubscriptionCount: premium_subscription_count ?? properties?.premium_subscription_count ?? 0,
             features: Set(features ?? properties?.features ?? []),
             tag: profile?.tag ?? properties?.profile?.tag,
             tagBadgeHash: profile?.badge ?? properties?.profile?.badge,
@@ -809,6 +815,9 @@ struct GuildDTO: Decodable, Sendable {
             maxStageVideoUsers: max_stage_video_channel_users
                 ?? properties?.max_stage_video_channel_users
         )
+        guild.premiumProgressBarEnabled = premium_progress_bar_enabled
+            ?? properties?.premium_progress_bar_enabled ?? false
+        return guild
     }
 }
 
@@ -2039,7 +2048,17 @@ struct UserProfileDTO: Decodable, Sendable {
             if withGuildLayer, let value = guild_member_profile.flatMap(path) { return value }
             return user_profile.flatMap(path)
         }
-        let bio = pick(\.bio).flatMap { $0.isEmpty ? nil : $0 }
+        /// A text field, where **empty is the server saying nothing**: Discord
+        /// sends `"pronouns": ""` on the server's layer for a member who set
+        /// none there, and its client shows the account's through
+        /// (`isUsingGuildMemberPronouns`: not null and not `""`; the bio's rule
+        /// is the same). Taken as the server's answer, the empty string hid the
+        /// account's pronouns on every server profile.
+        func pickText(_ path: (ProfileLayer) -> String?) -> String? {
+            if withGuildLayer, let value = guild_member_profile.flatMap(path), !value.isEmpty { return value }
+            return user_profile.flatMap(path).flatMap { $0.isEmpty ? nil : $0 }
+        }
+        let bio = pickText(\.bio)
         let theme = pick(\.theme_colors).flatMap { $0.isEmpty ? nil : $0 }
         let effectSKU: String? = pick { $0.profile_effect?.sku_id }
         // **Hoisted out of the initialiser, and not for tidiness.** This call
@@ -2077,7 +2096,7 @@ struct UserProfileDTO: Decodable, Sendable {
             profileEffectSKU: effectSKU,
             profileFrameSKU: frameSKU,
             wornCollectibles: worn,
-            pronouns: pick(\.pronouns).flatMap { $0.isEmpty ? nil : $0 },
+            pronouns: pickText(\.pronouns),
             connectedAccounts: connected_accounts?.compactMap(\.domain) ?? [],
             premiumTier: premium_type.flatMap { PremiumTier(rawValue: $0) } ?? .none,
             premiumSince: premium_since.flatMap(Self.date(from:)),

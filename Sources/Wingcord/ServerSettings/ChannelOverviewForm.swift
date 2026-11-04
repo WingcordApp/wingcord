@@ -31,7 +31,7 @@ struct ChannelOverviewForm: View {
     var body: some View {
         SheetField(title: isCategory ? "Category Name" : "Channel Name", isRequired: true) {
             TextField("", text: $overview.name)
-                .textFieldStyle(.roundedBorder)
+                .modalField()
                 .accessibilityLabel(Text(isCategory ? "Category Name" : "Channel Name"))
         }
 
@@ -85,7 +85,7 @@ struct ChannelOverviewForm: View {
                     ),
                     axis: .vertical
                 )
-                .textFieldStyle(.roundedBorder)
+                .modalField()
                 .lineLimit(3...8)
                 // Discord's counter is the room left, not the room used.
                 Text("\(topicLimit - overview.topic.count)")

@@ -292,7 +292,8 @@ struct StageRequestsSidebar: View {
                 Image(systemName: member.isInvited ? "checkmark" : "mic.fill")
                     .frame(width: 28, height: 28)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .buttonBorderShape(.circle)
             .disabled(member.isInvited)
             .help(inviteTitle)
@@ -301,7 +302,8 @@ struct StageRequestsSidebar: View {
                 Image(systemName: "xmark")
                     .frame(width: 28, height: 28)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .buttonBorderShape(.circle)
             .help("Dismiss")
             .accessibilityLabel(Text("Dismiss"))

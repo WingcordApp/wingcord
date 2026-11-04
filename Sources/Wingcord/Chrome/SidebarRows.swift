@@ -1,11 +1,12 @@
+import AppKit
 import SwiftUI
 import WingcordCore
 
 /// A channel.
 ///
-/// **A row of the system sidebar list.** The list draws the selection, the
-/// list's selection is what opens the channel, and the row draws only what is
-/// its own — so the highlight, the keyboard and VoiceOver are the system's.
+/// **A row of the system sidebar list.** The list's selection is what opens
+/// the channel, so the keyboard and VoiceOver are the system's; the highlight
+/// is the row's own neutral lift (`sidebarRowHighlight`), never the accent.
 ///
 /// Unread bolds the name rather than adding a second mark. A dot beside a
 /// brighter, heavier name is two marks saying the same thing, and the one that
@@ -115,8 +116,8 @@ struct SidebarChannelRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
             .background {
-                // **The plate lies exactly on the system's highlight**, which
-                // is drawn behind the row; see `SidebarRowGeometry`.
+                // **The plate lies exactly on the row's highlight**, which is
+                // drawn behind it; see `SidebarRowGeometry`.
                 if let url = channel.nameplateURL, isPlateShown {
                     SidebarNameplate(
                         still: url,
@@ -133,6 +134,7 @@ struct SidebarChannelRow: View {
                     .transition(.opacity)
                 }
             }
+            .sidebarRowHighlight(isSelected: isSelected, isHovering: isHovering)
             .onHover { hovering in
                 guard isHovering != hovering else { return }
                 isHovering = hovering
@@ -560,6 +562,75 @@ enum SidebarRowGeometry {
     static let highlightOutset = EdgeInsets(top: -2, leading: -6, bottom: -2, trailing: -6)
 }
 
+/// The sidebar's two lifts — the chosen row and the row under the pointer.
+///
+/// **White in a dark room, black in a light one, and never the accent**
+/// (Alex, 2026-10-26: "getting rid of this blue accent"). The rail's expanded
+/// server list already lit its rows this way, so the conversations, the
+/// channels and the servers now share one vocabulary.
+nonisolated enum SidebarHighlight {
+    static let selection = Color.relative(dark: 0.14, light: 0.10)
+    static let hover = Color.relative(dark: 0.08, light: 0.06)
+}
+
+extension View {
+    /// The row's own highlight, where the system's would have been — on
+    /// `SidebarRowGeometry`'s outset and `Radius.row`, so a nameplate laid on
+    /// the same rect lies exactly on it.
+    ///
+    /// **The list's own highlight is switched off by the same modifier**
+    /// (`SystemSelectionHighlightSuppressor`). The list still owns the
+    /// selection — arrows, type-select, Full Keyboard Access and VoiceOver's
+    /// "selected" are the system's — and only the paint is ours.
+    func sidebarRowHighlight(isSelected: Bool, isHovering: Bool = false) -> some View {
+        background {
+            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                .fill(isSelected ? SidebarHighlight.selection : isHovering ? SidebarHighlight.hover : .clear)
+                .padding(SidebarRowGeometry.highlightOutset)
+                .background { SystemSelectionHighlightSuppressor() }
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// Turns off the system's selection highlight on the list the row is in.
+///
+/// **Set on the table itself, from inside a row**, because that is the one
+/// place that can only ever reach its own list: a view in a row walks up to
+/// the outline view SwiftUI's `List` is built on (`SwiftUIOutlineListView`) and
+/// sets `selectionHighlightStyle = .none` — measured in a probe to stick across
+/// updates, with the arrow keys still moving the selection. Neither `.tint`
+/// nor `listRowBackground` removes the blue; the first is ignored and the
+/// second only lightens it.
+///
+/// **Before the first draw.** A row drawn while the style was still the
+/// system's keeps the emphasized look after it is deselected — the probe's
+/// second row stayed white-and-bold — so the suppressor sits in every row
+/// and acts the moment the row is placed in the window.
+struct SystemSelectionHighlightSuppressor: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Anchor() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class Anchor: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            var ancestor = superview
+            while let view = ancestor {
+                if let table = view as? NSTableView {
+                    if table.selectionHighlightStyle != .none {
+                        table.selectionHighlightStyle = .none
+                    }
+                    return
+                }
+                ancestor = view.superview
+            }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
 /// A category's section header in the sidebar list.
 ///
 /// **Plain text and a disclosure chevron**, the way a sidebar heads a group.
@@ -638,6 +709,9 @@ struct SidebarActionRow: View {
     var count = 0
     var isSelected: Bool
 
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
     var body: some View {
             HStack(spacing: Spacing.base) {
                 Image(symbol: symbolName)
@@ -660,6 +734,12 @@ struct SidebarActionRow: View {
             .frame(minHeight: Metrics.sidebarRowContent, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
+            .sidebarRowHighlight(isSelected: isSelected, isHovering: isHovering)
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                isHovering = hovering
+            }
+            .animation(motion.hover, value: isHovering)
             // Discord's own label for the requests row: "Message Requests — 2".
             .accessibilityLabel(Text(count > 0 ? "\(title) \u{2014} \(count)" : title))
             .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -754,6 +834,9 @@ struct SidebarThreadRow: View {
     /// channel names.
     private static let hookInset: CGFloat = Spacing.base + 7
 
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
     var body: some View {
             HStack(spacing: Spacing.base) {
                 hook
@@ -772,6 +855,12 @@ struct SidebarThreadRow: View {
             .frame(minHeight: Metrics.sidebarRowContent, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
+            .sidebarRowHighlight(isSelected: isSelected, isHovering: isHovering)
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                isHovering = hovering
+            }
+            .animation(motion.hover, value: isHovering)
             .modifier(SecondaryClickModifier(openMenu: openMenu))
             .accessibilityLabel(Text("Thread, \(thread.name)"))
             .accessibilityAddTraits(isSelected ? .isSelected : [])

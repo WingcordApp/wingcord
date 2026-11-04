@@ -18,7 +18,7 @@ import WingcordNet
 @Observable
 final class CaptchaSolver {
 
-    /// The challenge on screen, shaped for `.sheet(item:)`.
+    /// The challenge on screen, shaped for `.modal(item:)`.
     struct Pending: Identifiable, Equatable {
         let id: UUID
         let challenge: CaptchaChallenge
@@ -154,7 +154,7 @@ private struct CaptchaHostModifier: ViewModifier {
         return content
             .onAppear { solver?.register(id) }
             .onDisappear { solver?.deregister(id) }
-            .sheet(
+            .modal(
                 item: Binding(
                     get: { mine },
                     set: { if $0 == nil, let mine { solver?.resolve(mine.id, with: nil) } }

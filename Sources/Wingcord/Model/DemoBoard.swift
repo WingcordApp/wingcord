@@ -19,6 +19,7 @@ extension DemoFixtures {
     /// grid, and one linked-game widget with character art and six stats.
     static func populateBoard(_ model: AppModel, owner: UserID) {
         for game in games { model.games[game.id] = game }
+        populateCommunities(model)
 
         // **The board's owner is themed**, because the stage's whole surface is
         // lit from `ProfileGround` and an unthemed fixture can only ever show
@@ -237,6 +238,43 @@ extension DemoFixtures {
                 isVerified: true
             ),
         ]
+    }
+
+    // MARK: A game's communities
+
+    /// **The Sims lists six servers**, so its profile has a Communities tab —
+    /// one of them a server the fixture is in, so "Go to" shows beside
+    /// "Preview", and three languages, so the filter has something to filter.
+    /// Seeded as answered: `--demo` asks the route nothing.
+    private static func populateCommunities(_ model: AppModel) {
+        let specs: [(String, String?, Int, Int, String, Bool)] = [
+            ("Simmers United", "The biggest place to share builds, stories and mods for The Sims 4.", 287_869, 60_480, "en-US", true),
+            ("Sims Builders Guild", "Lots, rooms and speed builds — post yours and steal everyone else's ideas.", 97_929, 27_544, "en-US", false),
+            ("Les Sims France", "La communauté francophone des Sims : défis, constructions et entraide.", 30_808, 9_452, "fr", false),
+            ("Legacy Challenge Club", "Ten generations, one family, endless chaos. Rules, scoreboards and support.", 13_235, 2_694, "en-US", false),
+            ("Sims Deutschland", "Alles rund um Die Sims 4 — Bauen, Mods und gemeinsame Challenges.", 11_280, 3_172, "de", false),
+        ]
+        var ids: [GuildID] = []
+        for (offset, spec) in specs.enumerated() {
+            let id = GuildID(rawValue: 9_500 + UInt64(offset))
+            ids.append(id)
+            model.communityGuilds[id] = DiscoverableGuild(
+                id: id, name: spec.0, description: spec.1,
+                features: spec.5 ? ["DISCOVERABLE", "PREVIEW_ENABLED", "VERIFIED"] : ["DISCOVERABLE", "PREVIEW_ENABLED"],
+                memberCount: spec.2, onlineCount: spec.3, preferredLocale: spec.4
+            )
+            model.communityGuildsFetchedAt[id] = .now
+        }
+        if let joined = model.guilds.keys.sorted(by: { $0.rawValue < $1.rawValue }).first, let guild = model.guilds[joined] {
+            ids.insert(joined, at: 1)
+            model.communityGuilds[joined] = DiscoverableGuild(
+                id: joined, name: guild.name, description: "You're already in this one, so its card takes you there.",
+                features: ["DISCOVERABLE", "PREVIEW_ENABLED"], memberCount: guild.memberCount ?? 4_200, onlineCount: 610,
+                preferredLocale: "en-US"
+            )
+            model.communityGuildsFetchedAt[joined] = .now
+        }
+        model.games[sims]?.communityGuildIDs = ids
     }
 
     // MARK: The applications

@@ -28,7 +28,6 @@ struct AddConnectionSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider().overlay(Palette.railHairline)
             LazyVGrid(
                 columns: [
                     GridItem(
@@ -43,31 +42,18 @@ struct AddConnectionSheet: View {
                     tile(service)
                 }
             }
-            .padding(Spacing.group)
+            .padding(.horizontal, Spacing.group)
+            .padding(.bottom, Spacing.group)
         }
         .frame(width: 520)
-        .background(Palette.surface)
-        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
     }
 
     private var header: some View {
-        HStack {
-            Text("Add Connection")
-                .font(.system(.title3, weight: .bold))
-                .foregroundStyle(InkColor.primary)
-            Spacer(minLength: Spacing.margin)
-            Button(action: dismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(.caption, weight: .bold))
-                    .foregroundStyle(InkColor.secondary)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Close"))
-        }
-        .padding(.horizontal, Spacing.group)
-        .padding(.vertical, Spacing.margin)
+        ModalHeader(
+            title: "Add Connection",
+            subtitle: Text("Link an account to show it on your profile."),
+            close: dismiss
+        )
     }
 
     private func tile(_ service: String) -> some View {

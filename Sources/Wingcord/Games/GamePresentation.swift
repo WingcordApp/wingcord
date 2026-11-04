@@ -50,9 +50,13 @@ struct GamePresentation: Equatable, Sendable {
     var announcementsChannel: (guildID: GuildID, channelID: ChannelID)?
     var similar: [BoardGame]
     var isLoading: Bool
+    /// Whether the profile has a Communities tab — the game lists three
+    /// servers or more (`AppModel.communitiesThreshold`).
+    var hasCommunities = false
 
     static func == (lhs: GamePresentation, rhs: GamePresentation) -> Bool {
         lhs.gameID == rhs.gameID
+            && lhs.hasCommunities == rhs.hasCommunities
             && lhs.name == rhs.name
             && lhs.genreLine == rhs.genreLine
             && lhs.summary == rhs.summary

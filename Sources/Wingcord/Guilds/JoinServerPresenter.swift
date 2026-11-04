@@ -26,7 +26,7 @@ struct JoinServerPresenter: ViewModifier {
         let sheet = model.joinServerSheet
 
         return content
-            .sheet(isPresented: sheetBinding) {
+            .modal(isPresented: sheetBinding) {
                 if let sheet {
                     JoinServerSheet(
                         state: sheet,

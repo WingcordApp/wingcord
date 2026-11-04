@@ -10,6 +10,26 @@ struct DiscoveryEnvelopeTests {
     /// failing.** The browse route sends `total` and the search route sends
     /// `total_count`; a decoder written for one and pointed at the other reads
     /// zero and reports "no results" over a full page of them.
+    /// A game profile's Communities (`c82450…`): every id as a key of its own
+    /// on the browse route, the browse envelope back, and each server's
+    /// `preferred_locale` kept for the tab's language filter.
+    @Test("Communities ask by id, one key each, and keep each server's language")
+    func communitiesByID() async throws {
+        let (rest, token) = await RequestRecorder.client(body: """
+        {"total": 2, "offset": 0, "guilds": [
+          {"id":"10","name":"Cyberpunk 2077","features":["VERIFIED"],"preferred_locale":"en-US",
+           "approximate_member_count":287869,"approximate_presence_count":60480},
+          {"id":"11","name":"Night City Reborn","preferred_locale":"",
+           "approximate_member_count":11280,"approximate_presence_count":3172}]}
+        """)
+        let guilds = try await rest.discoverableGuilds(ids: [GuildID(rawValue: 10), GuildID(rawValue: 11)])
+        let request = try #require(RequestRecorder.requests(for: token).first)
+        #expect(request.path == "/api/v9/discoverable-guilds")
+        #expect(request.queryItems.filter { $0.name == "guild_ids" }.map(\.value) == ["10", "11"])
+        #expect(guilds.map(\.preferredLocale) == ["en-US", nil])
+        #expect(guilds.first?.onlineCount == 60_480)
+    }
+
     @Test("The browse envelope and the search envelope both decode")
     func bothEnvelopesDecode() throws {
         let browse = Data("""

@@ -31,7 +31,10 @@ struct JoinServerSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            ModalHeader(
+                title: "Join a Server",
+                subtitle: Text("Enter an invite below to join an existing server.")
+            )
             field
             preview
             footer
@@ -53,22 +56,6 @@ struct JoinServerSheet: View {
         // covers the window root — so without a host here the challenge has
         // nowhere to appear and the join reports Discord's rejection instead.
         .captchaHost()
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: Spacing.tight) {
-            Text("Join a Server")
-                .font(.system(.title3, weight: .bold))
-                .foregroundStyle(Ink.primary)
-            Text("Enter an invite below to join an existing server.")
-                .font(.system(.callout))
-                .foregroundStyle(Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Spacing.group)
-        .padding(.top, Spacing.group)
-        .padding(.bottom, Spacing.margin)
     }
 
     private var field: some View {
@@ -95,15 +82,8 @@ struct JoinServerSheet: View {
                 }
             }
             .padding(.horizontal, Spacing.snug)
-            .frame(height: Metrics.control + Spacing.snug)
-            .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.chip, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                    .strokeBorder(
-                        isFieldFocused ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.quaternary),
-                        lineWidth: 1
-                    )
-            }
+            .frame(height: Metrics.composerControlHeight)
+            .modalFieldGround(isFocused: isFieldFocused)
             .animation(motion.fadeQuick, value: isFieldFocused)
             .accessibilityLabel("Invite link")
 
@@ -113,7 +93,7 @@ struct JoinServerSheet: View {
             if state.preview == nil {
                 Text(verbatim: "hTKzmak · discord.gg/hTKzmak · discord.com/invite/hTKzmak")
                     .font(.system(.caption))
-                    .foregroundStyle(Ink.tertiary)
+                    .foregroundStyle(Ink.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
                     .transition(.opacity)
@@ -155,18 +135,22 @@ struct JoinServerSheet: View {
     }
 
     private var footer: some View {
-        HStack(spacing: Spacing.base) {
-            SurfaceQuietButton(title: "Cancel", systemImage: nil, action: dismiss)
-                .keyboardShortcut(.cancelAction)
-            Spacer(minLength: Spacing.base)
-            if state.isJoining {
-                ProgressView().controlSize(.small)
-            }
-            SurfaceFilledButton(title: "Join Server", systemImage: nil, action: join)
+        GlassEffectContainer(spacing: Spacing.snug) {
+            HStack(spacing: Spacing.snug) {
+                ModalButton(title: "Cancel", symbolName: "xmark", role: .cancel, action: dismiss)
+                Spacer(minLength: Spacing.base)
+                ModalButton(
+                    title: "Join Server",
+                    symbolName: "arrow.right.circle.fill",
+                    role: .act,
+                    isWorking: state.isJoining,
+                    action: join
+                )
                 .disabled(!state.canJoin)
-                .keyboardShortcut(.defaultAction)
+            }
         }
-        .padding(Spacing.group)
+        .padding(Spacing.margin)
+        .padding(.top, Spacing.tight)
         .animation(motion.fadeQuick, value: state.canJoin)
     }
 }

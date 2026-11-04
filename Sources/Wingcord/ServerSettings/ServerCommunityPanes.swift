@@ -114,7 +114,8 @@ struct CommunityPane: View {
                             disable(settings)
                         }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
                     .tint(Palette.destructive)
                     .disabled(!isAdmin)
@@ -122,11 +123,16 @@ struct CommunityPane: View {
                 }
             }
         }
-        .confirmationDialog("Are you sure?", isPresented: $isDisabling) {
-            Button("Confirm", role: .destructive) { disable(settings) }
-            Button("Never Mind", role: .cancel) {}
-        } message: {
-            Text("Disabling Community will also remove your server from Server Discovery.")
+        .modal(isPresented: $isDisabling, style: .alert) {
+            ModalAlert(
+                hero: .symbol("person.3.sequence.fill"),
+                title: "Are you sure?",
+                message: Text("Disabling Community will also remove your server from Server Discovery."),
+                actions: [
+                    .cancel("Never Mind"),
+                    .act("Confirm", symbol: "checkmark", irreversible: true) { disable(settings) },
+                ]
+            )
         }
     }
 
@@ -303,7 +309,9 @@ struct TemplatePane: View {
                     HStack {
                         Spacer()
                         Button("Generate Template") { commit(nil) }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.glassProminent)
+                            .buttonBorderShape(.capsule)
+                            .tint(Palette.accent)
                             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                     .padding(.top, Spacing.margin)
@@ -364,7 +372,8 @@ struct TemplatePane: View {
                             NSPasteboard.general.setString(url.absoluteString, forType: .string)
                             copied = true
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
                         .controlSize(.small)
                     }
                 }
@@ -555,7 +564,9 @@ struct EnableCommunityCard: View {
                         )
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
+                .tint(Palette.accent)
                 .disabled(!hasAgreed || !requiresVerifiedEmail || !scansAllMedia)
             }
             .padding(.top, Spacing.margin)

@@ -288,15 +288,23 @@ struct PlayfulColourPicker: View {
 
     private var hueRail: some View {
         GeometryReader { proxy in
-            let width = proxy.size.width
+            let width = max(proxy.size.width, 1)
+            // **The rail's 0 and 1 are the centres of its two round ends**, not
+            // its edges: a notch at hue 0 drawn at the very edge hung half out
+            // of the capsule (Alex's screenshot 18), and so did the thumb. The
+            // gradient, the notches, the thumb and the pointer all use this one
+            // inset scale, so what is under the thumb is the colour it reports.
+            let inset = Self.railHeight / 2
+            let usable = max(width - 2 * inset, 1)
+            let x = { (fraction: Double) in inset + fraction * usable }
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(.linearGradient(
                         colors: stride(from: 0.0, through: 1.0, by: 1.0 / 12).map {
                             Color(hex: HSBColour(hue: $0, saturation: 1, brightness: 1).rgb)
                         },
-                        startPoint: .leading,
-                        endPoint: .trailing
+                        startPoint: UnitPoint(x: inset / width, y: 0.5),
+                        endPoint: UnitPoint(x: 1 - inset / width, y: 0.5)
                     ))
                     .overlay { Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1) }
                 // The notches, faintly — the reader can see where the rail will
@@ -305,7 +313,7 @@ struct PlayfulColourPicker: View {
                     Circle()
                         .fill(.white.opacity(detent == mark ? 0.95 : 0.5))
                         .frame(width: 3, height: 3)
-                        .position(x: mark.hue * width, y: Self.railHeight / 2)
+                        .position(x: x(mark.hue), y: Self.railHeight / 2)
                 }
                 Circle()
                     .fill(Color(hex: HSBColour(hue: hsb.hue, saturation: 1, brightness: 1).rgb))
@@ -314,7 +322,7 @@ struct PlayfulColourPicker: View {
                     .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
                     .scaleEffect(isDraggingHue ? 1.25 : 1)
                     .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.55), value: isDraggingHue)
-                    .position(x: railPosition * width, y: Self.railHeight / 2)
+                    .position(x: x(railPosition), y: Self.railHeight / 2)
                     .allowsHitTesting(false)
             }
             .contentShape(.rect)
@@ -323,7 +331,7 @@ struct PlayfulColourPicker: View {
                     .onChanged { value in
                         if !isDraggingHue { isDraggingHue = true }
                         if drivesWithKeys { drivesWithKeys = false }
-                        let settled = HueDetent.settle(value.location.x / max(width, 1))
+                        let settled = HueDetent.settle((value.location.x - inset) / usable)
                         if settled.detent != detent {
                             detent = settled.detent
                             if settled.detent != nil { Haptics.tick() }

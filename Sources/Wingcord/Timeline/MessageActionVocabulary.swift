@@ -22,6 +22,9 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     case copySelection
     /// The selected words in a Google search — Discord's, beside Copy.
     case searchWithGoogle
+    /// macOS's Look Up over the selected words — the dictionary's panel, as
+    /// every text view's menu offers it.
+    case lookUp
     case copyText
     case pin
     case unpin
@@ -55,6 +58,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         // Discord's `OpuAlK` and `Rd/Mko`.
         case .copySelection: "Copy"
         case .searchWithGoogle: "Search with Google"
+        case .lookUp: "Look Up"
         case .copyText: "Copy Text"
         case .pin: "Pin Message"
         case .unpin: "Unpin Message"
@@ -82,6 +86,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .edit: "pencil"
         case .copySelection: "doc.on.doc"
         case .searchWithGoogle: "magnifyingglass"
+        case .lookUp: "character.book.closed"
         case .copyText: "doc.on.doc"
         case .pin: "pin"
         case .unpin: "pin.slash"
@@ -125,7 +130,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .edit: .edit
         // **Gated on a selection, not a permission** — the presenter offers
         // them only when the right-click carried one.
-        case .copySelection, .searchWithGoogle: nil
+        case .copySelection, .searchWithGoogle, .lookUp: nil
         case .copyText: .copyText
         case .pin: .pin
         case .unpin: .unpin

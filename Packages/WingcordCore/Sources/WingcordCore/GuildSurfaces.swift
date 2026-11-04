@@ -557,6 +557,10 @@ public struct GameServer: Hashable, Sendable, Identifiable {
     /// From `game_config`: the game and the build it runs.
     public var gameName: String?
     public var gameVersion: String?
+    /// The game itself, as an application — `game_id`. **What its cover is
+    /// found by**: Discord's card draws the game's box art from it, beside
+    /// the name and behind the card's top (`857c39fb0e666a71.js`).
+    public var gameID: ApplicationID?
     /// The hosting provider's own control panel. Opened in a browser, because
     /// it is somebody else's site and this client has no business rendering it.
     public var providerURL: URL?
@@ -578,6 +582,7 @@ public struct GameServer: Hashable, Sendable, Identifiable {
         maxPlayers: Int = 0,
         gameName: String? = nil,
         gameVersion: String? = nil,
+        gameID: ApplicationID? = nil,
         providerURL: URL? = nil,
         scheduledAction: String? = nil,
         scheduledActionAt: Date? = nil
@@ -594,6 +599,7 @@ public struct GameServer: Hashable, Sendable, Identifiable {
         self.maxPlayers = maxPlayers
         self.gameName = gameName
         self.gameVersion = gameVersion
+        self.gameID = gameID
         self.providerURL = providerURL
         self.scheduledAction = scheduledAction
         self.scheduledActionAt = scheduledActionAt

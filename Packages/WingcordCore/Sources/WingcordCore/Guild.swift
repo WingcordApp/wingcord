@@ -18,6 +18,9 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// Discord's boost tier, 0-3. Decides whether the guild can have a banner.
     public var premiumTier: Int
     public var premiumSubscriptionCount: Int
+    /// Whether the channel list shows the Boost progress bar —
+    /// `premium_progress_bar_enabled`, the Boost Perks page's switch.
+    public var premiumProgressBarEnabled = false
     /// Feature flags, as Discord's uppercase strings. A `Set` because every read
     /// is a membership test.
     public var features: Set<String>

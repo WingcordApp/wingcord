@@ -319,36 +319,49 @@ struct ThreadOptionsPresenter: ViewModifier {
                 .environment(model)
                 .presentationBackground(.clear)
             }
-            .alert(
-                model.threadDeletion?.deletion.title ?? "",
+            // Discord's delete confirmation, as a card: chosen, so the act's
+            // colour, and no Return — it cannot be undone (D11b).
+            .modal(
                 isPresented: Binding(
                     get: { model.threadDeletion != nil },
                     set: { if !$0 { model.threadDeletion = nil } }
                 ),
-                presenting: model.threadDeletion
-            ) { request in
-                Button(request.deletion.title, role: .destructive) { model.confirmThreadDeletion() }
-                Button("Cancel", role: .cancel) { model.threadDeletion = nil }
-            } message: { request in
-                Text(request.deletion.message(name: request.name))
+                style: .alert
+            ) {
+                if let request = model.threadDeletion {
+                    ModalAlert(
+                        hero: .symbol("trash.fill"),
+                        title: request.deletion.title,
+                        message: Text(request.deletion.message(name: request.name)),
+                        actions: [
+                            .cancel(),
+                            .act(request.deletion.title, symbol: "trash", irreversible: true) {
+                                model.confirmThreadDeletion()
+                            },
+                        ]
+                    )
+                }
             }
-            // Discord's has "Okay" alone and is dismissed by closing it. An
-            // alert here has no close box, so its way out is a Cancel button —
-            // Discord's word for it everywhere else.
-            .alert(
-                "Pin this post?",
+            // Discord's has "Okay" alone and is dismissed by closing it; a card
+            // keeps Cancel beside it — Discord's word for it everywhere else.
+            .modal(
                 isPresented: Binding(
                     get: { model.pinReplacement != nil },
                     set: { if !$0 { model.pinReplacement = nil } }
                 ),
-                presenting: model.pinReplacement
-            ) { _ in
-                Button("Okay") { model.confirmPinReplacement() }
-                Button("Cancel", role: .cancel) { model.pinReplacement = nil }
-            } message: { _ in
-                Text("There\u{2019}s a post that\u{2019}s pinned already. Pinning this post will remove the existing pinned post.")
+                style: .alert
+            ) {
+                ModalAlert(
+                    hero: .symbol("pin.fill"),
+                    title: "Pin this post?",
+                    message: Text("There\u{2019}s a post that\u{2019}s pinned already. Pinning this post will remove the existing pinned post."),
+                    actions: [
+                        .cancel(),
+                        .act("Okay", symbol: "pin") { model.confirmPinReplacement() },
+                    ]
+                )
             }
-            .sheet(item: $model.threadEditor) { request in
+            .modal(item: $model.threadEditor) { request in
                 ThreadEditSheet(request: request)
                     .environment(model)
             }

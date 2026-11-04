@@ -49,6 +49,13 @@ struct DisplayNameStyleFlyout: View {
             .disabled(editor.displayNameStyle == nil)
         } content: {
             preview
+            if !editor.appliesNameStyle {
+                // Said once, plainly — a try-on, never an upsell.
+                Label(ProfileEditCapability.nameStyleNote, systemImage: "sparkles")
+                    .font(.system(.caption, weight: .medium))
+                    .foregroundStyle(InkColor.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.margin) {
                     fontGrid

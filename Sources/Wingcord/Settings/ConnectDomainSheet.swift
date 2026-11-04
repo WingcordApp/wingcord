@@ -100,28 +100,23 @@ struct ConnectDomainSheet: View {
     }
 
     private var footer: some View {
-        HStack(spacing: Spacing.base) {
-            SurfaceQuietButton(title: currentProof == nil ? "Cancel" : "Close", systemImage: nil) {
-                model.sessionController.dismissDomainConnectionSheet()
-            }
-            .keyboardShortcut(.cancelAction)
-            Spacer(minLength: 0)
-            if isVerifying || isSubmitting {
-                ProgressView().controlSize(.small)
-            }
-            if currentProof == nil {
-                SurfaceFilledButton(title: "Continue", systemImage: nil, action: submit)
-                    .disabled(domainText.trimmingCharacters(in: .whitespaces).isEmpty || isSubmitting)
-                    .keyboardShortcut(.defaultAction)
-            } else {
-                SurfaceFilledButton(title: "Verify", systemImage: nil) {
-                    model.sessionController.retryDomainVerification()
+        GlassEffectContainer(spacing: Spacing.snug) {
+            HStack(spacing: Spacing.snug) {
+                ModalButton(title: currentProof == nil ? "Cancel" : "Close", symbolName: "xmark", role: .cancel) {
+                    model.sessionController.dismissDomainConnectionSheet()
                 }
-                .disabled(isVerifying)
-                .keyboardShortcut(.defaultAction)
+                Spacer(minLength: 0)
+                if currentProof == nil {
+                    ModalButton(title: "Continue", symbolName: "arrow.right", role: .act, isWorking: isSubmitting, action: submit)
+                        .disabled(domainText.trimmingCharacters(in: .whitespaces).isEmpty)
+                } else {
+                    ModalButton(title: "Verify", symbolName: "checkmark.seal", role: .act, isWorking: isVerifying) {
+                        model.sessionController.retryDomainVerification()
+                    }
+                }
             }
         }
-        .padding(Spacing.group)
+        .padding(Spacing.margin)
     }
 
     private func submit() {

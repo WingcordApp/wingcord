@@ -11,13 +11,13 @@ struct WelcomeScreenSheet: View {
     var presentation: WelcomeScreenPresentation
     var openChannel: (ChannelID) -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
 
     private static let iconSide: CGFloat = 64
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            ModalHeader(title: "Explore the Server", close: { dismiss() })
             ScrollView {
                 content
                     .padding(.horizontal, Spacing.group)
@@ -29,30 +29,6 @@ struct WelcomeScreenSheet: View {
             footer
         }
         .frame(width: 440)
-        .background(Palette.surface)
-    }
-
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text("Explore the Server")
-                .font(.system(.title3, weight: .semibold))
-                .foregroundStyle(Ink.primary)
-                .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: Spacing.base)
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Ink.secondary)
-            .keyboardShortcut(.cancelAction)
-            .accessibilityLabel(Text("Close"))
-        }
-        .padding(.horizontal, Spacing.group)
-        .padding(.top, Spacing.group)
-        .padding(.bottom, Spacing.margin)
     }
 
     private var content: some View {
@@ -100,20 +76,14 @@ struct WelcomeScreenSheet: View {
     private var footer: some View {
         HStack {
             Spacer(minLength: 0)
-            Button { dismiss() } label: {
-                Text("I'll just look around for now")
-                    .font(.system(.body, weight: .medium))
-                    .padding(.horizontal, Spacing.group)
-                    .frame(height: Metrics.composerControlHeight)
-                    .background(Palette.surfaceRaised, in: .capsule)
-                    .contentShape(.capsule)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Ink.primary)
-            .overlay { Capsule().strokeBorder(Palette.edge) }
-            .keyboardShortcut(.defaultAction)
+            ModalButton(
+                title: "I'll just look around for now",
+                symbolName: "eyes",
+                role: .secondary,
+                shortcut: .defaultAction
+            ) { dismiss() }
         }
-        .padding(.horizontal, Spacing.group)
+        .padding(.horizontal, Spacing.margin)
         .padding(.vertical, Spacing.margin)
     }
 }

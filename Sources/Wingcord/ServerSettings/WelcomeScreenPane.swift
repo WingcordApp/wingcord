@@ -38,7 +38,7 @@ struct WelcomeScreenPane: View {
                 greeting(screen)
                 channels(screen)
             }
-            .sheet(isPresented: $isPreviewing) {
+            .modal(isPresented: $isPreviewing) {
                 WelcomeScreenSheet(
                     presentation: model.welcomeScreenPresentation(
                         for: store.guildID,
@@ -47,7 +47,7 @@ struct WelcomeScreenPane: View {
                     openChannel: { model.openWelcomeScreenChannel($0) }
                 )
             }
-            .sheet(item: $removing) { removal in
+            .modal(item: $removing) { removal in
                 FormSheet(
                     title: "Remove Recommended Channel",
                     confirmTitle: "Remove",
@@ -127,19 +127,24 @@ struct WelcomeScreenPane: View {
                     // Nothing to preview without a channel in it.
                     if !screen.isEmpty {
                         Button("Preview") { isPreviewing = true }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.capsule)
                             .controlSize(.small)
                     }
                     if isEnabled {
+                        // Quiet, its role in its words: red glass is kept for
+                        // a destruction nobody chose (INVARIANTS, buttons).
                         Button("Disable", role: .destructive) {
                             Task { await store.disableWelcomeScreen() }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Palette.destructive)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
                         .controlSize(.small)
                     } else {
                         Button("Enable") {}
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.glassProminent)
+                            .buttonBorderShape(.capsule)
+                            .tint(Palette.accent)
                             .controlSize(.small)
                             .disabled(true)
                     }

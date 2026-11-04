@@ -116,6 +116,29 @@ struct UserProfileDecodeTests {
         #expect(dto.guildDomain?.decoration?.profileFrameSKU == "11")
     }
 
+    /// Alex, 2026-10-26: "server profiles don't show the member's pronouns".
+    /// Discord sends the server layer's text fields as `""` when the member
+    /// set nothing there, and the account's own show through.
+    @Test("An empty server pronoun or bio shows the account's; a set one wins")
+    func serverTextFallsBack() throws {
+        func decode(_ guildLayer: String) throws -> UserProfileDTO {
+            let json = """
+            { "user": { "id": "1", "username": "a", "discriminator": "0" },
+              "user_profile": { "pronouns": "she/her", "bio": "account bio" },
+              "guild_member_profile": \(guildLayer) }
+            """
+            return try JSONDecoder().decode(UserProfileDTO.self, from: Data(json.utf8))
+        }
+        let unset = try decode(#"{ "guild_id": "9", "pronouns": "", "bio": "" }"#)
+        #expect(unset.guildDomain?.decoration?.pronouns == "she/her")
+        #expect(unset.guildDomain?.decoration?.bio == "account bio")
+        let set = try decode(#"{ "guild_id": "9", "pronouns": "they/them", "bio": "server bio" }"#)
+        #expect(set.guildDomain?.decoration?.pronouns == "they/them")
+        #expect(set.guildDomain?.decoration?.bio == "server bio")
+        // The account's own layer is untouched by either.
+        #expect(set.domain.decoration?.pronouns == "she/her")
+    }
+
     /// Absent is not the same as malformed. An account with no style must decode
     /// to nil rather than to a style that draws nothing.
     @Test("A profile with no style decodes to none")

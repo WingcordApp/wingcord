@@ -75,18 +75,8 @@ private struct GoLivePanel: View {
                 }
             }
             Spacer(minLength: 0)
-            Button { model.closeGoLive() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(.body, weight: .semibold))
-                    .foregroundStyle(InkColor.solid)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    // A region inside the panel, not a body of its own.
-                    .background(Circle().fill(Palette.hoverFill))
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .help("Close")
-            .accessibilityLabel(Text("Close"))
+            // The cards' round glass ✕; Escape stays the layer's own.
+            ModalCloseButton(answersEscape: false) { model.closeGoLive() }
         }
     }
 }

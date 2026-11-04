@@ -73,7 +73,10 @@ struct LiveEventCard: View {
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            // The app's button: green glass, Discord's colour for a live
+            // event — the card is solid, the control on it is glass.
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.capsule)
             .tint(Palette.presenceOnline)
             .padding(.top, 2)
         }

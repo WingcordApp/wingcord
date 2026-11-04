@@ -172,7 +172,8 @@ private struct PackSection: View {
                     Text("View More Stickers")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.large)
                 .accessibilityHint("Opens the sticker picker at \(pack.name)")
             }
@@ -266,7 +267,8 @@ struct ExpressionSourceRow: View {
                     Label("Join Server", systemImage: "plus")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.large)
                 .padding(.top, Spacing.tight)
             }

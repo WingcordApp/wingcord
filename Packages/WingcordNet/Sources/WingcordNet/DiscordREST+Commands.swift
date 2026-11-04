@@ -637,3 +637,136 @@ extension DiscordREST {
         )
     }
 }
+
+// MARK: - What was run
+
+extension DiscordREST {
+    /// The command a message answers, with what it was given — see
+    /// `InvokedCommand`. Nil for an answer that names no command.
+    public func invokedCommand(channelID: ChannelID, messageID: MessageID) async throws -> InvokedCommand? {
+        try await get(
+            "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/interaction-data",
+            route: "channels/{id}/messages/{id}/interaction-data",
+            as: InteractionDataDTO.self
+        ).domain
+    }
+}
+
+extension InvokedCommand {
+    /// Decodes an `interaction-data` payload. Public so `--demo` can build its
+    /// fixtures out of the wire's own shape, as it does the command index.
+    public static func decode(_ data: Data) throws -> InvokedCommand? {
+        try JSONDecoder().decode(InteractionDataDTO.self, from: data).domain
+    }
+}
+
+/// `{ id, type, name, application_command, options? }`.
+///
+/// **The declaration travels beside the answer** because the answer alone is not
+/// what gets drawn: a choice's value is `"r"` and its label is "Reversed", and
+/// only `application_command` knows that. Discord reads the same two side by
+/// side (`Y` in `217424`).
+struct InteractionDataDTO: Decodable, Sendable {
+    var name: String?
+    var application_command: CommandSpec?
+    var options: [Option]?
+
+    struct CommandSpec: Decodable, Sendable {
+        var name: String?
+        var name_localized: String?
+        var options: [OptionSpec]?
+    }
+
+    struct OptionSpec: Decodable, Sendable {
+        var name: String?
+        var name_localized: String?
+        var options: [OptionSpec]?
+        var choices: [ChoiceSpec]?
+    }
+
+    struct ChoiceSpec: Decodable, Sendable {
+        var name: String?
+        var name_localized: String?
+        var value: Scalar?
+    }
+
+    struct Option: Decodable, Sendable {
+        var type: Int?
+        var name: String?
+        var value: Scalar?
+        var options: [Option]?
+    }
+
+    /// An option's value as text, as `toString()` writes it. **Booleans too** —
+    /// the command index's `JSONValue` has no case for one, because no choice
+    /// can be a boolean, and a value here very often is.
+    struct Scalar: Decodable, Sendable {
+        var text: String
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let value = try? container.decode(String.self) {
+                text = value
+            } else if let value = try? container.decode(Bool.self) {
+                text = value ? "true" : "false"
+            } else if let value = try? container.decode(Int.self) {
+                text = String(value)
+            } else if let value = try? container.decode(Double.self) {
+                text = String(value)
+            } else {
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "not a scalar")
+            }
+        }
+    }
+
+    var domain: InvokedCommand? {
+        // `name` carries the subcommands — "base64 decode" — and `options` has
+        // them again, so the bare name is the declaration's, or the first word.
+        guard let name = application_command?.name_localized
+            ?? application_command?.name
+            ?? name?.split(separator: " ").first.map(String.init)
+        else { return nil }
+        return InvokedCommand(
+            name: name,
+            options: Self.options(options ?? [], specs: application_command?.options ?? [])
+        )
+    }
+
+    private static func options(_ options: [Option], specs: [OptionSpec]) -> [InvokedOption] {
+        options.compactMap { option in
+            guard let name = option.name else { return nil }
+            let spec = specs.first { $0.name == name }
+            let shown = spec?.name_localized ?? spec?.name ?? name
+            // SUB_COMMAND and SUB_COMMAND_GROUP.
+            if option.type == 1 || option.type == 2 {
+                return InvokedOption(
+                    name: shown,
+                    isBranch: true,
+                    options: Self.options(option.options ?? [], specs: spec?.options ?? [])
+                )
+            }
+            return InvokedOption(name: shown, value: value(of: option, spec: spec))
+        }
+    }
+
+    private static func value(of option: Option, spec: OptionSpec?) -> InvokedOption.Value? {
+        guard let text = option.value?.text else { return nil }
+        // USER, CHANNEL, ROLE, MENTIONABLE and ATTACHMENT hold ids. An id that
+        // will not parse is shown as it came, as Discord shows one it cannot
+        // resolve.
+        switch option.type {
+        case 6: if let id = UInt64(text) { return .user(UserID(rawValue: id)) }
+        case 7: if let id = UInt64(text) { return .channel(ChannelID(rawValue: id)) }
+        case 8: if let id = UInt64(text) { return .role(RoleID(rawValue: id)) }
+        case 9: if let id = UInt64(text) { return .mentionable(id) }
+        case 11: return .attachment
+        default:
+            if let choice = spec?.choices?.first(where: { $0.value?.text == text }),
+               let label = choice.name_localized ?? choice.name
+            {
+                return .text(label)
+            }
+        }
+        return .text(text)
+    }
+}

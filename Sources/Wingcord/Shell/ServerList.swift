@@ -32,6 +32,7 @@ struct ServerList: View, Equatable {
 
     @Environment(\.motion) private var motion
     @Environment(\.sidebarTitleLeading) private var titleLeading
+    @Environment(\.sidebarBarsInset) private var barsInset
 
     var body: some View {
         ScrollView {
@@ -73,6 +74,8 @@ struct ServerList: View, Equatable {
             .animation(motion.standard, value: items)
         }
         .scrollIndicators(.never)
+        // The last server rests above the bars — `sidebarBarsInset`.
+        .safeAreaPadding(.bottom, barsInset)
         .fadesUnderSidebarChrome()
     }
 
@@ -273,8 +276,8 @@ private struct ServerListRowBody: View {
 }
 
 private nonisolated enum ServerListInk {
-    static let selection = Color.relative(dark: 0.14, light: 0.10)
-    static let hover = Color.relative(dark: 0.08, light: 0.06)
+    static let selection = SidebarHighlight.selection
+    static let hover = SidebarHighlight.hover
     static let actionTile = Color.relative(dark: 0.10, light: 0.07)
     static let monogramTile = Color.adaptive(
         dark: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.35),

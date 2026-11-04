@@ -204,6 +204,58 @@ struct InviteCardLayoutTests {
         #expect(chip.label.text.attributed.string == "+ \(more.traits.count) more")
     }
 
+    /// Alex's 2026-10-26 screenshot: four short traits came out as one "+ 4
+    /// more" across the card, because every chip was as wide as the label's
+    /// box (§4.85) rather than its words. A fixture of short words, the way
+    /// servers actually describe themselves (§2.6).
+    @Test("Short traits all show, each chip only as wide as its words")
+    func shortTraitsShow() throws {
+        let traits = [
+            GuildTrait(id: 0, emojiName: "video_game", label: "Gaming"),
+            GuildTrait(id: 1, emojiName: "pick", label: "Minecraft"),
+            GuildTrait(id: 2, emojiName: "tools", label: "Modding"),
+            GuildTrait(id: 3, emojiName: "speech_balloon", label: "English"),
+        ]
+        let slot = layout(server(description: "The home for everything AngelAuraMC.", traits: traits))
+        guard case .profile(let profile) = slot.body else {
+            Issue.record("expected the profile card")
+            return
+        }
+        #expect(profile.moreTraits == nil)
+        #expect(profile.traits.count == 4)
+        for chip in profile.traits {
+            #expect(chip.rect.width < 120, "a chip hugs its words")
+            #expect(slot.rect.contains(chip.rect), "every chip is inside its card")
+        }
+        try expectNoOverlap(profile.traits.map(\.rect))
+    }
+
+    @Test("Many traits keep two lines and room for \"+ N more\" inside the card")
+    func manyTraitsOverflowInside() throws {
+        let words = ["Gaming", "Minecraft", "Modding", "English", "Art", "Music", "Anime", "Coding", "Memes", "Events"]
+        let traits = words.enumerated().map { GuildTrait(id: $0.offset, emojiName: "sparkles", label: $0.element) }
+        let slot = layout(server(traits: traits))
+        guard case .profile(let profile) = slot.body else {
+            Issue.record("expected the profile card")
+            return
+        }
+        let more = try #require(profile.moreTraits)
+        let rows = Set(profile.traits.map(\.rect.minY))
+        #expect(rows.count <= 2, "two lines at most, the overflow chip included")
+        #expect(profile.traits.count - 1 >= 4, "the short ones fill the lines first")
+        #expect(profile.traits.count - 1 + more.traits.count == traits.count)
+        for chip in profile.traits { #expect(slot.rect.contains(chip.rect)) }
+        try expectNoOverlap(profile.traits.map(\.rect))
+    }
+
+    private func expectNoOverlap(_ rects: [CGRect]) throws {
+        for (i, a) in rects.enumerated() {
+            for b in rects[(i + 1)...] where a.intersects(b) {
+                Issue.record("chips \(a) and \(b) overlap")
+            }
+        }
+    }
+
     @Test("Traits that fit leave no \"+ N more\"")
     func noMoreTraits() {
         let traits = [GuildTrait(id: 0, label: "Art"), GuildTrait(id: 1, label: "Games")]
@@ -213,5 +265,25 @@ struct InviteCardLayoutTests {
         }
         #expect(profile.moreTraits == nil)
         #expect(profile.traits.count == 2)
+    }
+
+    /// Discord's own walk (`3666`), pinned case by case.
+    @Test("The overflow rule places chips as Discord's does")
+    func overflowRule() {
+        func lines(_ widths: [CGFloat], container: CGFloat = 210, maxLines: Int = 2, overflow: CGFloat = 60) -> [Int?] {
+            TraitOverflow.layout(widths: widths, maxLines: maxLines, gap: 4,
+                                 containerWidth: container, overflowWidth: overflow).lines
+        }
+        // Everything fits on the first line.
+        #expect(lines([50, 50, 50]) == [0, 0, 0])
+        // The third chip wraps; on the last line the fourth must leave room for
+        // "+ N more" and cannot, so the run ends there.
+        #expect(lines([100, 100, 100, 100, 100]) == [0, 0, 1, nil, nil])
+        // The very last chip reserves nothing.
+        #expect(lines([100, 100], maxLines: 1) == [0, 0])
+        // But one before it does.
+        #expect(lines([100, 100, 10], maxLines: 1) == [0, nil, nil])
+        // A chip wider than the whole row is skipped, not wrapped.
+        #expect(lines([300, 50], container: 200) == [nil, 0])
     }
 }

@@ -77,6 +77,8 @@ public enum RoleConnectionField {
         case ("ebay", "unique_negative_feedback_count"): "Negative feedback"
         case ("ebay", "unique_positive_feedback_count"): "Positive feedback count"
         case ("tiktok", "following_count"): "Following"
+        case ("letterboxd", "watches"): "Films watched"
+        case ("letterboxd", "films_in_diary_this_year"): "Films logged this year"
         default: nil
         }
     }

@@ -56,6 +56,7 @@ struct GameServersPane: View, Equatable {
                 ForEach(presentation.servers) { server in
                     GameServerCard(
                         server: server,
+                        game: server.gameID.flatMap { presentation.games[$0] },
                         connect: connect,
                         openProviderURL: openProviderURL
                     )
@@ -67,8 +68,16 @@ struct GameServersPane: View, Equatable {
 
 // MARK: - One server
 
+/// The game's box art on a server's card — Discord's 53 by 70
+/// (`.gameImage_cad0b2`).
+enum GameServerArt {
+    static let width: CGFloat = 53
+}
+
 private struct GameServerCard: View {
     var server: GameServer
+    /// The game, once `/games` has answered for it.
+    var game: BoardGame?
     var connect: (GameServer) -> Void
     var openProviderURL: (URL) -> Void
 
@@ -89,30 +98,38 @@ private struct GameServerCard: View {
                 SurfaceDivider(leading: 0)
                 actions
             }
+            .background(alignment: .top) {
+                if let url = game?.coverURL { GameServerBand(url: url) }
+            }
         }
     }
 
     private var header: some View {
         HStack(alignment: .center, spacing: Spacing.snug) {
-            // A plate with the game's initial rather than its artwork: the
-            // response names the game by id and carries no icon hash, so a
-            // picture here would be one this client cannot actually fetch.
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Palette.surfaceRaised)
-                .frame(width: 44, height: 44)
-                .overlay {
-                    Image(systemName: "gamecontroller.fill")
-                        .font(.system(size: 18))
-                        .foregroundStyle(Ink.tertiary)
-                }
+            // **The game's box art**, as Discord's card has it: the server
+            // names its game by `game_id`, and `/games` answers with the cover
+            // (Alex, 2026-10-26, screenshots 24–25 — a gamepad plate stood
+            // where the art goes). The plate stays for a game not yet known.
+            if let game {
+                GameCover(game: game, width: GameServerArt.width, corner: 6)
+            } else {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Palette.surfaceRaised)
+                    .frame(width: 44, height: 44)
+                    .overlay {
+                        Image(systemName: "gamecontroller.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(Ink.tertiary)
+                    }
+            }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(server.name)
                     .font(.system(.body, weight: .semibold))
                     .foregroundStyle(Ink.primary)
                     .lineLimit(1)
-                if let description = server.gameDescription {
-                    Text(description)
+                if let subtitle {
+                    Text(subtitle)
                         .font(.system(.caption))
                         .foregroundStyle(Ink.secondary)
                         .lineLimit(1)
@@ -131,6 +148,15 @@ private struct GameServerCard: View {
             }
         }
         .padding(Spacing.margin)
+    }
+
+    /// The game's name, then the build the server runs — Discord's line,
+    /// "Counter-Strike 2 • Counter-Strike 2 latest" — without saying the name
+    /// twice when the build's own name is the game's.
+    private var subtitle: String? {
+        guard let name = game?.name, !name.isEmpty else { return server.gameDescription }
+        guard let build = server.gameDescription else { return name }
+        return build.hasPrefix(name) ? build : "\(name) \u{2022} \(build)"
     }
 
     private var stats: some View {
@@ -329,5 +355,27 @@ extension GameServer.Status {
         case .suspended: Palette.destructive
         case .offline, .other: Palette.presenceOffline
         }
+    }
+}
+
+/// The game's art behind the card's top — Discord's `imageBackground`: the
+/// cover across the card's width, blurred and faint, fading out by the
+/// middle, so the card wears the game's colour without its picture fighting
+/// the words over it.
+private struct GameServerBand: View {
+    var url: URL
+
+    var body: some View {
+        GeometryReader { proxy in
+            RemoteImage(url: url, side: 256, bucket: .artwork) { Color.clear }
+                .aspectRatio(contentMode: .fill)
+                .frame(width: proxy.size.width, height: proxy.size.height * 0.7)
+                .clipped()
+                .blur(radius: 24)
+                .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom))
+                .opacity(0.25)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

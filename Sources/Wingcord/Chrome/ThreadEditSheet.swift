@@ -19,7 +19,7 @@ struct ThreadEditSheet: View {
     var request: ThreadEditRequest
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var draft = Draft()
     @State private var original = Draft()
     @State private var isSaving = false
@@ -55,7 +55,7 @@ struct ThreadEditSheet: View {
                     get: { draft.name },
                     set: { draft.name = String($0.prefix(Self.nameLimit)) }
                 ))
-                .textFieldStyle(.roundedBorder)
+                .modalField()
                 .disabled(gate?.canRename != true)
                 .accessibilityLabel(Text(isPost ? "Post Title" : "Thread Name"))
             }

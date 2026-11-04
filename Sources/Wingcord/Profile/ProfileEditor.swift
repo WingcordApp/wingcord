@@ -126,6 +126,12 @@ final class ProfileEditor {
     /// The face, effect and colours the display name is set in. Nil is no style
     /// at all, which clears all three keys together — see `DisplayNameStyleWrite`.
     var displayNameStyle: DisplayNameStyle?
+    /// Whether a style chosen here is saved — `ProfileEditCapability.canApplyNameStyle`.
+    ///
+    /// **False is a try-on, not a lock.** Discord opens its styles to every
+    /// account and asks for Nitro at Apply; here the card shows the pick, the
+    /// save bar does not come up for it, and a save leaves the name as it was.
+    var appliesNameStyle = true
     /// The custom typing indicator — the emoji, the movement and the word others
     /// see while the reader types alone. Nil is the plain one, which clears the
     /// key. Account scope only: there is no per-server indicator.
@@ -391,7 +397,8 @@ final class ProfileEditor {
             profileEffectSKU: profileEffectSKU,
             profileFrameSKU: profileFrameSKU,
             avatarDecorationSKU: avatarDecorationSKU,
-            displayNameStyle: displayNameStyle,
+            // A try-on is not a change — `appliesNameStyle`.
+            displayNameStyle: appliesNameStyle ? displayNameStyle : original.displayNameStyle,
             typingIndicatorStyle: typingIndicatorStyle,
             widgets: widgets
         )
@@ -694,7 +701,7 @@ final class ProfileEditor {
     /// is a half-applied style, so the write type fans it out and clears all
     /// three together — see `DisplayNameStyleWrite`.
     private var styleWrite: FieldEdit<DisplayNameStyleWrite> {
-        guard displayNameStyle != original.displayNameStyle else { return .unchanged }
+        guard appliesNameStyle, displayNameStyle != original.displayNameStyle else { return .unchanged }
         return displayNameStyle.map { worn in
             .set(
                 DisplayNameStyleWrite(

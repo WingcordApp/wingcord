@@ -1,0 +1,410 @@
+import AppKit
+import SwiftUI
+
+/// Wingcord's own date and time picker — Alex, 2026-10-26: "replacing the
+/// native date picker with a custom date picker, something cool, unique,
+/// playful".
+///
+/// **A well that reads like a sentence, and a calendar beside it.** The well
+/// shows the day and the time the way a person says them ("Tue 27 Oct ·
+/// 18:30"); a click opens a popover — the HIG's place for a picker, "below or
+/// near the field being edited" — with the month as a grid of days, a row of
+/// quick days, and the time as two big numbers that step by a click. The
+/// graphical style, because choosing an event's day is browsing a calendar
+/// (the HIG's own case for it).
+///
+/// **Playful where it is felt, not where it is in the way**: the chosen day
+/// lands with a spring and a tick of the trackpad, the month slides the way
+/// it was turned, and a quick pick pops. Minutes go in fives — "consider less
+/// minute granularity", and nobody schedules an event for 18:23.
+struct PlayfulDatePicker: View {
+    @Binding var selection: Date
+    /// The earliest moment that may be chosen — now, for an event that has
+    /// not started.
+    var minimum: Date?
+    var accessibilityTitle: String
+
+    @Environment(\.motion) private var motion
+    @State private var isOpen = false
+
+    var body: some View {
+        Button {
+            isOpen.toggle()
+        } label: {
+            HStack(spacing: Spacing.base) {
+                Image(systemName: "calendar")
+                    .foregroundStyle(Palette.accent)
+                Text(selection, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
+                    .foregroundStyle(Ink.primary)
+                    .contentTransition(.numericText())
+                Text(verbatim: "·")
+                    .foregroundStyle(Ink.secondary)
+                Image(systemName: "clock")
+                    .foregroundStyle(Palette.accent)
+                Text(selection, format: .dateTime.hour().minute())
+                    .foregroundStyle(Ink.primary)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(.caption, weight: .bold))
+                    .foregroundStyle(Ink.secondary)
+                    .rotationEffect(.degrees(isOpen ? 180 : 0))
+            }
+            .font(.system(.body, weight: .medium))
+            .padding(.horizontal, Spacing.snug)
+            .frame(height: Metrics.composerControlHeight)
+            .modalFieldGround(isFocused: isOpen)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .animation(motion.standard, value: selection)
+        .animation(motion.standard, value: isOpen)
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            DateTimeBoard(selection: $selection, minimum: minimum)
+        }
+        .accessibilityLabel(Text(accessibilityTitle))
+        .accessibilityValue(Text(selection, format: .dateTime.weekday(.wide).day().month(.wide).year().hour().minute()))
+        .accessibilityHint(Text("Opens a calendar"))
+    }
+}
+
+extension PlayfulDatePicker {
+    /// The month's days in weeks — blanks before the first and after the last,
+    /// the week starting where the reader's calendar starts it.
+    static func days(of month: Date, calendar: Calendar) -> [Date?] {
+        guard let range = calendar.range(of: .day, in: .month, for: month) else { return [] }
+        let weekday = calendar.component(.weekday, from: month)
+        let lead = (weekday - calendar.firstWeekday + 7) % 7
+        var cells: [Date?] = Array(repeating: nil, count: lead)
+        for day in range {
+            cells.append(calendar.date(byAdding: .day, value: day - 1, to: month))
+        }
+        while cells.count % 7 != 0 { cells.append(nil) }
+        return cells
+    }
+
+    /// One step of the hour or of the minute, wrapping inside the day so a
+    /// step never changes the date the calendar shows. Minutes land on fives.
+    static func stepped(_ date: Date, by delta: Int, unit: Calendar.Component, calendar: Calendar) -> Date {
+        var parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        switch unit {
+        case .hour:
+            parts.hour = ((parts.hour ?? 0) + delta + 24) % 24
+        default:
+            let minute = parts.minute ?? 0
+            let snapped = (minute / 5) * 5
+            // Up goes to the next five; down to the five below, or to this
+            // one where the minute sits between two.
+            let next = delta > 0 ? snapped + 5 : (minute == snapped ? snapped - 5 : snapped)
+            parts.minute = (next + 60) % 60
+        }
+        return calendar.date(from: parts) ?? date
+    }
+}
+
+/// The popover: the month, the quick days, the time.
+private struct DateTimeBoard: View {
+    @Binding var selection: Date
+    var minimum: Date?
+
+    @Environment(\.motion) private var motion
+    /// The first day of the month on show.
+    @State private var month: Date
+    /// Which way the last turn went — the way the next grid slides in.
+    @State private var turnedForward = true
+
+    private let calendar = Calendar.current
+
+    init(selection: Binding<Date>, minimum: Date?) {
+        _selection = selection
+        self.minimum = minimum
+        let calendar = Calendar.current
+        _month = State(initialValue: calendar.dateInterval(of: .month, for: selection.wrappedValue)?.start ?? selection.wrappedValue)
+    }
+
+    static let width: CGFloat = 296
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.snug) {
+            header
+            weekdays
+            ZStack {
+                grid
+                    .id(month)
+                    .transition(.modalStep(forward: turnedForward))
+            }
+            .clipped()
+            quickDays
+            Divider().overlay(Ink.quaternary)
+            TimeSetter(selection: $selection)
+        }
+        .padding(Spacing.margin)
+        .frame(width: Self.width)
+        .animation(motion.reposition, value: month)
+    }
+
+    // MARK: The month
+
+    private var header: some View {
+        HStack(spacing: Spacing.base) {
+            Text(month, format: .dateTime.month(.wide).year())
+                .font(.system(.headline))
+                .foregroundStyle(Ink.primary)
+                .contentTransition(.numericText())
+            Spacer(minLength: 0)
+            turnButton("chevron.left", label: "Previous Month", by: -1)
+            turnButton("chevron.right", label: "Next Month", by: 1)
+        }
+    }
+
+    private func turnButton(_ symbol: String, label: String, by step: Int) -> some View {
+        Button {
+            guard let next = calendar.date(byAdding: .month, value: step, to: month) else { return }
+            turnedForward = step > 0
+            month = next
+            Haptics.tick()
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(.caption, weight: .bold))
+                .frame(width: 14, height: 14)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .controlSize(.small)
+        .help(label)
+        .accessibilityLabel(Text(label))
+    }
+
+    private var weekdays: some View {
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let first = calendar.firstWeekday - 1
+        let ordered = Array(symbols[first...] + symbols[..<first])
+        return HStack(spacing: 0) {
+            ForEach(Array(ordered.enumerated()), id: \.offset) { _, symbol in
+                Text(symbol)
+                    .font(.system(.caption, weight: .semibold))
+                    .foregroundStyle(Ink.secondary)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var grid: some View {
+        let days = PlayfulDatePicker.days(of: month, calendar: calendar)
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7), spacing: 4) {
+            ForEach(Array(days.enumerated()), id: \.offset) { _, day in
+                if let day {
+                    DayCell(
+                        day: day,
+                        isSelected: calendar.isDate(day, inSameDayAs: selection),
+                        isToday: calendar.isDateInToday(day),
+                        isEnabled: isSelectable(day)
+                    ) {
+                        choose(day)
+                    }
+                } else {
+                    Color.clear.frame(height: DayCell.side)
+                }
+            }
+        }
+    }
+
+
+    private func isSelectable(_ day: Date) -> Bool {
+        guard let minimum else { return true }
+        return calendar.startOfDay(for: day) >= calendar.startOfDay(for: minimum)
+    }
+
+    /// The day, keeping the time already chosen.
+    private func choose(_ day: Date) {
+        let time = calendar.dateComponents([.hour, .minute], from: selection)
+        guard var chosen = calendar.date(
+            bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: day
+        ) else { return }
+        // Today, at a time that has gone by: the next hour instead.
+        if let minimum, chosen < minimum {
+            chosen = calendar.nextDate(after: minimum, matching: DateComponents(minute: 0), matchingPolicy: .nextTime) ?? minimum
+        }
+        withAnimation(motion.standard) { selection = chosen }
+        Haptics.tick()
+    }
+
+    // MARK: Quick days
+
+    private var quickDays: some View {
+        HStack(spacing: Spacing.tight) {
+            ForEach(QuickDay.allCases, id: \.self) { quick in
+                if let day = quick.day(from: .now, calendar: calendar), isSelectable(day) {
+                    Button(quick.title) {
+                        choose(day)
+                        if let start = calendar.dateInterval(of: .month, for: day)?.start, start != month {
+                            turnedForward = start > month
+                            month = start
+                        }
+                        Haptics.pop()
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private enum QuickDay: CaseIterable {
+        case today, tomorrow, weekend, nextWeek
+
+        var title: String {
+            switch self {
+            case .today: "Today"
+            case .tomorrow: "Tomorrow"
+            case .weekend: "Weekend"
+            case .nextWeek: "Next Week"
+            }
+        }
+
+        func day(from now: Date, calendar: Calendar) -> Date? {
+            switch self {
+            case .today: now
+            case .tomorrow: calendar.date(byAdding: .day, value: 1, to: now)
+            case .weekend:
+                // The coming Saturday — or today, on one.
+                calendar.isDateInWeekend(now) ? now
+                    : calendar.nextDate(after: now, matching: DateComponents(weekday: 7), matchingPolicy: .nextTime)
+            case .nextWeek: calendar.date(byAdding: .day, value: 7, to: now)
+            }
+        }
+    }
+}
+
+/// One day: a number in a circle that the chosen one fills.
+private struct DayCell: View {
+    var day: Date
+    var isSelected: Bool
+    var isToday: Bool
+    var isEnabled: Bool
+    var choose: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    static let side: CGFloat = 34
+
+    var body: some View {
+        Button(action: choose) {
+            Text(day, format: .dateTime.day())
+                .font(.system(.callout, weight: isSelected || isToday ? .bold : .regular))
+                .monospacedDigit()
+                .foregroundStyle(
+                    isSelected ? AnyShapeStyle(Color.white)
+                        : isEnabled ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.tertiary)
+                )
+                .frame(width: Self.side, height: Self.side)
+                .background {
+                    Circle()
+                        .fill(isSelected ? AnyShapeStyle(Palette.accent) : isHovering && isEnabled ? AnyShapeStyle(Palette.hoverFill) : AnyShapeStyle(Color.clear))
+                        .scaleEffect(isSelected ? 1 : 0.86)
+                }
+                .overlay {
+                    if isToday, !isSelected {
+                        Circle().strokeBorder(Palette.accent, lineWidth: 1.5)
+                    }
+                }
+                .contentShape(.circle)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .onHover { hovering in
+            guard hovering != isHovering else { return }
+            isHovering = hovering
+        }
+        // The chosen day lands with a little bounce — it was pressed.
+        .animation(motion.reduceMotion ? motion.standard : .spring(response: 0.28, dampingFraction: 0.62), value: isSelected)
+        .animation(motion.hover, value: isHovering)
+        .accessibilityLabel(Text(day, format: .dateTime.weekday(.wide).day().month(.wide)))
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+    }
+}
+
+/// The time: the hour and the minute as two big numbers, each stepped by the
+/// arrows beside it, and four times people actually pick.
+private struct TimeSetter: View {
+    @Binding var selection: Date
+
+    @Environment(\.motion) private var motion
+    private let calendar = Calendar.current
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.base) {
+            HStack(spacing: Spacing.base) {
+                Label("Time", systemImage: "clock")
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(Ink.primary)
+                Spacer(minLength: 0)
+                stepper(unit: .hour)
+                Text(verbatim: ":")
+                    .font(.system(.title2, weight: .bold))
+                    .foregroundStyle(Ink.secondary)
+                stepper(unit: .minute)
+            }
+            HStack(spacing: Spacing.tight) {
+                ForEach([9, 12, 18, 21], id: \.self) { hour in
+                    let time = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: selection) ?? selection
+                    Button {
+                        withAnimation(motion.standard) { selection = time }
+                        Haptics.pop()
+                    } label: {
+                        Text(time, format: .dateTime.hour().minute())
+                            .monospacedDigit()
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private func stepper(unit: Calendar.Component) -> some View {
+        let value = calendar.component(unit, from: selection)
+        let step = unit == .hour ? 1 : 5
+        return HStack(spacing: 2) {
+            Text(unit == .hour ? hourText(value) : String(format: "%02d", value))
+                .font(.system(.title2, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(Ink.primary)
+                .contentTransition(.numericText(value: Double(value)))
+                .frame(minWidth: 34)
+            VStack(spacing: 0) {
+                nudge("chevron.up", by: step, unit: unit)
+                nudge("chevron.down", by: -step, unit: unit)
+            }
+        }
+        .animation(motion.standard, value: value)
+    }
+
+    private func nudge(_ symbol: String, by delta: Int, unit: Calendar.Component) -> some View {
+        Button {
+            selection = PlayfulDatePicker.stepped(selection, by: delta, unit: unit, calendar: calendar)
+            Haptics.tick()
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Ink.secondary)
+                .frame(width: 18, height: 12)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(delta > 0 ? "Later" : "Earlier"))
+    }
+
+    /// The hour as the reader's clock writes it — 18, or 6 PM.
+    private func hourText(_ hour: Int) -> String {
+        let probe = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: selection) ?? selection
+        return probe.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+    }
+
+}

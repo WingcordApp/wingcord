@@ -281,11 +281,14 @@ private struct CustomStatusEditor: View {
                 // is in.
                 if status?.isEmpty == false {
                     Button("Clear", role: .destructive) { commit(nil) }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
                 }
                 Spacer(minLength: 0)
                 Button("Save", action: save)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(Palette.accent)
                     .keyboardShortcut(.defaultAction)
             }
         }

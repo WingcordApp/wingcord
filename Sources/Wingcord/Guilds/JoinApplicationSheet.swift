@@ -60,14 +60,22 @@ struct JoinApplicationSheet: View {
         }
         .frame(width: 920)
         .frame(minHeight: 480, idealHeight: 640, maxHeight: 760)
-        .background(Palette.surface)
-        .overlay(alignment: .topTrailing) { closeButton }
-        // Answers typed are not thrown away by a stray Escape — the close
-        // button asks first, as Discord's does.
-        .interactiveDismissDisabled(application?.hasProgress == true)
-        .alert("Are you sure? Your progress will be lost.", isPresented: $isConfirmingClose) {
-            Button("Close Anyway", role: .destructive, action: close)
-            Button("Cancel", role: .cancel) {}
+        .overlay(alignment: .topTrailing) {
+            ModalCloseButton(action: requestClose)
+                .padding(Spacing.margin)
+        }
+        // Answers typed are not thrown away by a throw or a stray click — the
+        // close button asks first, as Discord's does.
+        .modalDismissDisabled(application?.hasProgress == true)
+        .modal(isPresented: $isConfirmingClose, style: .alert) {
+            ModalAlert(
+                hero: .symbol("exclamationmark.triangle.fill", tint: .orange),
+                title: "Are you sure? Your progress will be lost.",
+                actions: [
+                    .cancel(),
+                    .destructive("Close Anyway", symbol: "xmark.circle") { close() },
+                ]
+            )
         }
         .task(id: request) { await load() }
     }
@@ -251,41 +259,22 @@ struct JoinApplicationSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             let isComplete = application?.isComplete == true && meetsVerification
-            Button(action: submit) {
-                ZStack {
-                    Text("Submit").opacity(isSubmitting ? 0 : 1)
-                    if isSubmitting { ProgressView().controlSize(.small) }
-                }
-                .font(.system(.body, weight: .semibold))
-                .padding(.horizontal, Spacing.group)
-                .frame(height: Metrics.composerControlHeight)
-                .background(Palette.accent.opacity(isComplete ? 1 : 0.45), in: .capsule)
-                .contentShape(.capsule)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .disabled(!isComplete || isSubmitting)
-            .keyboardShortcut(.return, modifiers: .command)
+            // Discord's ⌘↩.
+            ModalButton(
+                title: "Submit",
+                symbolName: "paperplane.fill",
+                role: .act,
+                isWorking: isSubmitting,
+                shortcut: KeyboardShortcut(.return, modifiers: .command),
+                action: submit
+            )
+            .disabled(!isComplete)
             // Discord's tooltip over the disabled button names what is missing.
             .help(isComplete ? "" : (application?.incompleteMessage ?? ""))
         }
         .padding(.horizontal, Spacing.group)
         .padding(.vertical, Spacing.margin)
         .overlay(alignment: .top) { Divider() }
-    }
-
-    private var closeButton: some View {
-        Button(action: requestClose) {
-            Image(systemName: "xmark")
-                .font(.system(size: 11, weight: .bold))
-                .frame(width: Metrics.control, height: Metrics.control)
-                .contentShape(.circle)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Ink.secondary)
-        .keyboardShortcut(.cancelAction)
-        .accessibilityLabel(Text("Close"))
-        .padding(Spacing.margin)
     }
 
     /// Discord's submit gate (`eS`): the server's level asks for an e-mail or
@@ -486,7 +475,8 @@ private struct VerificationRequirementRow: View {
                     if isSending { ProgressView().controlSize(.small) }
                 }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
+            .tint(Palette.accent)
             .controlSize(.small)
             .disabled(isSending)
         }

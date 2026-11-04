@@ -40,6 +40,17 @@ enum DemoBadges {
              ("Platinum", "1 year"), ("Diamond", "2 years"), ("Emerald", "3 years"), ("Ruby", "5 years")],
             symbol: "seal.fill", colour: NSColor(srgbRed: 0.95, green: 0.3, blue: 0.45, alpha: 1)
         )
+        // The booster's nine as the directory sends them: keys and
+        // milestones, and no names — which is what drew "LEVEL_1".
+        let booster = ["1 month", "2 months", "3 months", "6 months", "9 months", "12 months", "15 months",
+                       "18 months", "24+ months"].enumerated().map { index, milestone in
+            let url = icon(
+                "diamond.fill",
+                colour: NSColor(srgbRed: 0.96, green: 0.5, blue: 1, alpha: 1).blended(withFraction: CGFloat(index) / 16, of: .white) ?? .systemPink,
+                name: "booster-\(index)"
+            )
+            return BadgeTier(key: "LEVEL_\(index + 1)", name: nil, milestoneText: milestone, simpleIconURL: url, complexIconURL: url)
+        }
         let ageIcon = icon("tree.fill", colour: NSColor(srgbRed: 0.6, green: 0.4, blue: 0.95, alpha: 1), name: "age")
         let catalog: [CatalogBadge] = [
             CatalogBadge(
@@ -71,6 +82,13 @@ enum DemoBadges {
                 infoLabel: "Subscriber since 3/2/26"
             ),
             CatalogBadge(
+                badgeID: BadgeKind.guildBooster.rawValue, name: "Server Booster",
+                description: "Boost a server to unlock this badge.",
+                isOwned: true, currentTierKey: "LEVEL_3", nextTierKey: "LEVEL_4", tiers: booster,
+                tierObtainedAt: ["LEVEL_3": now.addingTimeInterval(-20 * 86_400)],
+                infoLabel: "Server boosting since 7/27/26"
+            ),
+            CatalogBadge(
                 badgeID: BadgeKind.gameVariety.rawValue, name: "Game Variety",
                 description: "Play different games with Discord open to unlock this badge.",
                 isOwned: false, isEarnable: true,
@@ -97,6 +115,7 @@ enum DemoBadges {
             AccountBadge(id: "streaming", iconHash: nil, label: "Streaming"),
             AccountBadge(id: "account_age", iconHash: nil, label: "Account Age"),
             AccountBadge(id: "game_time", iconHash: nil, label: "Game Time"),
+            AccountBadge(id: "guild_booster_lvl3", iconHash: nil, label: "Server boosting since Jul 27, 2026"),
         ])
         model.users[me] = badged.merged(over: user)
     }

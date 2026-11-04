@@ -29,6 +29,28 @@ struct SharedClientThemeWireTests {
         #expect(survived.sharedTheme == nil)
     }
 
+    @Test("A theme without a room still draws its card — the room is taken as dark")
+    func roomless() throws {
+        // Screenshots 20 and 21: Discord drew this card, Wingcord a blank row.
+        for room in [#""base_theme":0,"#, ""] {
+            let json = #"""
+            {"id":"1","channel_id":"2","author":{"id":"3","username":"alex"},"content":"","type":0,
+             "shared_client_theme":{\#(room)"colors":["FF7A00","7A00FF"],"gradient_angle":45}}
+            """#
+            let message = try JSONDecoder().decode(MessageDTO.self, from: Data(json.utf8)).domain
+            let theme = try #require(message.sharedTheme, "dropped with \(room.isEmpty ? "no room" : room)")
+            #expect(theme.baseTheme == 1)
+            #expect(theme.isValid, "Save and Preview take it as it is")
+            #expect(!message.isEmpty)
+        }
+        // The account's own list keeps Discord's stricter check.
+        let saved = try JSONDecoder().decode(
+            SharedClientThemeDTO.self, from: Data(#"{"colors":["FF7A00"],"base_theme":0}"#.utf8)
+        )
+        #expect(saved.savedDomain == nil)
+        #expect(saved.domain != nil)
+    }
+
     @Test("A send writes the share modal's shape: hex without #, the numbers")
     func encodes() throws {
         let theme = SharedClientTheme(colors: [0x58_65_F2], gradientAngle: 180, baseMix: 60, baseTheme: 2)

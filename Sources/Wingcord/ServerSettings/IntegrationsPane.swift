@@ -94,7 +94,8 @@ struct IntegrationsPane: View {
             PlatformMark(platform: platform)
         } trailing: {
             Button(isConnected ? "Manage" : platform.connectTitle) { page = .platform(platform) }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
         }
     }
@@ -149,7 +150,8 @@ struct IntegrationsPane: View {
                             .font(.system(size: 9, weight: .bold))
                     }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
             }
         }
@@ -324,7 +326,9 @@ private struct PlatformIntegrationPage: View {
                         Button(platform.connectTitle) {
                             model.sessionController.beginLinkingConnection(type: platform.rawValue)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(Palette.accent)
                         .controlSize(.small)
                     }
                 }
@@ -336,7 +340,9 @@ private struct PlatformIntegrationPage: View {
                         Button(platform.connectTitle) {
                             Task { await store.enableIntegration(type: platform.rawValue, accountID: account.id) }
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(Palette.accent)
                         .controlSize(.small)
                     }
                 }
@@ -359,12 +365,15 @@ private struct PlatformIntegrationPage: View {
         }
         // Discord refuses outright where the behavior is a kick nobody here
         // may perform (`tr`'s `N`).
-        .alert("Disable Sync", isPresented: $isRefusingDisable) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(platform == .twitch
-                ? "Disabling sync will perform the kick expired sub behavior as if all subs have expired, but you do not have kick permissions in this server."
-                : "Disabling sync will perform the kick expired membership behavior as if all members have expired, but you do not have kick permissions in this server.")
+        .modal(isPresented: $isRefusingDisable, style: .alert) {
+            ModalAlert(
+                hero: .symbol("lock.fill"),
+                title: "Disable Sync",
+                message: Text(platform == .twitch
+                    ? "Disabling sync will perform the kick expired sub behavior as if all subs have expired, but you do not have kick permissions in this server."
+                    : "Disabling sync will perform the kick expired membership behavior as if all members have expired, but you do not have kick permissions in this server."),
+                actions: [.okay("OK")]
+            )
         }
     }
 
@@ -383,7 +392,8 @@ private struct PlatformIntegrationPage: View {
             PlatformMark(platform: platform)
         } trailing: {
             Button("Sync") { Task { await store.syncIntegration(sync.id) } }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .disabled(sync.isRevoked)
         }
@@ -453,7 +463,8 @@ private struct PlatformIntegrationPage: View {
                     disabling = sync
                 }
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .controlSize(.small)
             .tint(Palette.destructive)
         }
@@ -514,7 +525,8 @@ private struct AppIntegrationPage: View {
                 }
             }
             Button("Remove App", role: .destructive) { isRemoving = true }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .tint(Palette.destructive)
         }

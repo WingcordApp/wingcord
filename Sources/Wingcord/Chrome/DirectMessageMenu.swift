@@ -232,7 +232,7 @@ struct DirectMessageMenu: View {
                 symbolName: person.isIgnored ? "speaker.wave.2" : "speaker.slash",
                 isBusy: person.isBusy
             ) {
-                model.setIgnored(!person.isIgnored, userID: userID)
+                model.askToIgnore(userID)
                 close()
             }
             row(
@@ -242,7 +242,7 @@ struct DirectMessageMenu: View {
                 isDestructive: !person.isBlocked,
                 isBusy: person.isBusy
             ) {
-                model.setBlocked(!person.isBlocked, userID: userID)
+                model.askToBlock(userID)
                 close()
             }
         }

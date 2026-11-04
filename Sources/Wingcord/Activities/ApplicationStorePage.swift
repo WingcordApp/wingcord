@@ -42,7 +42,7 @@ struct ApplicationStorePage: View {
         .task(id: applicationID) {
             await model.sessionController.loadApplicationStore(applicationID)
         }
-        .sheet(item: $opened) { listing in
+        .modal(item: $opened) { listing in
             StoreListingSheet(
                 listing: listing,
                 applicationID: applicationID,
@@ -204,7 +204,7 @@ private struct StoreListingSheet: View {
     var privacyPolicyURL: URL?
     var onPurchase: () -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
 
     private static let width: CGFloat = 420
     private static let artHeight: CGFloat = 200
@@ -250,15 +250,7 @@ private struct StoreListingSheet: View {
                 .font(.system(.subheadline, weight: .semibold))
                 .foregroundStyle(Ink.primary)
             Spacer(minLength: 0)
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(.caption, weight: .bold))
-                    .foregroundStyle(Ink.secondary)
-                    .frame(width: 22, height: 22)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close")
+            ModalCloseButton { dismiss() }
         }
         .padding(.horizontal, Spacing.margin)
         .padding(.vertical, Spacing.snug)
@@ -326,7 +318,7 @@ private struct StoreListingSheet: View {
                 HStack(spacing: Spacing.tight) {
                     if let terms = termsOfServiceURL { Link("Terms of Service", destination: terms) }
                     if termsOfServiceURL != nil, privacyPolicyURL != nil {
-                        Text("•").foregroundStyle(Ink.quaternary)
+                        Text("•").foregroundStyle(Ink.tertiary)
                     }
                     if let privacy = privacyPolicyURL { Link("Privacy Policy", destination: privacy) }
                 }
@@ -339,7 +331,6 @@ private struct StoreListingSheet: View {
         }
         .padding(.horizontal, Spacing.margin)
         .padding(.vertical, Spacing.snug)
-        .background(Palette.surface)
     }
 
     /// "Subscribe for $4.99 / Month", "Buy for $24.99", or — where the price
@@ -373,7 +364,9 @@ private struct PurchaseControl: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.glassProminent)
+        .buttonBorderShape(.capsule)
+        .tint(Palette.accent)
         .controlSize(.large)
         .help("Opens Discord's store in your browser")
         .accessibilityHint(Text("Opens Discord's store in your browser"))

@@ -75,7 +75,8 @@ struct EventDetailPage: View {
             }
             .scrollIndicators(.automatic)
             .softScrollEdgesVertical()
-            Rectangle().fill(Palette.selectionFill).frame(height: 1)
+            // No rule over the foot: the scroll's soft edge is the boundary,
+            // as every other card's footer has it.
             HStack {
                 Spacer(minLength: 0)
                 EventActionBar(event: event, occurrence: occurrence)
@@ -261,7 +262,8 @@ private struct EventSeriesList: View {
             }
             if hasMore {
                 Button("View future events") { extend() }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
             }
         }

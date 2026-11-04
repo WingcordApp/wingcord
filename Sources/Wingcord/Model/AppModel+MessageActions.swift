@@ -86,6 +86,18 @@ extension AppModel {
         let permitted = permissionGate.actions(for: message)
         let needed: MessageActions = existing == nil ? .addReaction : .joinReaction
         guard permitted.contains(needed), kind == .normal || hasNitro else { return }
+        // **The emoji itself, which Fake Nitro cannot unlock** — a reaction
+        // names it, and Discord refuses one the account may not use. Asked
+        // here as well as in the picker, because a quick reaction or a chip
+        // somebody else began never passes through the picker.
+        guard canReact(with: emoji, in: channelID) else {
+            reportActionFailure(
+                emoji.isAnimated && !entitlements.has(.animatedEmoji)
+                    ? "Reacting with an animated emoji needs Nitro."
+                    : "That emoji is from another server — reacting with it needs Nitro."
+            )
+            return
+        }
 
         let adding = !(existing?.isMine(kind) ?? false)
         if adding, existing?.isMine(kind == .burst ? .normal : .burst) == true {
@@ -414,6 +426,14 @@ extension AppModel {
             anchor: anchor,
             selectedText: selectedText?.isEmpty == false ? selectedText : nil
         )
+        // **The apps' message commands, asked for as the menu opens.** Apps is
+        // offered only when the index holds one, and the index used to be
+        // fetched only the first time `/` was typed in the channel — so a
+        // menu opened before that never had Apps (Alex, 2026-10-26, screenshot
+        // 30: "stopped showing"). Once per scope for the session; the
+        // presenter reads the index live, so the item joins the open menu the
+        // moment it lands.
+        Task { await sessionController.loadCommandIndex(for: channelID) }
     }
 
     /// The selected words in a Google search, in the browser — Discord's.

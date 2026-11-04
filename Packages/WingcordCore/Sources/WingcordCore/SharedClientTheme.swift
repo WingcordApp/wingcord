@@ -53,9 +53,17 @@ public struct SharedClientTheme: Hashable, Sendable, Codable {
         String(format: "%06X", color & 0xFF_FF_FF)
     }
 
-    /// A colour off the wire, with or without its `#`.
+    /// A colour off the wire, with or without its `#` — in any of the forms
+    /// CSS reads, because Discord's card hands the string to CSS as it is
+    /// (`ty`: `` `#${e}` ``): six digits, three (`F80` is `FF8800`), or eight
+    /// with an alpha the swatch does not use.
     public static func color(fromHex text: String) -> UInt32? {
-        let digits = text.hasPrefix("#") ? String(text.dropFirst()) : text
+        var digits = text.hasPrefix("#") ? String(text.dropFirst()) : text
+        switch digits.count {
+        case 3: digits = digits.map { "\($0)\($0)" }.joined()
+        case 8: digits = String(digits.prefix(6))
+        default: break
+        }
         guard digits.count == 6, let value = UInt32(digits, radix: 16) else { return nil }
         return value
     }

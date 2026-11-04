@@ -68,6 +68,22 @@ extension SessionController {
         await loadCommandFrecency()
     }
 
+    /// The command behind a "used" line, as it was run — see `InvokedCommand`.
+    ///
+    /// **A failure is not reported.** The flyout is already showing the name the
+    /// message itself carries, which is true; an ephemeral answer has no record
+    /// to ask for at all and always lands here.
+    func loadInvokedCommand(of messageID: MessageID, in channelID: ChannelID) async {
+        guard model.invokedCommands[messageID] == nil else { return }
+        do {
+            if let command = try await rest.invokedCommand(channelID: channelID, messageID: messageID) {
+                model.invokedCommands[messageID] = command
+            }
+        } catch {
+            Self.trace("interaction data: \(messageID) failed — \(Self.describe(error))")
+        }
+    }
+
     /// One application's own commands, for its page in the apps flyout.
     ///
     /// The app-scoped route — 7,700 bytes for OwO against the account index's

@@ -39,7 +39,8 @@ struct AddApplicationSheet: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
+    @Environment(\.isTopModal) private var isTop
 
     @State private var integrationType: IntegrationType?
     @State private var selectedGuildID: GuildID?
@@ -110,6 +111,8 @@ struct AddApplicationSheet: View {
             // to, so the arrow closes there too.
             let closes = integrationType == nil || didInstall
                 || (model.applicationInstallTypes[request.applicationID]?.count ?? 2) < 2
+            // The round glass control the HIG gives a modal's Close — and its
+            // Back, with the standard symbols and no labels.
             Button {
                 if closes {
                     dismiss()
@@ -117,13 +120,16 @@ struct AddApplicationSheet: View {
                     goBack()
                 }
             } label: {
-                Image(symbol: closes ? "xmark" : "chevron.backward")
-                    .font(Typeface.controlGlyph)
-                    .foregroundStyle(Ink.secondary)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
+                Image(systemName: closes ? "xmark" : "chevron.backward")
+                    .font(.system(.body, weight: .semibold))
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 20, height: 20)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .controlSize(.large)
+            .keyboardShortcut(closes && isTop ? .cancelAction : nil)
+            .help(closes ? "Close" : "Back")
             .accessibilityLabel(closes ? "Close" : "Back")
             Spacer(minLength: 0)
         }
@@ -342,16 +348,13 @@ struct AddApplicationSheet: View {
     // MARK: The controls
 
     private var backButton: some View {
-        Button("Back", action: goBack)
-            .buttonStyle(.plain)
-            .font(.system(.subheadline))
-            .foregroundStyle(Ink.secondary)
+        ModalButton(title: "Back", symbolName: "chevron.left", role: .secondary, action: goBack)
     }
 
     @ViewBuilder
     private func authorizeButton(_ install: ApplicationInstall) -> some View {
         let needsGuild = install.integrationType == .guildInstall
-        Button {
+        ModalButton(title: "Authorize", symbolName: "checkmark.shield.fill", role: .act, isWorking: isInstalling) {
             isInstalling = true
             Task {
                 didInstall = await model.sessionController.installApplication(
@@ -361,34 +364,17 @@ struct AddApplicationSheet: View {
                 )
                 isInstalling = false
             }
-        } label: {
-            Group {
-                if isInstalling {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Authorize")
-                }
-            }
-            .frame(minWidth: 96)
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .keyboardShortcut(.defaultAction)
-        .disabled(isInstalling || (needsGuild && selectedGuildID == nil))
+        .disabled(needsGuild && selectedGuildID == nil)
     }
 
     private var done: some View {
         VStack(spacing: Spacing.snug) {
             notice("Added", systemImage: "checkmark.circle.fill", tint: Palette.affirmative)
-            Button {
+            ModalButton(title: "Done", symbolName: "checkmark", role: .act) {
                 onFinished()
                 dismiss()
-            } label: {
-                Text("Done").frame(minWidth: 96)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
         }
     }
 

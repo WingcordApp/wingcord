@@ -58,7 +58,10 @@ nonisolated enum MemberRowPainter {
             // heading has no descenders to fill the space under it.
             let top = baseline + font.ascender - font.capHeight / 2 - side / 2
             context.saveGState()
-            context.draw(icon, in: CGRect(x: textX, y: top, width: side, height: side))
+            // Fitted in its square, as the transcript's is — Discord's
+            // `contain`; a wide icon stretched to the square drew thin.
+            let square = CGRect(x: textX, y: top, width: side, height: side)
+            context.draw(icon, in: TimelineRowPainter.fittedRect(icon, in: square, covering: false))
             context.restoreGState()
             textX += side + 5
         }

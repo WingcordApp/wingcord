@@ -32,8 +32,7 @@ struct NowPlayingSettingsGroup: View {
                 NowPlayingStateLine(presence: presence, sharesActivity: model.activityPrivacy.sharesCurrentGame)
             } else {
                 SettingsFootnote(
-                    "Off until you turn it on. It rides Share my activity below: with that off, nothing "
-                        + "here is shared either.",
+                    "Shared only while Share my activity, below, is on.",
                     symbolName: "music.note"
                 )
             }
@@ -64,8 +63,8 @@ struct NowPlayingSettingsGroup: View {
                 }
             }
             SettingsFootnote(
-                "Music is shared as soon as this is on. Video players wait for you to switch them on: "
-                    + "a file\u{2019}s name can say more than you meant to.",
+                "Music shares straight away. Video players wait for you to switch them on \u{2014} "
+                    + "a file\u{2019}s name can say more than you meant.",
                 symbolName: "play.rectangle"
             )
         }
@@ -95,17 +94,15 @@ struct NowPlayingSettingsGroup: View {
                     CardDivider()
                     SettingsActionRow(
                         "\(InstalledPlayer.name(of: browser)) isn\u{2019}t allowed",
-                        help: "Wingcord asks your browser which tab is playing. Without that, a site "
-                            + "in it can\u{2019}t be told apart from another.",
+                        help: "Wingcord needs to ask your browser which tab is playing.",
                         actionTitle: "Open Privacy Settings…",
                         action: openAutomationSettings
                     )
                 }
             }
             SettingsFootnote(
-                "In Safari, Chrome, Arc, Brave, Edge, Opera, Vivaldi and Orion. The first time one plays "
-                    + "something, macOS asks whether Wingcord may ask it which tab is playing. Firefox "
-                    + "can\u{2019}t say, so its sites aren\u{2019}t shared.",
+                "Works in Safari, Chrome, Arc, Brave, Edge, Opera, Vivaldi and Orion \u{2014} macOS asks "
+                    + "once for each. Firefox can\u{2019}t tell, so its sites aren\u{2019}t shared.",
                 symbolName: "safari"
             )
         }

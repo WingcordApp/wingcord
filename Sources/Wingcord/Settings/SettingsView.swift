@@ -32,7 +32,7 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            SettingsSidebar(selection: sectionBinding, query: $query)
+            SettingsSidebar(selection: sectionBinding, query: $query, show: { history.show($0) })
                 .navigationSplitViewColumnWidth(
                     min: SettingsMetrics.sidebarMinWidth,
                     ideal: SettingsMetrics.sidebarWidth,
@@ -94,11 +94,31 @@ private struct SettingsDetailPane: View {
 
     private var section: SettingsSection { history.current }
 
+    /// The row a search result asked for, while it glows.
+    @State private var lit: String?
+
     var body: some View {
-        ScrollView(.vertical) {
-            SettingsPaneContent(section: section)
-                .padding(SettingsMetrics.cardInset)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                SettingsPaneContent(section: section)
+                    .padding(SettingsMetrics.cardInset)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .environment(\.settingsHighlight, lit)
+            }
+            // A search result: the pane has just been swapped in, so the row
+            // is found a moment later, brought to the middle, and lit long
+            // enough to be seen — then let go.
+            .task(id: history.highlight) {
+                guard let request = history.highlight else { return }
+                try? await Task.sleep(for: .milliseconds(120))
+                withAnimation(motion.reposition) {
+                    proxy.scrollTo(SettingsAnchor.id(request.title), anchor: .center)
+                }
+                lit = request.title
+                Haptics.tick()
+                try? await Task.sleep(for: .seconds(1.6))
+                if lit == request.title { lit = nil }
+            }
         }
         .scrollBounceBehavior(.basedOnSize)
         .navigationTitle(section.title)
@@ -145,7 +165,7 @@ private struct SettingsPaneAction {
             perform = { _, _ in
                 NSWorkspace.shared.activateFileViewerSelecting([CrashReporter.reportDirectory])
             }
-        case .connectedApps:
+        case .connections:
             title = "Refresh"
             symbolName = "arrow.clockwise"
             perform = { model, _ in model.sessionController.refreshConnectedApps() }

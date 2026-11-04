@@ -41,7 +41,7 @@ struct MessagingPermissionsPane: View {
             SettingsCard {
                 CardHeaderRow(
                     title: "Sensitive media",
-                    help: "How image-based media Discord's own filters flag is shown to you."
+                    help: "How pictures Discord flags as sensitive are shown to you."
                 )
                 SettingsSegmentedControl(
                     selection: $category,
@@ -73,12 +73,10 @@ struct MessagingPermissionsPane: View {
                 SettingsToggle(
                     title: "Age-restricted servers on iPhone",
                     help: "Lets you open age-restricted servers on an iPhone or iPad after "
-                        + "joining them on a computer. Wingcord does not use this setting "
-                        + "itself — it travels with your account.",
+                        + "joining them on a computer.",
                     isOn: toggle(\.allowsAgeRestrictedGuilds) { .ageRestrictedGuilds($0) }
                 )
             }
-            .padding(.top, SettingsMetrics.cardToHeader)
         }
     }
 
@@ -89,9 +87,7 @@ struct MessagingPermissionsPane: View {
             SettingsCard {
                 SettingsFlyoutRow(
                     "Filter suspected spam",
-                    help: "Filtered messages go to your Message Requests rather than your "
-                        + "inbox. Discord decides what is spam; Wingcord only carries the "
-                        + "preference.",
+                    help: "Filtered messages go to Message Requests instead of your inbox.",
                     selection: binding(\.spamFilter) { .spamFilter($0) },
                     options: DMSpamFilter.choices,
                     title: \.title,
@@ -128,8 +124,7 @@ struct MessagingPermissionsPane: View {
                 )
             }
             SettingsFootnote(
-                "A server you are already in keeps whatever you set for it. "
-                    + "Change one from its own menu — Privacy Settings.",
+                "Servers you\u{2019}re already in keep their own. Change one from its menu \u{203A} Privacy Settings.",
                 symbolName: "building.2"
             )
         }
@@ -188,7 +183,7 @@ struct MessagingPermissionsPane: View {
                     SettingsValueRow(
                         title: "Blocked accounts",
                         value: "None",
-                        help: "Somebody you block cannot message you or see your messages."
+                        help: "Someone you block can\u{2019}t message you or see your messages."
                     )
                 } else {
                     CardHeaderRow(
@@ -196,21 +191,17 @@ struct MessagingPermissionsPane: View {
                         help: "\(model.blockedUserIDs.count) "
                             + (model.blockedUserIDs.count == 1 ? "account" : "accounts")
                     )
+                    // Discord's list has the way out beside each name, and so
+                    // does this one: somebody blocked is hard to reach anywhere
+                    // else, which is the point of blocking them.
                     ForEach(blockedPeople) { person in
                         CardDivider()
-                        SettingsValueRow(
-                            title: person.name,
-                            value: person.handle,
-                            help: nil
-                        )
+                        SettingsActionRow(person.name, help: person.handle, actionTitle: "Unblock") {
+                            model.setBlocked(false, userID: person.id)
+                        }
                     }
                 }
             }
-            SettingsFootnote(
-                "Blocking and unblocking happen from a person's own menu, where the act is "
-                    + "beside the name it belongs to.",
-                symbolName: "hand.raised"
-            )
         }
     }
 

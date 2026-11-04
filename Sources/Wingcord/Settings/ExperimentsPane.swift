@@ -17,8 +17,8 @@ struct ExperimentsPane: View {
             SettingsCard {
                 SettingsToggle(
                     title: "Custom typing indicators",
-                    help: "Shows the emoji and the word someone chose for their typing indicator while "
-                        + "they type alone — as Discord's phone apps do, and its desktop app doesn't yet.",
+                    help: "Shows the emoji and word someone picked for their typing indicator, "
+                        + "as Discord\u{2019}s phone apps do.",
                     isOn: $settings.drawsCustomTypingIndicators
                 )
                 CardDivider()
@@ -36,7 +36,7 @@ struct ExperimentsPane: View {
                 }
             }
             SettingsFootnote(
-                "Previews change only this Mac. What Discord shows on its own apps is still Discord's to decide.",
+                "Previews change only this Mac.",
                 symbolName: "flask"
             )
         }
@@ -83,8 +83,8 @@ struct ExperimentsPane: View {
             }
             SettingsFootnote(
                 unnamed > 0
-                    ? "Plus \(unnamed) Discord doesn't name in its app — their names exist only on its servers."
-                    : "Every experiment the account is in, as Discord's app names it.",
+                    ? "Plus \(unnamed) that Discord\u{2019}s app doesn\u{2019}t name."
+                    : "Every experiment your account is in, by Discord\u{2019}s names.",
                 symbolName: "person.crop.circle"
             )
         }
@@ -109,8 +109,7 @@ struct ExperimentsPane: View {
                 }
             }
             SettingsFootnote(
-                "Worked out here exactly as Discord's app works it out, from the rollout it sent: the "
-                    + "server's place in each, the populations that take it, and any override.",
+                "Worked out the way Discord\u{2019}s app does, from the rollout it sent.",
                 symbolName: "server.rack"
             )
         }
@@ -136,7 +135,7 @@ struct ExperimentsPane: View {
                         }
                     }
                     SettingsFootnote(
-                        "Discord's newer system names its experiments but not their variants, so a variant is its number.",
+                        "Discord doesn\u{2019}t name these variants, so each goes by its number.",
                         symbolName: "number"
                     )
                 }

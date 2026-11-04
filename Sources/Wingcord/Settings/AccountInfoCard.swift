@@ -34,7 +34,7 @@ struct AccountInfoCard: View {
             SettingsValueRow(
                 title: "Username",
                 value: handle,
-                help: "How people add you. It is not a secret and is never covered."
+                help: "How people add you. It isn\u{2019}t a secret, so it\u{2019}s never hidden."
             )
             CardDivider()
             secret(
@@ -55,8 +55,7 @@ struct AccountInfoCard: View {
         }
         if let details, details.email != nil, !details.isEmailVerified {
             SettingsFootnote(
-                "This address has not been confirmed. Discord sends the link; "
-                    + "Wingcord never sees it.",
+                "This address isn\u{2019}t confirmed yet \u{2014} look for Discord\u{2019}s email.",
                 symbolName: "exclamationmark.triangle"
             )
         }
@@ -139,8 +138,7 @@ struct AccountSecurityCard: View {
             CardDivider()
             SettingsActionRow(
                 "Password and two-factor",
-                help: "Changing either needs your current password, and Wingcord "
-                    + "does not ask for it. Discord's own settings do.",
+                help: "Change them in Discord\u{2019}s own settings, which ask for your password.",
                 actionTitle: "Open"
             ) {
                 guard let url = URL(string: "https://discord.com/channels/@me") else { return }
@@ -197,14 +195,12 @@ struct AuthSessionsCard: View {
                 SettingsValueRow(
                     title: "Devices",
                     value: "—",
-                    help: "Wingcord could not read this. It is not a claim that "
-                        + "there are none."
+                    help: "Wingcord couldn\u{2019}t read this \u{2014} there may still be some."
                 )
             }
         }
         SettingsFootnote(
-            "Signing a session out needs your password, which Wingcord does not ask "
-                + "for. This list is what the account says, not something it can change.",
+            "To sign a device out, use Discord\u{2019}s own settings.",
             symbolName: "lock"
         )
     }

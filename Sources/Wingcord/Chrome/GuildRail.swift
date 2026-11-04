@@ -79,6 +79,7 @@ struct GuildRail: View, Equatable {
 
     /// The tile being carried, if any — `RailDrag`.
     @State private var drag = RailDrag()
+    @Environment(\.sidebarBarsInset) private var barsInset
 
     var body: some View {
         ScrollView {
@@ -150,6 +151,9 @@ struct GuildRail: View, Equatable {
             .environment(drag)
         }
         .scrollIndicators(.hidden)
+        // The last tiles rest above the call card and the now bar, which run
+        // across the rail too — `sidebarBarsInset`.
+        .safeAreaPadding(.bottom, barsInset)
         // The rail runs to the top of the window, under the traffic lights,
         // which the split view already insets the column for.
         .frame(width: Proportions.railWidth)

@@ -105,19 +105,8 @@ private struct ReactionsListPanel: View {
                 .font(.system(.headline))
                 .foregroundStyle(InkColor.primary)
             Spacer(minLength: 0)
-            Button { model.reactionsList = nil } label: {
-                Image(systemName: "xmark")
-                    .font(.system(.body, weight: .semibold))
-                    .foregroundStyle(InkColor.solid)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    // A region inside the panel's material, not a body of its
-                    // own — glass on glass is §4's first rule.
-                    .background(Circle().fill(Palette.hoverFill))
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .help("Close")
-            .accessibilityLabel(Text("Close reactions"))
+            // The cards' round glass ✕; Escape stays the layer's own.
+            ModalCloseButton(label: "Close reactions", answersEscape: false) { model.reactionsList = nil }
         }
         .padding(Spacing.margin)
     }

@@ -46,7 +46,7 @@ struct ConnectedAppsPane: View {
         // Read here, not inside the presentation closure, so the sheet is
         // handed a value rather than an optional it has to unwrap — the same
         // rule `GuildSurfacePresenter` follows for its own two sheets.
-        .sheet(item: $model.domainConnectionSheet) { sheet in
+        .modal(item: $model.domainConnectionSheet) { sheet in
             ConnectDomainSheet(sheet: sheet)
         }
     }

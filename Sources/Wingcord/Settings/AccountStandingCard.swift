@@ -19,7 +19,7 @@ struct AccountStandingCard: View {
                 SettingsValueRow(
                     title: "Standing",
                     value: "Code \(value)",
-                    help: "Discord answered with a status this client does not recognize yet."
+                    help: "Discord sent a standing Wingcord doesn\u{2019}t know yet."
                 )
             case .some(let state):
                 VStack(alignment: .leading, spacing: Spacing.base) {

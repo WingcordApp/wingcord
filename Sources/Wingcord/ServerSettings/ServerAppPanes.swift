@@ -144,7 +144,8 @@ struct SafetyPane: View {
                 .accessibilityHidden(true)
         } trailing: {
             Button("Edit") { page = target }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
         }
     }
@@ -321,7 +322,8 @@ struct SafetyPane: View {
                         isRemovingRisky = false
                     }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .disabled(isRemovingRisky || refusal)
                 .help(refusal
@@ -355,7 +357,8 @@ struct SafetyPane: View {
                     detail: Text("Give your mods a break while keeping your server safe! Set up filters to moderate content and automate a custom response when they\u{2019}re found, and AutoMod will make it happen.")
                 ) {
                     Button("Create") { creating = true }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
                         .controlSize(.small)
                 }
             }
@@ -374,12 +377,12 @@ struct SafetyPane: View {
                 }
             }
         }
-        .sheet(isPresented: $creating) {
+        .modal(isPresented: $creating) {
             AutoModSheet(existing: nil, store: store) { draft, existing in
                 Task { await store.saveAutoModRule(draft, existing: existing) }
             }
         }
-        .sheet(item: $editing) { rule in
+        .modal(item: $editing) { rule in
             AutoModSheet(existing: rule, store: store) { draft, existing in
                 Task { await store.saveAutoModRule(draft, existing: existing) }
             }
@@ -524,7 +527,8 @@ struct AuditLogPane: View {
                             Text("Load More")
                         }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
                     .disabled(isLoadingMore)
                     Spacer()

@@ -482,6 +482,8 @@ struct GameServerDTO: Decodable, Sendable {
     var players_count: Int?
     var provider_url: String?
     var game_config: GameConfigDTO?
+    /// The game, as an application id — a snowflake string.
+    var game_id: String?
     var scheduled_action: String?
     var scheduled_action_at: Date?
 
@@ -507,6 +509,7 @@ struct GameServerDTO: Decodable, Sendable {
             maxPlayers: max(0, max_players_count ?? 0),
             gameName: game_config?.type.nonEmpty,
             gameVersion: game_config?.version.nonEmpty,
+            gameID: game_id.flatMap { UInt64($0) }.map(ApplicationID.init(rawValue:)),
             // Somebody else's control panel, so the same scheme check every
             // outbound link in this app takes applies at the point it is opened.
             providerURL: provider_url.nonEmpty.flatMap(URL.init(string:)),

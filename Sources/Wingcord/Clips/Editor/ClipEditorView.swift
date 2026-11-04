@@ -84,7 +84,7 @@ struct ClipEditorView: View {
                     .help(showsInspector ? "Hide the inspector" : "Show the inspector")
             }
         }
-        .sheet(isPresented: $isExporting) {
+        .modal(isPresented: $isExporting) {
             ClipExportSheet(editor: editor) { settings in
                 isExporting = false
                 export(with: settings)
@@ -526,10 +526,8 @@ private struct ClipExportSheet: View {
     @State private var settings = ClipExportSettings()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.margin) {
-            Text("Export Clip")
-                .font(.system(.title3, weight: .semibold))
-                .foregroundStyle(Ink.primary)
+        VStack(alignment: .leading, spacing: 0) {
+            ModalHeader(title: "Export Clip")
             Form {
                 LabeledContent("Format") {
                     SegmentedPicker(
@@ -557,18 +555,19 @@ private struct ClipExportSheet: View {
                 .disabled(editor.item.clip.manifest?.timeline.contains { if case .speaking = $0.event { true } else { false } } != true)
             }
             .formStyle(.grouped)
-            HStack {
-                Spacer()
-                Button("Cancel", action: cancel)
-                    .keyboardShortcut(.cancelAction)
-                Button("Export…") { export(settings) }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.glassProminent)
+            .scrollDisabled(true)
+            .scrollContentBackground(.hidden)
+            .padding(.horizontal, Spacing.base)
+            GlassEffectContainer(spacing: Spacing.snug) {
+                HStack(spacing: Spacing.snug) {
+                    ModalButton(title: "Cancel", symbolName: "xmark", role: .cancel, action: cancel)
+                    Spacer()
+                    ModalButton(title: "Export…", symbolName: "square.and.arrow.up", role: .act) { export(settings) }
+                }
             }
-            .controlSize(.large)
+            .padding(Spacing.margin)
         }
-        .padding(Spacing.group)
-        .frame(width: 420)
+        .frame(width: 440)
     }
 }
 

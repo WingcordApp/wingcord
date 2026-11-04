@@ -26,7 +26,7 @@ struct GuideEditor: View {
             resourcesCard
             saveBar
         }
-        .sheet(item: $editingTask) { task in
+        .modal(item: $editingTask) { task in
             GuideTaskSheet(task: task, store: store) { edited in
                 var next = working
                 if let index = next.actions.firstIndex(where: { $0.id == edited.id }) {
@@ -37,7 +37,7 @@ struct GuideEditor: View {
                 draft = next
             }
         }
-        .sheet(item: $editingResource) { resource in
+        .modal(item: $editingResource) { resource in
             GuideResourceSheet(resource: resource, store: store) { edited in
                 var next = working
                 if let index = next.resources.firstIndex(where: { $0.id == edited.id }) {
@@ -271,7 +271,7 @@ struct GuideTaskSheet: View {
         } content: {
             SheetField(title: "What should the new member do?", isRequired: true) {
                 TextField("Ex: Post a photo of your pet", text: $working.title)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
             }
 
             SheetField(
@@ -392,12 +392,12 @@ struct GuideResourceSheet: View {
 
             SheetField(title: "Title", isRequired: true) {
                 TextField("Title", text: $working.title)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
             }
 
             SheetField(title: "Description") {
                 TextField("Ex: Rules for the server", text: $working.detail, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
                     .lineLimit(2...4)
             }
         }

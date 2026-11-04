@@ -406,6 +406,7 @@ nonisolated enum TimelineRowPainter {
             drawInteractionHeader(
                 header,
                 offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                isChipHovered: state.hoveredComponent == header.chipRect.origin,
                 context: context,
                 style: style,
                 images: images,
@@ -598,7 +599,11 @@ nonisolated enum TimelineRowPainter {
                         ),
                         bucket: .thumbnail
                     ) {
-                        drawFlipped(icon, in: box, context: context)
+                        // **Fitted, not filled** — Discord's `object-fit:
+                        // contain`. A role icon need not be square, and its
+                        // logo is wider than tall: stretched to the square it
+                        // drew squeezed thin (Alex's screenshots 21, 22).
+                        drawFlipped(icon, in: fittedRect(icon, in: box, covering: false), context: context)
                     }
                 } else if let emoji = row.roleEmoji {
                     // One copy of the measurement, for the reason §5.55 gives:
@@ -689,6 +694,14 @@ nonisolated enum TimelineRowPainter {
                 context.endTransparencyLayer()
                 context.restoreGState()
             }
+        }
+
+        if let foot = row.editedFoot, !state.hidesBubble {
+            drawFrame(
+                foot.block,
+                at: CGPoint(x: rowFrame.minX + foot.origin.x, y: rowFrame.minY + foot.origin.y),
+                context: context
+            )
         }
 
         for (index, slot) in row.stickers.enumerated() where !state.layered.stickers.contains(index) {
@@ -1448,6 +1461,7 @@ nonisolated enum TimelineRowPainter {
     private static func drawInteractionHeader(
         _ header: InteractionHeaderSlot,
         offset: CGPoint,
+        isChipHovered: Bool,
         context: CGContext,
         style: MessageTextStyle,
         images: ImageStore,
@@ -1478,33 +1492,43 @@ nonisolated enum TimelineRowPainter {
             header.lead,
             font: header.leadFace ?? font,
             color: header.leadColor ?? style.secondaryColor,
-            at: CGPoint(x: offset.x + header.leadRect.minX, y: offset.y + header.leadRect.minY),
+            // On the line's middle, as a reply's name is, with the face beside
+            // it and the chip after it.
+            at: CGPoint(
+                x: offset.x + header.leadRect.minX,
+                y: capCenteredY(of: header.leadFace ?? font, in: header.leadRect) + offset.y
+            ),
             maxWidth: header.leadRect.width,
             tracking: header.leadTracking,
             context: context
         )
 
-        // The chip. Filled rather than outlined: the command's name is a token
-        // the app owns, and a border would make it read as a control.
+        // Discord's chip: a mention's plate, its ink, and white on solid under
+        // the pointer. A label is only the name in that ink.
         let chip = header.chipRect.offsetBy(dx: offset.x, dy: offset.y)
-        context.addPath(CGPath(
-            roundedRect: chip,
-            cornerWidth: chip.height / 2,
-            cornerHeight: chip.height / 2,
-            transform: nil
-        ))
-        context.setFillColor(ThemeInk.current.accent.copy(alpha: 0.28) ?? ThemeInk.current.accent)
-        context.fillPath()
+        var ink = style.mentionColor
+        if header.chip.hasPlate {
+            let plates = ThemeInk.current.plates
+            context.addPath(CGPath(roundedRect: chip, cornerWidth: 3, cornerHeight: 3, transform: nil))
+            context.setFillColor(isChipHovered ? plates.mentionHoverFill : plates.mentionFill)
+            context.fillPath()
+            if isChipHovered { ink = .white }
+        }
+        if let glyph = header.glyphRect {
+            context.addPath(AppsGlyph.path(in: glyph.offsetBy(dx: offset.x, dy: offset.y)))
+            context.setFillColor(ink.cgColor)
+            context.fillPath()
+        }
 
         _ = drawText(
             header.command,
-            font: font,
-            color: style.primaryColor,
+            font: header.commandFont,
+            color: ink,
             at: CGPoint(
                 x: offset.x + header.commandRect.minX,
-                y: offset.y + header.commandRect.minY
+                y: capCenteredY(of: header.commandFont, in: header.commandRect) + offset.y
             ),
-            maxWidth: header.commandRect.width,
+            maxWidth: header.commandRect.width + 1,
             context: context
         )
     }

@@ -38,7 +38,7 @@ struct WallpaperPicker: View {
             ActionTile(title: "Choose File…", systemImage: "photo.badge.plus") { chooseFile() }
             ActionTile(title: "macOS Wallpapers…", systemImage: "macwindow") { isBrowsingSystem = true }
         }
-        .sheet(isPresented: $isBrowsingSystem) {
+        .modal(isPresented: $isBrowsingSystem) {
             SystemWallpaperBrowser { wallpaper in
                 selection = Wallpaper(source: .system(path: wallpaper.url.path, isVideo: wallpaper.isVideo),
                                       blur: selection.blur, dim: selection.dim)
@@ -205,9 +205,8 @@ private struct SystemWallpaperBrowser: View {
     private let columns = [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: Spacing.snug)]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.margin) {
-            Text("macOS Wallpapers")
-                .font(.system(.title3, weight: .semibold))
+        VStack(alignment: .leading, spacing: 0) {
+            ModalHeader(title: "macOS Wallpapers", close: cancel)
             Group {
                 if let wallpapers, !wallpapers.isEmpty {
                     ScrollView {
@@ -216,7 +215,9 @@ private struct SystemWallpaperBrowser: View {
                                 SystemWallpaperCell(wallpaper: wallpaper) { choose(wallpaper) }
                             }
                         }
+                        .padding(.horizontal, Spacing.group)
                     }
+                    .softScrollEdgesVertical()
                 } else if wallpapers != nil {
                     ContentUnavailableView(
                         "No Wallpapers Downloaded",
@@ -229,18 +230,16 @@ private struct SystemWallpaperBrowser: View {
             }
             .frame(minHeight: 360)
             HStack {
-                Button("Wallpaper Settings") {
+                ModalButton(title: "Wallpaper Settings…", symbolName: "gearshape", role: .secondary) {
                     if let url = URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension") {
                         NSWorkspace.shared.open(url)
                     }
                 }
                 Spacer()
-                Button("Cancel", action: cancel)
-                    .keyboardShortcut(.cancelAction)
             }
+            .padding(Spacing.margin)
         }
-        .padding(Spacing.group)
-        .frame(width: 640, height: 520)
+        .frame(width: 640, height: 560)
         .task {
             wallpapers = await Task.detached(priority: .userInitiated) { SystemWallpaper.available() }.value
         }
@@ -304,7 +303,7 @@ struct WallpaperSettingsCard: View {
                     CardDivider()
                     SettingsSliderRow(
                         title: "Blur",
-                        help: "Softens the picture so its detail stops competing with the text on top of it.",
+                        help: "Softens the picture so the text on top stays easy to read.",
                         value: Binding(
                             get: { store.global.blur },
                             set: { var next = store.global; next.blur = $0; store.setGlobal(next) }
@@ -337,8 +336,8 @@ struct WallpaperSettingsCard: View {
                 SettingsFootnote(failure, symbolName: "exclamationmark.triangle")
             } else {
                 SettingsFootnote(
-                    "One picture fills the whole window, behind the sidebar and the conversation. "
-                        + "A conversation can wear its own: right-click it and choose Change Background.",
+                    "Fills the whole window. To give one conversation its own, right-click it "
+                        + "\u{203A} Change Background.",
                     symbolName: "photo.on.rectangle.angled"
                 )
             }
@@ -365,43 +364,37 @@ struct ConversationBackgroundSheet: View {
     @State private var isLoaded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.margin) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Conversation Background")
-                        .font(.system(.headline))
-                    Text(title)
-                        .font(.system(.subheadline))
-                        .foregroundStyle(Ink.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            ModalHeader(title: "Conversation Background", subtitle: Text(verbatim: title), close: close)
+            VStack(alignment: .leading, spacing: Spacing.margin) {
+                preview
+                WallpaperPicker(selection: $selection, failure: $failure)
+                if let failure {
+                    Text(failure)
+                        .font(.system(.caption))
+                        .foregroundStyle(Palette.destructive)
                 }
-                Spacer()
             }
-            preview
-            WallpaperPicker(selection: $selection, failure: $failure)
-            if let failure {
-                Text(failure)
-                    .font(.system(.caption))
-                    .foregroundStyle(Palette.destructive)
-            }
-            HStack {
-                if store.hasOwnWallpaper(channelID) {
-                    Button("Use App Background") {
-                        store.setWallpaper(nil, for: channelID)
+            .padding(.horizontal, Spacing.group)
+            GlassEffectContainer(spacing: Spacing.snug) {
+                HStack(spacing: Spacing.snug) {
+                    if store.hasOwnWallpaper(channelID) {
+                        ModalButton(title: "Use App Background", symbolName: "arrow.uturn.backward", role: .secondary) {
+                            store.setWallpaper(nil, for: channelID)
+                            close()
+                        }
+                    } else {
+                        ModalButton(title: "Cancel", symbolName: "xmark", role: .cancel, action: close)
+                    }
+                    Spacer(minLength: 0)
+                    ModalButton(title: "Apply", symbolName: "checkmark", role: .act) {
+                        store.setWallpaper(selection, for: channelID)
                         close()
                     }
                 }
-                Spacer()
-                Button("Cancel", action: close)
-                    .keyboardShortcut(.cancelAction)
-                Button("Apply") {
-                    store.setWallpaper(selection, for: channelID)
-                    close()
-                }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
             }
+            .padding(Spacing.margin)
         }
-        .padding(Spacing.group)
         .frame(width: 560)
         .onAppear {
             guard !isLoaded else { return }

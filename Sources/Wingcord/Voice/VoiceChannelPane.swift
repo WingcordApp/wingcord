@@ -127,7 +127,8 @@ struct VoiceChannelPane: View {
             Button("Join Voice", systemImage: "phone.fill") {
                 model.joinVoice(channelID)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.capsule)
             .tint(Palette.presenceOnline)
             .controlSize(.extraLarge)
             .keyboardShortcut(.return, modifiers: [])

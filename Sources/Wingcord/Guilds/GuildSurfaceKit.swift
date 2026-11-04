@@ -459,8 +459,9 @@ struct SurfaceEmptyState: View {
 
 // MARK: Actions
 
-/// The one filled control these pages and their sheets have — the system's
-/// prominent button, in the accent unless a page tints it.
+/// The one filled control these pages and their cards have — the system's
+/// prominent Liquid Glass capsule, in the accent unless a page tints it
+/// (Alex, 2026-10-14: glass capsules for buttons, never a solid slab).
 struct SurfaceFilledButton: View {
     var title: String
     var systemImage: String?
@@ -478,13 +479,14 @@ struct SurfaceFilledButton: View {
             SurfaceButtonLabel(title: title, systemImage: systemImage)
                 .frame(minWidth: Self.minimumLabelWidth)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.glassProminent)
+        .buttonBorderShape(.capsule)
         .tint(tint)
         .controlSize(.large)
     }
 }
 
-/// A quiet secondary action beside it — the system's bordered button.
+/// A quiet secondary action beside it — plain Liquid Glass.
 struct SurfaceQuietButton: View {
     var title: String
     var systemImage: String?
@@ -494,7 +496,8 @@ struct SurfaceQuietButton: View {
         Button(action: action) {
             SurfaceButtonLabel(title: title, systemImage: systemImage)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
         .controlSize(.large)
     }
 }
@@ -505,11 +508,13 @@ private struct SurfaceButtonLabel: View {
     var systemImage: String?
 
     var body: some View {
-        HStack(spacing: Spacing.tight) {
+        HStack(spacing: Spacing.base) {
             if let systemImage {
                 Image(symbol: systemImage)
             }
             Text(title)
         }
+        .font(.system(.body, weight: .semibold))
+        .padding(.horizontal, Spacing.tight)
     }
 }

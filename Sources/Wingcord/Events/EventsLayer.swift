@@ -28,7 +28,9 @@ struct EventsLayer: View {
         ZStack {
             if let request {
                 Button { model.eventsPanel = nil } label: {
-                    Palette.modalScrim.contentShape(.rect)
+                    // The cards' dimming: the panel is solid now, so the
+                    // window only has to step back, not go dark.
+                    Color.black.opacity(0.52).contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .cancelAction(unless: model.isCovered(.events))
@@ -55,7 +57,8 @@ private struct EventsPanel: View {
     @Environment(\.motion) private var motion
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+        // The cards' corner, so the panel and the cards it raises are one family.
+        let shape = RoundedRectangle(cornerRadius: ModalCardChrome.radius, style: .continuous)
         Group {
             switch request.page {
             case .list:
@@ -92,24 +95,14 @@ struct EventsPanelHeader<Leading: View, Trailing: View>: View {
         HStack(spacing: Spacing.base) {
             leading
             Text(title)
-                .font(.system(.headline))
+                .font(.system(.title3, weight: .bold))
                 .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
             trailing
             Spacer(minLength: 0)
-            Button { model.eventsPanel = nil } label: {
-                Image(systemName: "xmark")
-                    .font(.system(.body, weight: .semibold))
-                    .foregroundStyle(InkColor.solid)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    // A region inside the panel's material, not a body of its
-                    // own — glass on glass is §4's first rule.
-                    .background(Circle().fill(Palette.hoverFill))
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .help("Close")
-            .accessibilityLabel(Text("Close events"))
+            // The card's round glass ✕; Escape stays the scrim's, which is
+            // the layer's own way out (`EscapeLayer.events`).
+            ModalCloseButton(label: "Close events", answersEscape: false) { model.eventsPanel = nil }
         }
         .padding(Spacing.margin)
     }
@@ -136,11 +129,13 @@ private struct EventsListPage: View {
                     .accessibilityHidden(true)
             } trailing: {
                 if canCreate {
-                    Button("Create Event") {
+                    Button("Create Event", systemImage: "calendar.badge.plus") {
                         model.openEventEditor(inGuild: guildID)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(Palette.accent)
+                    .controlSize(.regular)
                     .padding(.leading, Spacing.tight)
                 }
             }

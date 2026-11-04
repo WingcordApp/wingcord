@@ -177,8 +177,10 @@ struct SignInView: View {
             Button("Sign in with Discord", systemImage: "arrow.right.circle.fill") {
                 isPresentingWebLogin = true
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.capsule)
+            .tint(Palette.accent)
+            .controlSize(.extraLarge)
 
             if case .failed(let reason) = model.connectionState {
                 Text(reason)
@@ -191,12 +193,16 @@ struct SignInView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .readingSurface()
         .task { accounts = AccountLedger.accounts() }
-        .sheet(isPresented: $isPresentingWebLogin) {
+        .modal(isPresented: $isPresentingWebLogin, style: .panel) {
             DiscordLoginView { token in
                 isPresentingWebLogin = false
                 model.beginSession(token: token)
             }
             .frame(width: 560, height: 720)
+            .overlay(alignment: .topTrailing) {
+                ModalCloseButton { isPresentingWebLogin = false }
+                    .padding(Spacing.margin)
+            }
         }
     }
 

@@ -73,6 +73,13 @@ public enum PremiumPerk: Hashable, Sendable, CaseIterable {
     case streamMidQuality
     /// `streamHighQuality` — Go Live at Source.
     case streamHighQuality
+    /// `ANIMATED_AVATAR` — a moving avatar on the account's own profile.
+    /// **Classic carries it too**; a moving banner is `profileCustomization`.
+    case animatedAvatar
+    /// `collectibles` — wearing what was claimed through Nitro. Bought,
+    /// gifted, free, Orbs and quest-reward collectibles need no perk at all
+    /// (`993408`'s `gA`: only `purchase_type` 7 locks).
+    case collectibles
 }
 
 extension PremiumTier {
@@ -95,13 +102,13 @@ extension PremiumTier {
             switch perk {
             case .animatedEmoji, .emojiEverywhere, .stickersEverywhere: true
             case .soundboardEverywhere, .profileCustomization, .serverProfile,
-                 .streamMidQuality, .streamHighQuality: false
+                 .streamMidQuality, .streamHighQuality, .animatedAvatar, .collectibles: false
             }
         case .classic:
             switch perk {
-            case .animatedEmoji, .emojiEverywhere, .streamMidQuality: true
+            case .animatedEmoji, .emojiEverywhere, .streamMidQuality, .animatedAvatar: true
             case .stickersEverywhere, .soundboardEverywhere, .profileCustomization,
-                 .serverProfile, .streamHighQuality: false
+                 .serverProfile, .streamHighQuality, .collectibles: false
             }
         }
     }

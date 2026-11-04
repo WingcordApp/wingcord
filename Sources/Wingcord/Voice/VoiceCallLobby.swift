@@ -80,7 +80,9 @@ struct VoiceCallLobby: View {
         // call are capsules, the tile name badges are capsules, and Accept on
         // an incoming call is a capsule — a rounded rectangle here is the one
         // shape in the surface that belongs to a different vocabulary.
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.glassProminent)
+        .buttonBorderShape(.capsule)
+        .tint(Palette.accent)
         .buttonBorderShape(.capsule)
         // The same green Accept wears. Joining a call already running is the
         // affirmative call action, and giving it a colour of its own would be

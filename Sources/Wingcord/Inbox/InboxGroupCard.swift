@@ -178,7 +178,8 @@ struct InboxGroupCard: View {
                     .labelStyle(.iconOnly)
                     .font(.system(.subheadline, weight: .semibold))
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .controlSize(.small)
             .help("Mark as read")
             .disabled(!group.canOpen)

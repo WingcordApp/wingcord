@@ -66,7 +66,7 @@ struct RolesPane: View {
                     }
                 }
             }
-            .sheet(item: Binding(
+            .modal(item: Binding(
                 get: { editing.flatMap { id in roles.first { $0.id == id } } },
                 set: { editing = $0?.id }
             )) { role in
@@ -257,7 +257,7 @@ struct InvitesPane: View {
                 }
             }
         }
-        .sheet(isPresented: $isCreating) {
+        .modal(isPresented: $isCreating) {
             InviteSheet(channels: store.textChannels) { channelID, options in
                 Task { await store.createInvite(in: channelID, options: options) }
             }

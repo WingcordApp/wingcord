@@ -48,7 +48,7 @@ struct AutoModSheet: View {
         } content: {
             SheetField(title: "Rule Name", isRequired: true) {
                 TextField("Enter a rule name", text: $draft.name)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
             }
 
             // The trigger is fixed once a rule exists: changing it would rewrite
@@ -398,7 +398,7 @@ private struct ActionRow: View {
                 get: { message ?? "" },
                 set: { replace(.blockMessage(customMessage: $0.isEmpty ? nil : $0)) }
             ))
-            .textFieldStyle(.roundedBorder)
+            .modalField()
             .padding(.leading, Spacing.group)
 
         case .quarantine:

@@ -5,10 +5,10 @@ import Testing
 
 /// The custom status bubble's arrangement.
 ///
-/// Every number in `StatusBubbleLayout` was **measured off a reference**, and
-/// the first attempt got the vocabulary right and the geometry wrong in four
-/// separate ways. These pin the relationships that make the cluster read as
-/// speech coming out of a face rather than as a label with decoration beside it.
+/// Every number in `StatusBubbleLayout` is **out of Discord's stylesheet**, and
+/// the attempts measured off pictures got the vocabulary right and the geometry
+/// wrong. These pin the relationships that make the cluster read as speech coming
+/// out of a face rather than as a label with decoration beside it.
 @Suite("Status bubble layout")
 struct StatusBubbleLayoutTests {
 
@@ -17,10 +17,8 @@ struct StatusBubbleLayoutTests {
         StatusBubbleLayout(
             avatarSide: 80,
             avatarDrop: drop,
-            decorationOverhang: 8,
             cardWidth: cardWidth,
-            margin: 16,
-            gap: 8
+            margin: 16
         )
     }
 
@@ -100,15 +98,57 @@ struct StatusBubbleLayoutTests {
     @Test("The bubble leaves the face at the same angle on both surfaces")
     func placementIsDerivedFromTheDrop() {
         for drop in [CGFloat(34), 40] {
-            let value = layout(drop: drop)
-            // Measured down from the artwork's lower edge: the avatar's centre,
-            // and the cluster's.
-            let avatarCenter = drop - value.avatarSide / 2
-            // The bubble's own top, which is the cluster's top plus the room
-            // reserved above it for the discs.
-            let bubbleTop = value.verticalOffset - value.topOverhang
-            #expect(abs((bubbleTop - avatarCenter) - value.dropBelowCentre) < 0.001)
+            for collapsedHeight in [CGFloat(50), 44] {
+                let value = layout(drop: drop)
+                // Measured down from the artwork's lower edge: the avatar's centre.
+                let avatarCenter = drop - value.avatarSide / 2
+                // **As the view hangs it**: bottom-leading, the cluster's frame
+                // `topOverhang + collapsedHeight` tall, the bubble at its top
+                // under the overhang. The old test placed it by its top, which
+                // the view never did — and the bubble sat a line and a half
+                // higher than this said (Alex's screenshots 28, 29).
+                let clusterBottom = value.verticalOffset(collapsedHeight: collapsedHeight)
+                let bubbleTop = clusterBottom - (value.topOverhang + collapsedHeight) + value.topOverhang
+                #expect(abs((bubbleTop - avatarCenter) - value.topBelowCentre) < 0.001)
+                // Level with the face's middle, a point above it, as Discord's.
+                #expect(bubbleTop == avatarCenter - 1)
+            }
         }
+    }
+
+    /// `.user-profile-popout .container { left: 105px; top: calc(banner - 7px) }`
+    /// inside a themed card's 2 pixels of padding, against `.avatar { left: 14px;
+    /// top: 59px }`. Alex's screenshot 29 agrees to the pixel: the face's right
+    /// edge at 238.5, the bubble's left at 260; its centre at 137.5, the
+    /// bubble's top at 136.
+    @Test("On the card it sits where Discord's stylesheet says")
+    func cardFromTheStylesheet() {
+        // The card's avatar: 80 across, 16 in, dropping 34 below the artwork.
+        let value = layout(drop: 34)
+        #expect(value.gapFromFace == 11)
+        #expect(value.leadingInset == CGFloat(105 + 2))
+        let top = value.verticalOffset(collapsedHeight: 50) - 50
+        #expect(top == -7, "7 above the banner's foot, whatever the status holds")
+    }
+
+    /// `.user-profile-modal`: `.avatar { left: 24px; top: -68px }`, 120 across;
+    /// `.container { left: 161px; top: -10px }`.
+    @Test("On the full profile it sits where Discord's stylesheet says")
+    func fullProfileFromTheStylesheet() {
+        var value = layout(drop: 56)
+        value.avatarSide = 118
+        value.surface = .fullProfile
+        #expect(value.gapFromFace == CGFloat(161 - (24 + 120)))
+        #expect(value.topBelowCentre == CGFloat(-10 - (-68 + 60)))
+    }
+
+    @Test("The emoji is Discord's 16 beside words, with 4 after it, in a 16-point corner")
+    func bubbleFromTheStylesheet() {
+        let value = layout(drop: 34)
+        #expect(value.emojiSide == 16)
+        #expect(value.loneEmojiSide == 32)
+        #expect(value.contentGap == 4)
+        #expect(value.bubbleCorner == 16)
     }
 
     /// **The bug the explicit width exists to prevent.** `frame(maxWidth:)`

@@ -87,9 +87,10 @@ struct BubbleFlightTests {
     @Test("A row with no bubble has nothing to fly")
     func nothingFliesWithoutABubble() {
         let (window, canvas) = mounted()
-        // Emoji on their own are drawn bare.
+        // A body with nothing in it is the one thing drawn without a bubble —
+        // emoji on their own take one now.
         let bare = Message(
-            id: Self.nonce, channelID: ChannelID(rawValue: 9), authorID: Self.me, content: "😀"
+            id: Self.nonce, channelID: ChannelID(rawValue: 9), authorID: Self.me, content: ""
         )
         canvas.apply(rows: rows([bare]))
         canvas.launchBubble(nonce: Self.nonce, from: Self.launch, reducesMotion: false)

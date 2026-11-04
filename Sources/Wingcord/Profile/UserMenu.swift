@@ -388,13 +388,19 @@ struct UserMenu: View {
             title: actions.isIgnored ? "Stop Ignoring" : "Ignore",
             symbolName: actions.isIgnored ? "speaker.wave.2" : "speaker.slash",
             accessory: actions.isBusy ? .busy : .none
-        ) { model.setIgnored(!actions.isIgnored, userID: userID) }
+        ) {
+            model.userMenu = nil
+            model.askToIgnore(userID)
+        }
         FlyoutRow(
             title: actions.isBlocked ? "Unblock" : "Block",
             symbolName: "hand.raised",
             accessory: actions.isBusy ? .busy : .none,
             isDestructive: !actions.isBlocked
-        ) { model.setBlocked(!actions.isBlocked, userID: userID) }
+        ) {
+            model.userMenu = nil
+            model.askToBlock(userID)
+        }
     }
 
     @ViewBuilder

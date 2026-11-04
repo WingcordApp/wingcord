@@ -28,6 +28,8 @@ struct ReportSheet: View {
     /// The node an auto-submitting screen has already posted, so re-rendering
     /// the same screen does not file a second report.
     @State private var autoSubmitted: Int?
+    /// Whether the last step went deeper — the way the next page slides.
+    @State private var isGoingForward = true
 
     private static let width: CGFloat = 460
     private static let maximumHeight: CGFloat = 520
@@ -40,20 +42,35 @@ struct ReportSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            if let submission = model.reportSubmission, submission != .sending {
-                outcome(submission)
-            } else if let node, let path {
-                body(of: node, path: path)
-            } else {
-                loading
+            ModalHeader(
+                title: node?.header ?? "Report",
+                subtitle: node?.subheader.map { Text(verbatim: $0) },
+                close: { model.dismissReport() }
+            )
+            // **Each step turns in place** — the card resizes to the next
+            // question and the page slides in from the way it was reached.
+            ZStack(alignment: .top) {
+                if let submission = model.reportSubmission, submission != .sending {
+                    outcome(submission)
+                        .transition(.modalStep(forward: true))
+                } else if let node, let path {
+                    VStack(alignment: .leading, spacing: 0) {
+                        body(of: node, path: path)
+                    }
+                    .id(node.id)
+                    .transition(.modalStep(forward: isGoingForward))
+                } else {
+                    loading
+                }
             }
         }
         .frame(width: Self.width)
         .frame(maxHeight: Self.maximumHeight)
-        .background(Palette.surface)
-        .animation(motion.standard, value: path?.currentNodeID)
-        .animation(motion.standard, value: model.reportSubmission)
+        .animation(motion.reposition, value: path?.currentNodeID)
+        .animation(motion.reposition, value: model.reportSubmission)
+        .onChange(of: path?.nodeIDs.count) { old, new in
+            isGoingForward = (new ?? 0) >= (old ?? 0)
+        }
         // Started when the tree lands rather than in the body: a body that seeds
         // state runs every render and would reset the walk on every keystroke
         // anywhere in the window.
@@ -73,43 +90,12 @@ struct ReportSheet: View {
 
     // MARK: Chrome
 
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Spacing.snug) {
-            VStack(alignment: .leading, spacing: Spacing.tight) {
-                Text(node?.header ?? "Report")
-                    .font(.system(.title3, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let subheader = node?.subheader {
-                    Text(subheader)
-                        .font(.system(.subheadline))
-                        .foregroundStyle(Ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 0)
-            Button { model.dismissReport() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Ink.secondary)
-            .keyboardShortcut(.cancelAction)
-            .accessibilityLabel(Text("Close"))
-        }
-        .padding(.horizontal, Spacing.group)
-        .padding(.top, Spacing.group)
-        .padding(.bottom, Spacing.margin)
-    }
-
     private var loading: some View {
         VStack(spacing: Spacing.snug) {
             ProgressView().controlSize(.small)
             Text("Fetching the report categories…")
                 .font(.system(.subheadline))
-                .foregroundStyle(Ink.tertiary)
+                .foregroundStyle(Ink.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, Spacing.section)
@@ -190,64 +176,46 @@ struct ReportSheet: View {
     @ViewBuilder
     private func footer(of node: ReportNode, path: ReportPath) -> some View {
         let isSending = model.reportSubmission == .sending
-        HStack(spacing: Spacing.snug) {
-            if path.canGoBack {
-                Button("Back") { self.path?.pop() }
-                    .buttonStyle(.plain)
-                    .font(.system(.body, weight: .medium))
-                    .foregroundStyle(Ink.secondary)
-                    .padding(.horizontal, Spacing.margin)
-                    .frame(height: Metrics.composerControlHeight)
-                    .background(Capsule().fill(Palette.surfaceRaised))
-            }
-            Spacer(minLength: 0)
-
-            switch node.button {
-            case .submit:
-                Button {
-                    model.submitReport(path: path)
-                } label: {
-                    HStack(spacing: Spacing.base) {
-                        if isSending { ProgressView().controlSize(.small) }
-                        Text("Submit report")
-                    }
-                    .font(.system(.body, weight: .semibold))
-                    .padding(.horizontal, Spacing.margin)
-                    .frame(height: Metrics.composerControlHeight)
+        GlassEffectContainer(spacing: Spacing.snug) {
+            HStack(spacing: Spacing.snug) {
+                if path.canGoBack {
+                    ModalButton(title: "Back", symbolName: "chevron.left", role: .secondary) { self.path?.pop() }
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .background(Capsule().fill(Palette.destructive))
-                .disabled(isSending || !path.satisfies(node))
-                .opacity(path.satisfies(node) ? 1 : 0.5)
+                Spacer(minLength: 0)
 
-            case .next(let target):
-                Button("Continue") { self.path?.push(target, label: nil) }
-                    .buttonStyle(.plain)
-                    .font(.system(.body, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, Spacing.margin)
-                    .frame(height: Metrics.composerControlHeight)
-                    .background(Capsule().fill(Palette.accent))
+                switch node.button {
+                case .submit:
+                    // **The act's colour, not Discord's red**: a report is
+                    // chosen, not stumbled into (D11b). It cannot be taken
+                    // back, so it takes no Return.
+                    ModalButton(
+                        title: "Submit Report",
+                        symbolName: "paperplane.fill",
+                        role: .act,
+                        isIrreversible: true,
+                        isWorking: isSending
+                    ) {
+                        model.submitReport(path: path)
+                    }
                     .disabled(!path.satisfies(node))
-                    .opacity(path.satisfies(node) ? 1 : 0.5)
 
-            case .done, .cancel, .none:
-                // A node with children needs no button: each child is its own
-                // row. One with neither is an end, and Done is what ends it.
-                if node.children.isEmpty {
-                    Button("Done") { model.dismissReport() }
-                        .buttonStyle(.plain)
-                        .font(.system(.body, weight: .semibold))
-                        .foregroundStyle(Ink.primary)
-                        .padding(.horizontal, Spacing.margin)
-                        .frame(height: Metrics.composerControlHeight)
-                        .background(Capsule().fill(Palette.surfaceRaised))
+                case .next(let target):
+                    ModalButton(title: "Continue", symbolName: "arrow.right", role: .act) {
+                        self.path?.push(target, label: nil)
+                    }
+                    .disabled(!path.satisfies(node))
+
+                case .done, .cancel, .none:
+                    // A node with children needs no button: each child is its own
+                    // row. One with neither is an end, and Done is what ends it.
+                    if node.children.isEmpty {
+                        ModalButton(title: "Done", symbolName: "checkmark", role: .act) { model.dismissReport() }
+                    }
                 }
             }
         }
-        .padding(.horizontal, Spacing.group)
-        .padding(.bottom, Spacing.group)
+        .padding(.horizontal, Spacing.margin)
+        .padding(.bottom, Spacing.margin)
         .padding(.top, Spacing.snug)
     }
 
@@ -279,14 +247,7 @@ struct ReportSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Done") { model.dismissReport() }
-                    .buttonStyle(.plain)
-                    .font(.system(.body, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
-                    .padding(.horizontal, Spacing.margin)
-                    .frame(height: Metrics.composerControlHeight)
-                    .background(Capsule().fill(Palette.surfaceRaised))
-                    .keyboardShortcut(.defaultAction)
+                ModalButton(title: "Done", symbolName: "checkmark", role: .act) { model.dismissReport() }
             }
         }
         .padding(.horizontal, Spacing.group)
@@ -416,7 +377,7 @@ private struct CheckboxGroup: View {
                             .foregroundStyle(
                                 isChosen(option.value)
                                     ? AnyShapeStyle(Palette.accent)
-                                    : AnyShapeStyle(Ink.quaternary)
+                                    : AnyShapeStyle(Ink.tertiary)
                             )
                         Text(option.label)
                             .font(.system(.body))

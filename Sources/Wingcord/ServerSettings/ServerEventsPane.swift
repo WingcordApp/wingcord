@@ -34,6 +34,8 @@ struct EventSheet: View {
     @State private var cover: ImageData?
     @State private var coverName: String?
 
+    @Environment(\.motion) private var motion
+
     private enum LocationKind: String, CaseIterable, Identifiable {
         case stage, voice, external
         var id: Self { self }
@@ -53,6 +55,14 @@ struct EventSheet: View {
             case .external: "Text channel, external link, or in-person location."
             }
         }
+
+        var symbolName: String {
+            switch self {
+            case .stage: "person.wave.2.fill"
+            case .voice: "speaker.wave.2.fill"
+            case .external: "mappin.and.ellipse"
+            }
+        }
     }
 
     private var isNew: Bool { existing == nil }
@@ -63,34 +73,46 @@ struct EventSheet: View {
             subtitle: "So no one gets lost on where to go.",
             confirmTitle: isNew ? "Create Event" : "Save Event",
             canConfirm: canConfirm,
+            confirmSymbol: isNew ? "calendar.badge.plus" : "checkmark",
+            width: 500,
             confirm: commit
         ) {
             SheetField(title: "Where is your event?", isRequired: true) {
                 VStack(alignment: .leading, spacing: Spacing.base) {
-                    ForEach(LocationKind.allCases) { candidate in
-                        let channels = channels(for: candidate)
-                        LocationChoice(
-                            title: candidate.title,
-                            detail: channels.isEmpty && candidate != .external
-                                ? "There are no available channels."
-                                : candidate.detail,
-                            isSelected: kind == candidate,
-                            // A stage option on a server with no stage channel
-                            // is a control that cannot work. Discord draws it
-                            // dimmed with that same sentence; §5.5 agrees.
-                            isEnabled: candidate == .external || !channels.isEmpty
-                        ) {
-                            kind = candidate
-                            if candidate != .external { channelID = channels.first?.id }
+                    HStack(spacing: Spacing.base) {
+                        ForEach(LocationKind.allCases) { candidate in
+                            let channels = channels(for: candidate)
+                            LocationTile(
+                                title: candidate.title,
+                                symbolName: candidate.symbolName,
+                                isSelected: kind == candidate,
+                                // A stage option on a server with no stage channel
+                                // is a control that cannot work. Discord draws it
+                                // dimmed with that same sentence; §5.5 agrees.
+                                isEnabled: candidate == .external || !channels.isEmpty
+                            ) {
+                                kind = candidate
+                                if candidate != .external { channelID = channels.first?.id }
+                                Haptics.tick()
+                            }
                         }
                     }
+                    // What the chosen place is for — the sentence Discord puts
+                    // under each choice, for the one that is chosen.
+                    Text(channels(for: kind).isEmpty && kind != .external
+                        ? "There are no available channels."
+                        : kind.detail)
+                        .font(.system(.caption))
+                        .foregroundStyle(Ink.secondary)
+                        .contentTransition(.opacity)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
             if kind == .external {
                 SheetField(title: "Location", isRequired: true) {
                     TextField("Add a location, link, or something.", text: $place)
-                        .textFieldStyle(.roundedBorder)
+                        .modalField()
                 }
             } else {
                 SheetField(title: "Select a channel", isRequired: true) {
@@ -105,34 +127,44 @@ struct EventSheet: View {
 
             SheetField(title: "Event Topic", isRequired: true) {
                 TextField("What\u{2019}s your event?", text: $name)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
             }
 
             SheetField(title: "Description") {
                 TextField("", text: $detail, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
+                    .modalField()
                     .lineLimit(2...5)
             }
 
             SheetField(title: "Start Date") {
-                DatePicker("", selection: $startsAt)
-                    .labelsHidden()
-                    .datePickerStyle(.compact)
+                PlayfulDatePicker(selection: $startsAt, minimum: isNew ? .now : nil, accessibilityTitle: "Start Date")
             }
 
             // An external event has no channel to empty, so Discord requires
             // an end time for one and makes it optional for the other two.
             SheetField(title: "End Date", isRequired: kind == .external) {
-                HStack(spacing: Spacing.snug) {
+                VStack(alignment: .leading, spacing: Spacing.base) {
                     if kind != .external {
-                        Toggle("", isOn: $hasEnd)
+                        Toggle("Ends at a set time", isOn: $hasEnd)
                             .toggleStyle(.checkbox)
-                            .labelsHidden()
+                            .font(.system(.subheadline))
                     }
-                    DatePicker("", selection: $endsAt)
-                        .labelsHidden()
-                        .datePickerStyle(.compact)
-                        .disabled(kind != .external && !hasEnd)
+                    if kind == .external || hasEnd {
+                        PlayfulDatePicker(selection: $endsAt, minimum: startsAt, accessibilityTitle: "End Date")
+                        // How long, in one click: the end set from the start.
+                        HStack(spacing: Spacing.tight) {
+                            ForEach([1, 2, 3], id: \.self) { hours in
+                                Button("+\(hours) h") {
+                                    endsAt = startsAt.addingTimeInterval(Double(hours) * 3600)
+                                    Haptics.pop()
+                                }
+                                .buttonStyle(.glass)
+                                .buttonBorderShape(.capsule)
+                                .controlSize(.small)
+                            }
+                        }
+                        .transition(.opacity)
+                    }
                 }
             }
 
@@ -152,23 +184,37 @@ struct EventSheet: View {
             }
 
             SheetField(title: "Cover Image") {
-                HStack {
-                    Text(coverName ?? "")
+                HStack(spacing: Spacing.snug) {
+                    // The picture itself, once there is one — a name is not
+                    // what anybody remembers a cover by.
+                    if let cover, let image = NSImage(data: cover.bytes) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 96, height: 54)
+                            .clipShape(.rect(cornerRadius: Radius.chip, style: .continuous))
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                    Text(coverName ?? "A wide picture, shown at the top of the event.")
                         .font(SettingsType.rowLabel)
-                        .foregroundStyle(cover == nil ? Ink.tertiary : Ink.primary)
-                        .lineLimit(1)
+                        .foregroundStyle(cover == nil ? Ink.secondary : Ink.primary)
+                        .lineLimit(2)
                     Spacer()
-                    Button(cover == nil && existing?.imageHash == nil ? "Upload Cover Image" : "Change Image") {
+                    Button(cover == nil && existing?.imageHash == nil ? "Upload Cover Image" : "Change Image", systemImage: "photo") {
                         guard let file = ExpressionUpload.pickFile(types: [.png, .jpeg, .gif])
                         else { return }
                         cover = ImageData(mimeType: file.contentType, bytes: file.bytes)
                         coverName = file.filename
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.regular)
                 }
             }
         }
+        .animation(motion.reposition, value: kind)
+        .animation(motion.reposition, value: hasEnd)
+        .animation(motion.standard, value: cover)
         .task { adopt() }
     }
 
@@ -262,34 +308,53 @@ struct EventSheet: View {
     }
 }
 
-private struct LocationChoice: View {
+/// One of the three places an event can be: a tile with its symbol, lit
+/// with the accent when chosen — three choices side by side read faster than
+/// three radio rows, and the sentence under them says what the lit one is for.
+private struct LocationTile: View {
     var title: String
-    var detail: String
+    var symbolName: String
     var isSelected: Bool
     var isEnabled: Bool
     var choose: () -> Void
 
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
     var body: some View {
         Button(action: choose) {
-            HStack(alignment: .top, spacing: Spacing.snug) {
-                Image(symbol: isSelected ? "largecircle.fill.circle" : "circle")
-                    .font(.system(size: 13))
-                    .foregroundStyle(isSelected ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.tertiary))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.system(.subheadline, weight: .medium))
-                        .foregroundStyle(isEnabled ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.tertiary))
-                    Text(detail)
-                        .font(.system(.caption))
-                        .foregroundStyle(Ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
+            VStack(spacing: Spacing.base) {
+                Image(systemName: symbolName)
+                    .font(.system(.title2, weight: .semibold))
+                    .foregroundStyle(isSelected ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary))
+                    .symbolEffect(.bounce, value: isSelected)
+                Text(title)
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(Ink.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
             }
-            .contentShape(.rect)
+            .frame(maxWidth: .infinity, minHeight: 78)
+            .padding(.horizontal, Spacing.tight)
+            .background(
+                isSelected ? Palette.accent.opacity(0.14) : isHovering ? Palette.hoverFill : Palette.surfaceRaised,
+                in: .rect(cornerRadius: Radius.glass, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
+                    .strokeBorder(isSelected ? Palette.accent : Palette.edge, lineWidth: isSelected ? 2 : 1)
+            }
+            .contentShape(.rect(cornerRadius: Radius.glass))
+            .opacity(isEnabled ? 1 : 0.45)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
+        .onHover { hovering in
+            guard hovering != isHovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.hover, value: isHovering)
+        .animation(motion.standard, value: isSelected)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 }

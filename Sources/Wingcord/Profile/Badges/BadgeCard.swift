@@ -24,8 +24,8 @@ struct BadgeCard: View {
         VStack(spacing: Spacing.tight) {
             artwork
                 .padding(.bottom, Spacing.tight)
-            if let badge, badge.kind?.isLevelled == true || badge.kind == .premiumTenure {
-                if let name = badge.name {
+            if let badge, badge.eyebrow != nil || badge.kind == .premiumTenure {
+                if let name = badge.eyebrow {
                     Text(name)
                         .font(.system(.subheadline, weight: .medium))
                         .foregroundStyle(InkColor.secondary)

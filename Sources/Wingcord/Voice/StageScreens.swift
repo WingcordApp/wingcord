@@ -46,7 +46,8 @@ struct StageHeader: View {
                             }
                         }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
             }
         }
@@ -78,7 +79,9 @@ struct StageCapacityNotice: View {
             }
             Spacer(minLength: Spacing.base)
             Button("Dismiss", action: dismiss)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
+                .tint(Palette.accent)
                 .controlSize(.small)
         }
         .padding(Spacing.snug)
@@ -224,12 +227,14 @@ struct StageJoinCard: View {
                     .foregroundStyle(Ink.secondary)
                 HStack(spacing: Spacing.snug) {
                     Button(stage.canConnect ? "Join Stage" : "Channel Locked", action: join)
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.capsule)
                         .tint(Palette.presenceOnline)
                         .disabled(!stage.canConnect)
                     if stage.canInvite, let guildID = stage.guildID {
                         Button("Invite") { isInviteOpen = true }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.capsule)
                             .popover(isPresented: $isInviteOpen, arrowEdge: .bottom) {
                                 ServerOptionsMenu(
                                     guildID: guildID,

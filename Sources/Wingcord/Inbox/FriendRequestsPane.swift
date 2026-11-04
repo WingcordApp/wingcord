@@ -131,7 +131,8 @@ struct FriendRequestRow: View {
                         .labelStyle(.iconOnly)
                         .font(.system(.subheadline, weight: .semibold))
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .tint(Palette.affirmative)
                 .help("Accept")
@@ -146,7 +147,8 @@ struct FriendRequestRow: View {
                 .labelStyle(.iconOnly)
                 .font(.system(size: 11, weight: .semibold))
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
             .controlSize(.small)
             .help(request.isIncoming ? "Ignore this request" : "Cancel this request")
         }

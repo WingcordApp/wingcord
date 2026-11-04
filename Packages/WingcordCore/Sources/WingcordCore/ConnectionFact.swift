@@ -90,6 +90,11 @@ public struct ConnectionFact: Hashable, Sendable, Identifiable {
         case "subscriber_count": return "Subscribers"
         case "video_count": return "Videos"
         case "post_count": return "Posts"
+        // Letterboxd's two, in Discord's words ("31 Films Watched", "4 Films
+        // Logged This Year"); neither key is count-shaped, so the mechanical
+        // rule would drop both.
+        case "watches": return "Films Watched"
+        case "films_in_diary_this_year": return "Films Logged This Year"
         default: break
         }
         var stem = key

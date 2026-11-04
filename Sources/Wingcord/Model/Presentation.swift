@@ -269,6 +269,8 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
     case guildAction(GuildSurface)
     /// "3 Events" — Discord's events row, which opens the events panel.
     case events(SidebarEventsRow)
+    /// The Boost progress bar, first of the rows above the channels.
+    case boostGoal(SidebarBoostGoal)
     /// Message Requests, at the head of the conversations — drawn only while
     /// there is a request or spam waiting, with the pending ones counted.
     case messageRequests(pending: Int)
@@ -292,6 +294,7 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
         case .messageRequests: 98
         case .friends: 97
         case .pinnedGrid: 96
+        case .boostGoal: 95
         }
     }
 }

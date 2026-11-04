@@ -44,6 +44,27 @@ nonisolated struct TimelineRow: Sendable {
     }
 }
 
+extension MessageRow {
+    /// Where this row's "(edited)" landed, in row space, whichever of its two
+    /// places that is, and when the message changed — what its tooltip says.
+    var editedMark: (rect: CGRect, editedAt: Date)? {
+        if let foot = editedFoot {
+            return (CGRect(origin: foot.origin, size: foot.block.size), foot.editedAt)
+        }
+        guard let block = textBlock, let mark = block.text.editedMark, let rect = block.editedMarkRect else {
+            return nil
+        }
+        return (rect.offsetBy(dx: textOrigin.x, dy: textOrigin.y), mark.editedAt)
+    }
+}
+
+/// "(edited)" under a message's accessories, where it has no words to follow.
+nonisolated struct EditedFootSlot: @unchecked Sendable {
+    var block: TimelineTextBlock
+    var origin: CGPoint
+    var editedAt: Date
+}
+
 /// A message row, laid out.
 nonisolated struct MessageRow: @unchecked Sendable {
     var id: MessageID
@@ -132,6 +153,8 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// Laid-out body text. Nil for a message with no textual content.
     var textBlock: TimelineTextBlock?
     var textOrigin: CGPoint
+    /// The "(edited)" of a message with no words to set it after.
+    var editedFoot: EditedFootSlot? = nil
 
     var attachments: [AttachmentSlot]
     /// A send's files going up, drawn in place of the attachments they are
@@ -846,11 +869,21 @@ nonisolated struct InteractionHeaderSlot: @unchecked Sendable {
     var leadFace: NSFont?
     var leadTracking: CGFloat
     var leadColor: NSColor?
-    /// The command's name, drawn in a chip.
+    /// Who ran it, and where their name is in the sentence: the face and the
+    /// name open them, as a message's own do. "used" opens nobody.
+    var userID: UserID
+    var nameRect: CGRect
+    /// The chip's words, in Discord's medium weight.
     var command: String
+    var commandFont: NSFont
     var commandRect: CGRect
-    /// The chip's own box: the text's rect grown by its padding.
+    /// The chip's own box: the glyph and the words, grown by its padding.
     var chipRect: CGRect
+    /// What the chip is — and so whether it is a plate, whether it takes the
+    /// click and what the click does.
+    var chip: CommandHeaderChip
+    /// Discord's apps icon at a plate's head — see `AppsGlyph`.
+    var glyphRect: CGRect?
 }
 
 /// The chip under a message that started a thread.
@@ -981,6 +1014,7 @@ private nonisolated struct MessageContent {
     var x: CGFloat
     var top: CGFloat
     var textOrigin: CGPoint
+    var editedFoot: EditedFootSlot?
     var forwarded: ForwardedSlot?
     var stickers: [StickerSlot] = []
     var attachments: [AttachmentSlot] = []
@@ -1548,6 +1582,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if let block = row.textBlock {
             bottom = max(bottom, row.textOrigin.y + block.size.height)
         }
+        if let foot = row.editedFoot { bottom = max(bottom, foot.origin.y + foot.block.size.height) }
         // The bubble's own padding reaches past its words.
         if let bubble = row.bubbles?.bubble { bottom = max(bottom, bubble.rect.maxY) }
         if let failure = row.bubbles?.failure { bottom = max(bottom, failure.caption.maxY) }
@@ -1671,20 +1706,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y = slot.rect.maxY + TimelineMetrics.replyGap
         }
 
-        // **Only on the run head.** A run of three answers from one app draws
-        // the line once, exactly as the author line is drawn once — repeating
-        // "alex used launch" above each is three statements of one fact.
+        // A command's answer always heads its own run (`TimelineReducer`), so
+        // every one has this line: three commands in a row are three things
+        // somebody ran, as Discord draws them.
         var interactionHeader: InteractionHeaderSlot?
-        if item.isRunHead, let interaction = message.interaction {
+        if item.isRunHead, let interaction = message.interaction, let chip = message.commandHeaderChip {
             let invoker = input.authors[interaction.userID]
             let slot = bubbleSide == nil
                 ? Self.layoutInteractionHeader(
-                    interaction, y: y, leadingX: contentX, maxX: input.width,
+                    interaction, chip: chip, y: y, leadingX: contentX, maxX: input.width,
                     elbowX: TimelineMetrics.replyElbowX, style: input.style, author: invoker
                 )
                 : placed({
                     Self.layoutInteractionHeader(
-                        interaction, y: y, leadingX: $0, maxX: lane.maxX,
+                        interaction, chip: chip, y: y, leadingX: $0, maxX: lane.maxX,
                         elbowX: nil, style: input.style, author: invoker
                     )
                 }, width: { $0.rect.width })
@@ -1806,11 +1841,16 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             let sized = isJumbo ? input.style.jumbo : input.style
             let onAccent = bubbleSide != nil && ground == .accent && !isJumbo
             let style = isFailed && bubbleSide == nil ? sized.failed : (onAccent ? sized.onAccentBubble : sized)
-            let text = MessageTextBuilder.build(
+            var text = MessageTextBuilder.build(
                 document: document,
                 context: input.mentions,
                 style: style
             )
+            // Discord's "(edited)" after the last word, in whatever ink the
+            // words are on — see `MessageText.appendingEditedMark`.
+            if let editedAt = message.editedAt {
+                text = text.appendingEditedMark(at: editedAt, style: style)
+            }
             words = (
                 TimelineTextBlock(
                     text: text,
@@ -2171,6 +2211,24 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 for slot in content.components { holds(slot.rect) }
             }
 
+            // **No words to set "(edited)" after**: Discord draws it under
+            // whatever the message holds (`AFTER_ACCESSORIES`) — and this is
+            // no corner case, it is every bot that edits its embed in place.
+            if words == nil, content.hasCards, let editedAt = message.editedAt {
+                y += gap
+                let ink = bubbleSide != nil && ground == .accent ? input.style.onAccentBubble : input.style
+                let block = TimelineTextBlock(
+                    text: .plain(NSAttributedString(string: MessageText.editedWord, attributes: ink.editedMark)),
+                    width: cardWidth,
+                    style: ink,
+                    hugsText: true
+                )
+                let origin = CGPoint(x: cardX, y: y)
+                content.editedFoot = EditedFootSlot(block: block, origin: origin, editedAt: editedAt)
+                holds(CGRect(origin: origin, size: block.size))
+                y += block.size.height
+            }
+
             content.isEmpty = words == nil && !content.hasCards
             // The bubble's foot: the words' padding, or a card's inset.
             content.bottom = bubbled && !content.isEmpty ? y + gap : y
@@ -2181,23 +2239,23 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // as Messages pins them, so the bubble steps down to make room for the
         // half that rises above it. More than a few hang under it as chips —
         // a corner holds three before it reads as a pile.
-        let wantsTapbacks = bubbleSide != nil && words?.isJumbo != true
+        let wantsTapbacks = bubbleSide != nil
             && (1...TimelineMetrics.tapbackLimit).contains(Self.reactionChipCount(message.reactions))
         if wantsTapbacks { y += TimelineMetrics.tapbackRise }
 
         // **One bubble holds the whole message** — its words and every card,
         // picture and sticker under them — the way Messages holds a link and
-        // its preview in one. Only emoji on their own are drawn bare, as
-        // Messages draws them: a bubble round a jumbo thumbs-up is a frame
-        // round a picture.
+        // its preview in one. **Emoji on their own too** (Alex, 2026-10-26:
+        // "emoji-only messages get no bubble"): drawn bare, as Messages draws
+        // them, a big emoji stood apart from the conversation it was part of
+        // — no plate to say whose side it was on, nowhere for its tapbacks to
+        // ride. Only a body with nothing in it at all is left without one.
         let content: MessageContent
         var bubble: MessageBubble?
         if let bubbleSide {
             let probe = layoutContent(x: lane.minX, top: y, bubbled: true)
             if probe.isEmpty {
                 content = probe
-            } else if let words, words.isJumbo, !probe.hasCards {
-                content = layoutContent(x: lane.x(forWidth: words.block.size.width), top: y, bubbled: false)
             } else {
                 // A letter or two is a circle rather than a pill pinched at its
                 // ends: never narrower than the bubble is tall.
@@ -2429,6 +2487,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             forwarded: content.forwarded,
             textBlock: words?.block,
             textOrigin: content.textOrigin,
+            editedFoot: content.editedFoot,
             attachments: content.attachments,
             upload: content.upload,
             hiddenMedia: content.hiddenMedia,
@@ -4320,6 +4379,7 @@ nonisolated extension TimelineLayoutEngine {
     /// Placed as the reply header is — see `layoutReplyHeader`'s parameters.
     static func layoutInteractionHeader(
         _ interaction: MessageInteraction,
+        chip: CommandHeaderChip,
         y: CGFloat,
         leadingX: CGFloat,
         maxX: CGFloat,
@@ -4340,7 +4400,7 @@ nonisolated extension TimelineLayoutEngine {
         // `@name`; this is a sentence about them, and "@alex used launch" is
         // not one.
         let name = author?.name ?? "Unknown"
-        let lead = "\(name) used"
+        let lead = chip == .startedActivity ? "\(name) started an" : "\(name) used"
         let face = author?.nameFace.map {
             NSFont(descriptor: $0.fontDescriptor, size: font.pointSize) ?? font
         }
@@ -4354,16 +4414,40 @@ nonisolated extension TimelineLayoutEngine {
             width: leadWidth,
             height: height
         )
+        let nameRect = CGRect(
+            x: leadRect.minX,
+            y: y,
+            width: measure(name, font: face ?? font, tracking: tracking),
+            height: height
+        )
 
-        let commandWidth = measure(interaction.name, font: font, tracking: 0)
+        // **Discord's chip is a mention's plate** (`.appLauncherOnboardingCommandName`:
+        // `--mention-background`, 3 pixels, the link's ink) with the apps icon at
+        // its head. A context-menu command is its name and nothing else, and a
+        // label has no padding to reach out with.
+        let title = chip.title(of: interaction)
+        let commandFont = NSFont.systemFont(ofSize: font.pointSize, weight: .medium)
+        let commandWidth = measure(title, font: commandFont, tracking: 0)
+        let padding = chip.hasPlate ? TimelineMetrics.interactionChipPadding : 0
+        let glyphRoom = chip.hasPlate
+            ? TimelineMetrics.interactionGlyphSide + TimelineMetrics.interactionGlyphGap
+            : 0
         let chipRect = CGRect(
-            x: leadRect.maxX + TimelineMetrics.replyItemGap,
+            x: leadRect.maxX + (chip.hasPlate ? TimelineMetrics.replyItemGap : 4),
             y: y + (height - TimelineMetrics.interactionChipHeight) / 2,
-            width: commandWidth + TimelineMetrics.interactionChipPadding * 2,
+            width: glyphRoom + commandWidth + padding * 2,
             height: TimelineMetrics.interactionChipHeight
         )
+        let glyphRect = chip.hasPlate
+            ? CGRect(
+                x: chipRect.minX + padding,
+                y: chipRect.midY - TimelineMetrics.interactionGlyphSide / 2,
+                width: TimelineMetrics.interactionGlyphSide,
+                height: TimelineMetrics.interactionGlyphSide
+            )
+            : nil
         let commandRect = CGRect(
-            x: chipRect.minX + TimelineMetrics.interactionChipPadding,
+            x: chipRect.minX + padding + glyphRoom,
             y: y,
             width: commandWidth,
             height: height
@@ -4386,9 +4470,14 @@ nonisolated extension TimelineLayoutEngine {
             leadFace: face,
             leadTracking: tracking,
             leadColor: author?.colorValue.map { NSColor(Color(hex: $0)) },
-            command: interaction.name,
+            userID: interaction.userID,
+            nameRect: nameRect,
+            command: title,
+            commandFont: commandFont,
             commandRect: commandRect,
-            chipRect: chipRect
+            chipRect: chipRect,
+            chip: chip,
+            glyphRect: glyphRect
         )
     }
 }

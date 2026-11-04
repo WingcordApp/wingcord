@@ -37,6 +37,14 @@ enum MessageActionRouter {
             if let text = model.messageMenu?.selectedText { AppModel.copy(text) }
         case .searchWithGoogle:
             if let text = model.messageMenu?.selectedText { model.searchWithGoogle(text) }
+        case .lookUp:
+            // The transcript draws the panel over its own words — only it
+            // knows where they are.
+            NotificationCenter.default.post(
+                name: TimelineCoordinator.lookUpSelection,
+                object: nil,
+                userInfo: [TimelineCoordinator.channelKey: channelID]
+            )
         case .copyText:
             model.copyText(of: messageID, in: channelID)
         case .pin, .unpin:

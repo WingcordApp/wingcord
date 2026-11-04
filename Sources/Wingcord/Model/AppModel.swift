@@ -118,6 +118,12 @@ final class AppModel {
     var eventCounts: [UInt64: ScheduledEventCounts] = [:]
     /// The events panel, when it is open — see `EventsLayer`.
     var eventsPanel: EventsPanelRequest?
+    /// Whether one of the main window's cards is up — its modal host says so
+    /// (`hostsModals`), so the layers under it give up Escape and the drawn
+    /// canvases stop hovering (`EscapeLayer.modal`).
+    var isModalShown = false
+    /// Ignore or Block, asked before it is done — `RelationshipConfirmationCard`.
+    var relationshipConfirmation: RelationshipConfirmation?
     /// Create Event or Edit Event, open over the window.
     var eventEditor: EventEditorRequest?
     /// Create Channel or Create Category, open over the window.
@@ -589,6 +595,12 @@ final class AppModel {
     /// Whose detail fetch is still in flight. Observed, so a card can show a
     /// skeleton while it waits and swap to the real thing when it lands.
     var profilesLoading: Set<UserID> = []
+    /// When each profile last arrived, by the server it was asked in (nil for
+    /// the account's own) — **what lets a card opened again show what it has
+    /// while it asks again**, rather than blanking to a skeleton and back on
+    /// every open (Alex, 2026-10-26: "profile loading — one thing we should
+    /// really focus on"). Not observed: nothing draws from it directly.
+    @ObservationIgnored var profileFetchedAt: [ProfileFetchKey: Date] = [:]
     /// Whose profile route refused the last time it was asked — what Discord
     /// keeps as the profile's `fetchError`, and what puts "Unable to load
     /// parts of profile" on their card.
@@ -689,6 +701,15 @@ final class AppModel {
     /// The mark of something a moderator did, on an AutoMod alert, under the
     /// pointer — see `AutoModActionTooltipOverlay`.
     var autoModActionHover: AutoModActionHover?
+    /// The "(edited)" after a message's words, under the pointer — see
+    /// `EditedMarkTooltipOverlay`.
+    var editedMarkHover: EditedMarkHover?
+    /// The flyout open over a "used" line's chip — see
+    /// `InvokedCommandPresenter`.
+    var invokedCommandRequest: InvokedCommandRequest?
+    /// What each "used" line the reader has pressed was run with. A message's
+    /// answer does not change, so one is never asked for twice.
+    var invokedCommands: [MessageID: InvokedCommand] = [:]
     /// The unread groups folded in the inbox, from the account's settings.
     var inboxCollapse = InboxCollapse()
     /// Who reacted, per chip, and the count they were fetched at — a tooltip
@@ -1091,6 +1112,18 @@ final class AppModel {
     var gameCommunities: [ApplicationID: GuildProfile] = [:]
     /// Which games have a fetch out, so a profile opened twice asks once.
     var gameProfilesLoading: Set<ApplicationID> = []
+    /// The servers games' Communities tabs list, by server — `GET
+    /// /discoverable-guilds?guild_ids=…`. **On the store, by server**, as
+    /// Discord's `DiscoverableGuildsStore` keeps them: two games sharing a
+    /// server ask for it once, and a tab reopened within the hour asks nothing.
+    var communityGuilds: [GuildID: DiscoverableGuild] = [:]
+    var communityGuildsFetchedAt: [GuildID: Date] = [:]
+    /// Games whose Communities fetch is out, or came back refused.
+    var communitiesLoading: Set<ApplicationID> = []
+    var communitiesFailed: Set<ApplicationID> = []
+    /// The tab a game profile opens on, for `--demo`'s `--game-profile
+    /// communities`; nil is the overview. Read once, as the profile appears.
+    var gameProfileInitialTab: GameProfileTab?
 
     /// Profile colours quantised out of somebody's artwork, keyed by that
     /// artwork's URL.
@@ -1635,6 +1668,10 @@ final class AppModel {
     @ObservationIgnored var rosterCache: (key: RosterMemoKey, value: Roster)?
     @ObservationIgnored var forumCache: (key: ForumMemoKey, value: ForumPresentation)?
     @ObservationIgnored var emojiCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
+    /// The reaction picker's, keyed by the channel the reaction is for — see
+    /// `reactionEmojiCatalog(in:)`. Its own memo, so a reaction in a thread
+    /// beside the channel does not evict the composer's.
+    @ObservationIgnored var reactionEmojiCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
     @ObservationIgnored var stickerCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
     @ObservationIgnored var activitySectionsCache: (key: ActivityMemoKey, value: [ActivitySection])?
     @ObservationIgnored var commandSectionsCache: (key: CommandMemoKey, value: [CommandSection])?
@@ -2043,7 +2080,11 @@ final class AppModel {
     /// The channel being **previewed** beside a server's page is protected for
     /// exactly the same reason: it is on screen, and the only thing that
     /// re-requests it is a change to `previewedChannelID` that has already
-    /// happened.
+    /// happened. So are the thread or post open beside its channel and the
+    /// overlay's chat — `transcriptsOnScreen`. The side panel was not, and a
+    /// message arriving in two other channels emptied it: "Loading messages…"
+    /// for a frame, then the panel's own paging fetched it all again (Alex,
+    /// 2026-10-26).
     private func touchBox(_ channelID: ChannelID) {
         guard messageBoxes[channelID]?.messages.isEmpty == false else {
             // Nothing to evict later, so nothing to hold a slot with.
@@ -2053,10 +2094,11 @@ final class AppModel {
         boxRecency.removeAll { $0 == channelID }
         boxRecency.append(channelID)
 
+        let onScreen = transcriptsOnScreen
         var index = 0
         while boxRecency.count > Self.residentChannelLimit, index < boxRecency.count {
             let candidate = boxRecency[index]
-            guard candidate != selectedChannelID, candidate != previewedChannelID else {
+            guard !onScreen.contains(candidate) else {
                 index += 1
                 continue
             }
@@ -2086,10 +2128,16 @@ final class AppModel {
     /// name, a message that outlives its author's roster entry still has to
     /// render, and the failure mode — a transcript of people called "Unknown" —
     /// is worse than the memory it would return.
+    /// Every channel whose transcript is drawn right now: the conversation,
+    /// the thread or post beside it, a channel previewed beside a server's own
+    /// page, and the overlay's chat. Nothing re-requests any of them — each is
+    /// already open — so none may be evicted.
+    var transcriptsOnScreen: Set<ChannelID> {
+        Set([selectedChannelID, selectedThreadID, previewedChannelID, overlay.activeChatChannelID].compactMap(\.self))
+    }
+
     func relieveMemoryPressure() {
-        // Both of what can be on screen: the conversation, and a channel being
-        // previewed beside a server's own page.
-        let keep: Set<ChannelID> = Set([selectedChannelID, previewedChannelID].compactMap { $0 })
+        let keep = transcriptsOnScreen
         for channelID in messageBoxes.keys where !keep.contains(channelID) {
             messageBoxes[channelID]?.evictTranscript()
         }
@@ -2120,6 +2168,8 @@ final class AppModel {
         forumCache = nil
         channelsAndRolesCache = nil
         emojiCatalogCache = nil
+        reactionEmojiCatalogCache = nil
+        invokedCommands.removeAll()
         stickerCatalogCache = nil
         mentionCache = nil
         linkTableCache = nil

@@ -154,7 +154,7 @@ public enum ConnectionPlatform {
     public static let addable: [String] = [
         "amazon-music", "battlenet", "bluesky", "bungie", "crunchyroll",
         "ebay", "epicgames", "facebook", "github", "instagram",
-        "leagueoflegends", "mastodon", "paypal", "playstation", "reddit",
+        "leagueoflegends", "letterboxd", "mastodon", "paypal", "playstation", "reddit",
         "riotgames", "roblox", "skype", "spotify",
         "steam", "tiktok", "twitch", "twitter", "xbox", "youtube",
     ]

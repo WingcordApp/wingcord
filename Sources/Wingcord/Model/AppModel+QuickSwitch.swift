@@ -33,6 +33,8 @@ extension AppModel {
             closeQuickSwitch()
             return
         }
+        // Not under a card: the switcher would open beneath it, unseen.
+        guard !isModalShown else { return }
         quickSwitch = QuickSwitchState()
         sessionController.loadNavigationFrecency()
     }

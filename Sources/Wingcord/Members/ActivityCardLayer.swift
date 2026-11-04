@@ -330,38 +330,24 @@ struct ActivitySectionMenu: View {
 
 /// "About Recent Activity" — Discord's words (`643460`).
 struct ActivityAboutSheet: View {
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.margin) {
-            Text("About Recent Activity")
-                .font(.system(.title2, weight: .semibold))
-            Text("Keep up with what your friends are doing and easily start a conversation or join them!")
-                .font(.system(.body))
-                .foregroundStyle(InkColor.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: Spacing.base) {
-                Text("What you can do")
-                    .font(.system(.headline))
-                Label("See the activity of people you talk to most", systemImage: "person.2.fill")
-                Label("Spark a conversation with a reply or emoji", systemImage: "bubble.left.fill")
-                Label("View and delete your past activity from your profile", systemImage: "clock.arrow.circlepath")
-            }
-            .font(.system(.body))
-            Button("Manage your Activity Privacy") {
+        ModalAlert(
+            hero: .symbol("sparkles", tint: Palette.accent),
+            title: "About Recent Activity",
+            message: Text("Keep up with what your friends are doing and easily start a conversation or join them!"),
+            points: [
+                .feature("See the activity of people you talk to most", symbol: "person.2.fill"),
+                .feature("Spark a conversation with a reply or emoji", symbol: "bubble.left.fill"),
+                .feature("View and delete your past activity from your profile", symbol: "clock.arrow.circlepath"),
+            ],
+            link: ModalLink(title: "Manage your Activity Privacy") {
                 dismiss()
                 SettingsWindow.open(.activity)
-            }
-            .buttonStyle(.link)
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(Spacing.section)
-        .frame(width: 420)
+            },
+            actions: [.okay("Done")]
+        )
     }
 }
 
@@ -386,7 +372,7 @@ struct ActivitySectionPresenter: ViewModifier {
                 ActivitySectionMenu()
                     .environment(model)
             }
-            .sheet(isPresented: $model.isActivityAboutShown) {
+            .modal(isPresented: $model.isActivityAboutShown, style: .alert) {
                 ActivityAboutSheet()
             }
     }

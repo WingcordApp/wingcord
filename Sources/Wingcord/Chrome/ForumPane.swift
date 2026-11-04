@@ -1071,7 +1071,7 @@ struct ForumContainer: View {
             ),
             clearSearch: { model.clearThreadSearch() }
         )
-        .sheet(
+        .modal(
             isPresented: Binding(
                 get: { model.composingPostIn == channelID },
                 set: { if !$0 { model.cancelForumPost() } }

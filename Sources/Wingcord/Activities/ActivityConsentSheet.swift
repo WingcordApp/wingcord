@@ -21,7 +21,7 @@ struct ActivityConsentSheet: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
     @State private var isAuthorizing = false
 
     private static let width: CGFloat = 440
@@ -34,8 +34,8 @@ struct ActivityConsentSheet: View {
         }
         .frame(width: Self.width)
         // Every path out of here answers the request. **Including this one** —
-        // a sheet closed with Escape or by clicking away still has a frame
-        // behind it waiting for a code.
+        // a card closed with Escape or thrown away still has a frame behind
+        // it waiting for a code.
         .onDisappear { request.answer(nil) }
     }
 
@@ -51,7 +51,7 @@ struct ActivityConsentSheet: View {
                 appIcon
                 Image(systemName: "ellipsis")
                     .font(.system(.footnote, weight: .bold))
-                    .foregroundStyle(Ink.quaternary)
+                    .foregroundStyle(Ink.tertiary)
                 accountIcon
             }
             VStack(spacing: Spacing.tight) {
@@ -162,32 +162,25 @@ struct ActivityConsentSheet: View {
     // MARK: Footer
 
     private var footer: some View {
-        HStack(spacing: Spacing.snug) {
-            Spacer(minLength: 0)
-            Button("Cancel") {
-                request.answer(nil)
-                dismiss()
-            }
-            .keyboardShortcut(.cancelAction)
-
-            Button {
-                authorize()
-            } label: {
-                Group {
-                    if isAuthorizing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Authorize")
-                    }
+        GlassEffectContainer(spacing: Spacing.snug) {
+            HStack(spacing: Spacing.snug) {
+                ModalButton(title: "Cancel", symbolName: "xmark", role: .cancel) {
+                    request.answer(nil)
+                    dismiss()
                 }
-                .frame(minWidth: 84)
+                Spacer(minLength: 0)
+                ModalButton(
+                    title: "Authorize",
+                    symbolName: "checkmark.shield.fill",
+                    role: .act,
+                    isWorking: isAuthorizing,
+                    action: authorize
+                )
             }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
-            .disabled(isAuthorizing)
         }
-        .controlSize(.large)
-        .padding(Spacing.group)
+        .padding(.horizontal, Spacing.margin)
+        .padding(.top, Spacing.base)
+        .padding(.bottom, Spacing.margin)
     }
 
     private func authorize() {

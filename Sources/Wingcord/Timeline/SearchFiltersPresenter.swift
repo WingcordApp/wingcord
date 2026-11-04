@@ -20,7 +20,7 @@ struct SearchFiltersPresenter: ViewModifier {
         let channels = model.isSearchFiltersShown ? model.searchFilterChannels : []
 
         return content
-            .sheet(isPresented: $model.isSearchFiltersShown) {
+            .modal(isPresented: $model.isSearchFiltersShown) {
                 if let query {
                     SearchFiltersSheet(
                         query: query,

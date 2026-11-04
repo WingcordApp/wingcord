@@ -109,7 +109,7 @@ struct EmojiPane: View {
                 }
             }
         }
-        .sheet(isPresented: Binding(
+        .modal(isPresented: Binding(
             get: { renaming == emoji.id },
             set: { if !$0 { renaming = nil } }
         )) {
@@ -189,7 +189,7 @@ struct StickersPane: View {
                 }
             }
         }
-        .sheet(isPresented: $isUploading) {
+        .modal(isPresented: $isUploading) {
             StickerSheet(existing: nil) { draft in
                 guard let file = draft.file else { return }
                 Task {
@@ -231,7 +231,7 @@ struct StickersPane: View {
                 }
             }
         }
-        .sheet(isPresented: Binding(
+        .modal(isPresented: Binding(
             get: { editing?.id == sticker.id },
             set: { if !$0 { editing = nil } }
         )) {
@@ -300,7 +300,7 @@ struct SoundboardPane: View {
                 }
             }
         }
-        .sheet(isPresented: $isUploading) {
+        .modal(isPresented: $isUploading) {
             SoundSheet(existing: nil) { draft in
                 guard let sound = draft.sound else { return }
                 Task {
@@ -342,7 +342,7 @@ struct SoundboardPane: View {
                 }
             }
         }
-        .sheet(isPresented: Binding(
+        .modal(isPresented: Binding(
             get: { editing?.id == sound.id },
             set: { if !$0 { editing = nil } }
         )) {
@@ -409,20 +409,31 @@ enum ExpressionUpload {
         let urls = panel(types: imageTypes(allowsAnimated: allowsAnimated), allowsMultiple: allowsMultiple)
         guard !urls.isEmpty else { return [] }
         return await Task.detached(priority: .userInitiated) {
-            urls.compactMap { url -> PickedImage? in
-                guard let bytes = try? Data(contentsOf: url),
-                      let image = UploadImageEncoder.prepared(
-                          bytes,
-                          isGIF: url.pathExtension.lowercased() == "gif",
-                          maximumBytes: maximumBytes
-                      )
-                else { return nil }
-                return PickedImage(
-                    image: image,
-                    suggestedName: sanitised(url.deletingPathExtension().lastPathComponent)
-                )
-            }
+            urls.compactMap { prepared($0, maximumBytes: maximumBytes) }
         }.value
+    }
+
+    /// A file dropped on a well, prepared as a picked one is — or nil when it
+    /// is not one of the types the panel would have offered.
+    static func image(at url: URL, allowsAnimated: Bool) async -> PickedImage? {
+        guard let type = UTType(filenameExtension: url.pathExtension),
+              imageTypes(allowsAnimated: allowsAnimated).contains(where: { type.conforms(to: $0) })
+        else { return nil }
+        return await Task.detached(priority: .userInitiated) { prepared(url, maximumBytes: nil) }.value
+    }
+
+    nonisolated private static func prepared(_ url: URL, maximumBytes: Int?) -> PickedImage? {
+        guard let bytes = try? Data(contentsOf: url),
+              let image = UploadImageEncoder.prepared(
+                  bytes,
+                  isGIF: url.pathExtension.lowercased() == "gif",
+                  maximumBytes: maximumBytes
+              )
+        else { return nil }
+        return PickedImage(
+            image: image,
+            suggestedName: sanitised(url.deletingPathExtension().lastPathComponent)
+        )
     }
 
     static func pickFile(types: [UTType]) -> PickedFile? {

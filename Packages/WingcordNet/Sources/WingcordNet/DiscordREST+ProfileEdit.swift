@@ -499,6 +499,9 @@ struct CollectiblePurchaseDTO: Decodable, Sendable {
     var name: String?
     var type: Int?
     var premium_type: Int?
+    /// How the account came to own it — `7` (`PREMIUM_PURCHASE`) is claimed
+    /// through Nitro, and that is the one kind a lapsed subscription locks.
+    var purchase_type: Int?
     /// A string, parsed here rather than by the client's date strategy — the
     /// same shape `ProfileWidgetDTO.updated_at` takes and for the same reason:
     /// it keeps the DTO decodable by a bare `JSONDecoder`, which is what a test
@@ -531,8 +534,11 @@ struct CollectiblePurchaseDTO: Decodable, Sendable {
             label: item.label,
             palette: item.palette,
             acquiredAt: purchased_at.flatMap(ISO8601DateFormatter.withFraction.date(from:)),
-            // `2` is Nitro on every `premium_type` this client reads.
-            isNitroExclusive: premium_type == 2
+            // **The purchase decides, not the product** — Discord's lock is
+            // `purchaseType === PREMIUM_PURCHASE` (`993408`'s `gA`). A product's
+            // own `premium_type` only stands in where a payload carries no
+            // purchase type at all.
+            isNitroExclusive: purchase_type.map { $0 == 7 } ?? (premium_type == 2)
         )
     }
 }

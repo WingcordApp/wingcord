@@ -320,12 +320,69 @@ struct BubbleLayoutTests {
         }
     }
 
-    @Test("Emoji on their own are drawn bare, against their side")
-    func jumboEmojiAreBare() throws {
+    @Test("Emoji on their own take a bubble too, against their side")
+    func jumboEmojiAreBubbled() throws {
+        // Alex, 2026-10-26: "emoji-only messages get no bubble" — they were
+        // drawn bare, as Messages draws them.
         let row = try #require(rows([(Self.me, "😀")]).first)
         let block = try #require(row.textBlock)
-        #expect(row.bubbles?.bubble == nil)
-        #expect(abs(row.textOrigin.x + block.size.width - (Self.width - Self.margin)) <= 0.5)
+        let bubble = try #require(row.bubbles?.bubble)
+        #expect(bubble.rect.maxX == Self.width - Self.margin)
+        // The emoji inside it, centred across it.
+        #expect(bubble.rect.contains(CGPoint(x: row.textOrigin.x + block.size.width / 2, y: bubble.rect.midY)))
+        // A single emoji is a circle, never a pill pinched round it.
+        #expect(bubble.rect.width >= bubble.rect.height - 0.5)
+    }
+
+    /// Alex, 2026-10-26: "see if there's any other types of these bugs with
+    /// other types of messages". Every message the demo holds, laid out as the
+    /// transcript lays it out — so a kind of message that comes out bare fails
+    /// here, whichever kind it is, rather than waiting for somebody to see it.
+    @Test("Every kind of message the demo holds takes a bubble")
+    func everyKindTakesABubble() {
+        let model = AppModel()
+        DemoFixtures.populate(model)
+        var bare: [String] = []
+        var seen: [String: Int] = [:]
+        // The demo forwards nothing, so one is added for the sweep to meet.
+        let forward = Message(
+            id: MessageID(rawValue: 1),
+            channelID: ChannelID(rawValue: 9),
+            authorID: Self.them,
+            payload: MessagePayload(forwarded: ForwardedMessage(content: "from elsewhere"))
+        )
+        for box in model.messageBoxes.values {
+            var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
+            let messages = box.messages + [forward]
+            let byID = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let laid = layout(messages, cache: &cache)
+            for row in laid {
+                guard case .message(let drawn) = row.kind, let message = byID[drawn.id] else { continue }
+                // A system event is a sentence across the transcript, not
+                // somebody saying something.
+                guard !message.isSystemEvent else { continue }
+                for (name, holds) in [
+                    ("words", !message.content.isEmpty), ("attachment", !message.attachments.isEmpty),
+                    ("sticker", !message.stickers.isEmpty), ("embed", !message.embeds.isEmpty),
+                    ("poll", message.poll != nil), ("activity", message.activityInvite != nil),
+                    ("listenAlong", message.listenAlong != nil), ("theme", message.sharedTheme != nil),
+                    ("forward", message.forwarded != nil), ("reply", message.reference != nil),
+                    ("buttons", !message.components.isEmpty), ("componentsV2", !message.displayComponents.isEmpty),
+                    ("command", message.interaction != nil), ("edited", message.editedAt != nil),
+                ] where holds {
+                    seen[name, default: 0] += 1
+                }
+                if drawn.bubbles?.bubble == nil {
+                    bare.append("\(message.kind) “\(message.content.prefix(30))” attachments \(message.attachments.count) "
+                        + "embeds \(message.embeds.count) stickers \(message.stickers.count)")
+                }
+            }
+        }
+        #expect(bare.isEmpty, "\(bare.count) bare: \(bare.prefix(12))")
+        // The sweep is only worth what it covered.
+        for name in ["words", "attachment", "sticker", "embed", "poll", "activity", "forward", "reply", "buttons", "componentsV2", "command", "edited"] {
+            #expect(seen[name, default: 0] > 0, "the demo holds no \(name) to sweep")
+        }
     }
 
     @Test("A new message takes the tail, and the bubble that lost it is laid out again")

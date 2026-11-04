@@ -45,7 +45,7 @@ struct GameEventsSettingsGroup: View {
                 SettingsValueRow(
                     title: "Steam Timeline",
                     value: "Not read",
-                    help: "Steam keeps a timeline only while its own Game Recording is on, and this Mac has none to read."
+                    help: "Steam only keeps a timeline while its Game Recording is on, and there\u{2019}s none on this Mac."
                 )
             }
             if let failure {
@@ -98,10 +98,10 @@ struct GameEventsSettingsGroup: View {
     }
 
     private var footnote: String {
-        var text = "The game says what happened — Wingcord reads nothing on screen — and only while Clips is on. "
-            + "Each event lands where Discord's player marks it."
+        var text = "The game reports what happened \u{2014} Wingcord never reads the screen \u{2014} "
+            + "while Clips is on."
         if !settings.clipsEnabled {
-            text += " Turn on Clips to read them."
+            text += " Turn on Clips to use them."
         } else if let last = hub.lastEvent {
             text += " Last: \(last.name)."
         }

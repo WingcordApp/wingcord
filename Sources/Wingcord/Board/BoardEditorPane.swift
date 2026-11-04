@@ -61,18 +61,23 @@ struct BoardEditorPane: View {
         // The reader's own widget pictures, by their own id.
         .environment(\.widgetOwner, model.currentUserID)
         .animation(motion.standard, value: editor.widgets.map(\.id))
-        .confirmationDialog(
-            "Remove this widget?",
+        .modal(
             isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
-            presenting: removing
-        ) { widget in
-            Button("Remove Widget", role: .destructive) {
-                editor.widgets.removeAll { $0.id == widget.id }
-                removing = nil
+            style: .alert
+        ) {
+            if let widget = removing {
+                ModalAlert(
+                    hero: .symbol("square.grid.2x2"),
+                    title: "Remove this widget?",
+                    message: Text("All data from this widget will be permanently deleted."),
+                    actions: [
+                        .cancel(),
+                        .act("Remove Widget", symbol: "trash", irreversible: true) {
+                            editor.widgets.removeAll { $0.id == widget.id }
+                        },
+                    ]
+                )
             }
-            Button("Cancel", role: .cancel) { removing = nil }
-        } message: { _ in
-            Text("All data from this widget will be permanently deleted.")
         }
     }
 

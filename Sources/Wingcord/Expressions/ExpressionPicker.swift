@@ -42,6 +42,11 @@ struct ExpressionPicker: View {
     /// status and an account without Nitro never see a control that cannot
     /// work.
     var onPickSuperReaction: ((ExpressionItem) -> Void)? = nil
+    /// **The channel a reaction is for**, when this picks one. A reaction is
+    /// held to Discord's own rule — Fake Nitro sends a message's emoji as a
+    /// link, but a reaction names the emoji — so its catalog locks what the
+    /// account may not use there. Nil for everything that writes a message.
+    var reactingIn: ChannelID? = nil
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -84,7 +89,7 @@ struct ExpressionPicker: View {
 
     private var catalog: ExpressionCatalog {
         switch mode {
-        case .emoji: model.emojiCatalog
+        case .emoji: reactingIn.map(model.reactionEmojiCatalog(in:)) ?? model.emojiCatalog
         case .stickers: model.stickerCatalog
         case .gifs: ExpressionCatalog()
         }

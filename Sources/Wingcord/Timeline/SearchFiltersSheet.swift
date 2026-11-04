@@ -94,24 +94,7 @@ struct SearchFiltersSheet: View {
     }
 
     private var header: some View {
-        HStack {
-            Text("Filters")
-                .font(.system(.title3, weight: .bold))
-                .foregroundStyle(Ink.primary)
-            Spacer(minLength: 0)
-            Button(action: dismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(.caption, weight: .semibold))
-                    .foregroundStyle(Ink.tertiary)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close")
-        }
-        .padding(.horizontal, Spacing.group)
-        .padding(.top, Spacing.group)
-        .padding(.bottom, Spacing.margin)
+        ModalHeader(title: "Filters", close: dismiss)
     }
 
     // MARK: Has
@@ -258,12 +241,16 @@ struct SearchFiltersSheet: View {
                 .foregroundStyle(Palette.accent)
             }
             Spacer(minLength: Spacing.base)
-            SurfaceQuietButton(title: "Cancel", systemImage: nil, action: dismiss)
-                .keyboardShortcut(.cancelAction)
-            SurfaceFilledButton(title: "Apply Filters", systemImage: nil) { apply(draft) }
-                .keyboardShortcut(.defaultAction)
+            GlassEffectContainer(spacing: Spacing.snug) {
+                HStack(spacing: Spacing.snug) {
+                    ModalButton(title: "Cancel", symbolName: "xmark", role: .cancel, action: dismiss)
+                    ModalButton(title: "Apply Filters", symbolName: "line.3.horizontal.decrease.circle.fill", role: .act) {
+                        apply(draft)
+                    }
+                }
+            }
         }
-        .padding(Spacing.group)
+        .padding(Spacing.margin)
     }
 
     // MARK: Selection

@@ -111,6 +111,7 @@ struct ConversationPane: View {
             .overlay { ReactionTooltipOverlay(channelID: channelID) }
             .overlay { GuildMarkTooltipOverlay() }
             .overlay { AutoModActionTooltipOverlay(channelID: channelID) }
+            .overlay { EditedMarkTooltipOverlay() }
             // **The transcript runs to the window's foot, under the composer.**
             //
             // Left inset by the bar, the scroll view stops above it — so the

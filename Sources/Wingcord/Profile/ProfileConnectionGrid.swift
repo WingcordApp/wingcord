@@ -61,10 +61,32 @@ private struct ProfileConnectionCard: View {
                                 .accessibilityLabel(Text("Verified"))
                         }
                     }
-                    Text(caption)
-                        .font(.caption)
-                        .foregroundStyle(InkColor.secondary)
-                        .lineLimit(1)
+                    // **Discord's arrangement**: the date under the name, the
+                    // numbers on a row of their own, each count in bold
+                    // ("Member since 12 Mar 2023" / "**2,323** Posts").
+                    if let since {
+                        Text("Member since \(since.formatted(.dateTime.day().month(.abbreviated).year()))")
+                            .font(.caption)
+                            .foregroundStyle(InkColor.secondary)
+                            .lineLimit(1)
+                    } else if stats.isEmpty {
+                        // Nothing published: the service names the card.
+                        Text(serviceName)
+                            .font(.caption)
+                            .foregroundStyle(InkColor.secondary)
+                            .lineLimit(1)
+                    }
+                    if !stats.isEmpty {
+                        FlowLayout(spacing: Spacing.base) {
+                            ForEach(stats, id: \.key) { stat in
+                                stat.text
+                                    .font(.caption)
+                                    .foregroundStyle(InkColor.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .padding(.top, Spacing.hair)
+                    }
                 }
                 Spacer(minLength: 0)
                 // **Says which of two things pressing it does.** Half these
@@ -95,23 +117,45 @@ private struct ProfileConnectionCard: View {
         .animation(motion.standard, value: didCopy)
         .help(helpText)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("\(serviceName), \(connection.name)"))
+        .accessibilityLabel(Text(spokenLabel))
         .accessibilityHint(connection.profileURL == nil ? "Copy the name" : "Open in your browser")
         .onDisappear { copyReset?.cancel() }
     }
 
-    /// The service, and up to two of the facts it published about the account.
-    private var caption: String {
-        let facts = connection.facts.prefix(2).map(Self.describe)
-        return ([serviceName] + facts).joined(separator: " · ")
+    /// When the account was made, where the service says.
+    private var since: Date? {
+        connection.facts.lazy.compactMap { fact -> Date? in
+            if case .since(let date) = fact.content { return date }
+            return nil
+        }.first
     }
 
-    private static func describe(_ fact: ConnectionFact) -> String {
-        switch fact.content {
-        case .since(let date): "since \(date.formatted(.dateTime.year()))"
-        case .count(let value, let noun): "\(value.formatted(.number)) \(noun)"
-        case .flag(let label): label
+    /// Every count and badge the service published — all of them, where the
+    /// one-line caption used to keep two.
+    private var stats: [Stat] {
+        connection.facts.compactMap { fact in
+            switch fact.content {
+            case .since: nil
+            case .count(let value, let noun):
+                Stat(key: fact.key, text: Text("\(Text(value.formatted(.number)).bold()) \(noun)"),
+                     spoken: "\(value.formatted(.number)) \(noun)")
+            case .flag(let label): Stat(key: fact.key, text: Text(label), spoken: label)
+            }
         }
+    }
+
+    private struct Stat {
+        var key: String
+        var text: Text
+        var spoken: String
+    }
+
+    /// What VoiceOver reads: the service, the name, and what it published.
+    private var spokenLabel: String {
+        var parts = ["\(serviceName), \(connection.name)"]
+        if let since { parts.append("member since \(since.formatted(date: .long, time: .omitted))") }
+        parts += stats.map(\.spoken)
+        return parts.joined(separator: ", ")
     }
 
     private var affordance: String {

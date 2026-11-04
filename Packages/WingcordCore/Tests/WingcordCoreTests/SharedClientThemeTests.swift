@@ -13,6 +13,10 @@ struct SharedClientThemeTests {
         #expect(SharedClientTheme.color(fromHex: "eb459e") == 0xEB_45_9E)
         #expect(SharedClientTheme.color(fromHex: "nope") == nil)
         #expect(SharedClientTheme.color(fromHex: "12345") == nil)
+        // The other forms CSS reads, as Discord's card hands them to it.
+        #expect(SharedClientTheme.color(fromHex: "F80") == 0xFF_88_00)
+        #expect(SharedClientTheme.color(fromHex: "#EB459E80") == 0xEB_45_9E)
+        #expect(SharedClientTheme.color(fromHex: "GGG") == nil)
     }
 
     @Test("One colour spans the line as itself twice; the mix stays in range")

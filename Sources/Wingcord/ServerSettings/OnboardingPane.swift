@@ -95,7 +95,9 @@ struct OnboardingPane: View {
                         Button("Enable Onboarding") {
                             Task { await store.setOnboardingEnabled(true) }
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(Palette.accent)
                         .controlSize(.small)
                         .disabled(!isReady)
                     }
@@ -254,7 +256,8 @@ private struct OnboardingStepRow<Accessory: View>: View {
                 badge
                 accessory()
                 Button(hasStarted ? "Edit" : "Set up", action: edit)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
             }
         }

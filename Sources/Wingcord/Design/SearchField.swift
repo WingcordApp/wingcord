@@ -18,12 +18,16 @@ import SwiftUI
 struct SearchField: View {
     var prompt: String = "Search"
     @Binding var text: String
+    /// The arrows, for a field that leads a list it picks from — ↑ is -1.
+    var onMove: ((Int) -> Void)?
+    /// Return, for the same field: pick what is highlighted.
+    var onSubmit: (() -> Void)?
 
     /// The toolbar search item's height, and the segmented strip's.
     static var height: CGFloat { SegmentedPicker<Int>.stripHeight }
 
     var body: some View {
-        SearchFieldControl(prompt: prompt, text: $text)
+        SearchFieldControl(prompt: prompt, text: $text, onMove: onMove, onSubmit: onSubmit)
             .controlSize(.large)
             .padding(.horizontal, 12)
             .frame(height: Self.height)
@@ -34,6 +38,8 @@ struct SearchField: View {
 private struct SearchFieldControl: NSViewRepresentable {
     var prompt: String
     @Binding var text: String
+    var onMove: ((Int) -> Void)?
+    var onSubmit: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text)
@@ -65,6 +71,8 @@ private struct SearchFieldControl: NSViewRepresentable {
     func updateNSView(_ field: NSSearchField, context: Context) {
         // Rebound every update, as `SegmentedPicker`'s coordinator is.
         context.coordinator.text = $text
+        context.coordinator.onMove = onMove
+        context.coordinator.onSubmit = onSubmit
         if field.stringValue != text { field.stringValue = text }
         if field.placeholderString != prompt { field.placeholderString = prompt }
     }
@@ -107,6 +115,8 @@ private struct SearchFieldControl: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         var text: Binding<String>
+        var onMove: ((Int) -> Void)?
+        var onSubmit: (() -> Void)?
 
         init(text: Binding<String>) {
             self.text = text
@@ -119,6 +129,26 @@ private struct SearchFieldControl: NSViewRepresentable {
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSSearchField else { return }
             write(field.stringValue)
+        }
+
+        /// The arrows and Return, where the field leads a list.
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.moveUp(_:)):
+                guard let onMove else { return false }
+                onMove(-1)
+                return true
+            case #selector(NSResponder.moveDown(_:)):
+                guard let onMove else { return false }
+                onMove(1)
+                return true
+            case #selector(NSResponder.insertNewline(_:)):
+                guard let onSubmit else { return false }
+                onSubmit()
+                return true
+            default:
+                return false
+            }
         }
 
         private func write(_ value: String) {

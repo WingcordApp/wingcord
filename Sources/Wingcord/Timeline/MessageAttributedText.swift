@@ -58,6 +58,24 @@ nonisolated struct MessageText: @unchecked Sendable {
     /// still answering — a row the transcript lays out again when it has
     /// (`CodeHighlighter.didLand`).
     var awaitsHighlighting = false
+    /// The "(edited)" set after a changed message's words — see
+    /// `appendingEditedMark(at:style:)`. Nil for every other text.
+    var editedMark: EditedMark?
+
+    /// Where a selection may reach: the end of the words, short of the
+    /// "(edited)" after them, which is a fact about the message rather than
+    /// part of what it says — a copy that took it along would paste it.
+    var selectableLength: Int { editedMark?.bodyLength ?? attributed.length }
+
+    struct EditedMark: Sendable {
+        /// The marker's own characters, for the rectangle its tooltip
+        /// answers over.
+        var range: NSRange
+        /// How long the words are without it.
+        var bodyLength: Int
+        /// When the words were last changed — what the tooltip says.
+        var editedAt: Date
+    }
 
     struct LinkRun: Sendable {
         var range: NSRange
@@ -215,9 +233,43 @@ nonisolated extension MessageText {
             codeBlocks: codeBlocks,
             plainLabel: plainLabel,
             overlines: overlines,
-            awaitsHighlighting: awaitsHighlighting
+            awaitsHighlighting: awaitsHighlighting,
+            editedMark: editedMark
         )
     }
+
+    /// The same words with Discord's "(edited)" after the last of them.
+    ///
+    /// **In the words, not beside them**, so it wraps where they wrap: on the
+    /// last line while it fits there, on a line of its own when it does not —
+    /// and a bubble that hugs its words takes it in with them. After a fenced
+    /// block it starts a line of its own, as Discord's does under the block,
+    /// or the block's box would take it in.
+    func appendingEditedMark(at editedAt: Date, style: MessageTextStyle) -> MessageText {
+        let output = NSMutableAttributedString(attributedString: attributed)
+        let bodyLength = output.length
+        let endsInBlock = codeBlocks.last.map { NSMaxRange($0) >= bodyLength } ?? false
+        output.append(NSAttributedString(string: endsInBlock ? "\n" : " ", attributes: style.editedMark))
+        let range = NSRange(location: output.length, length: (Self.editedWord as NSString).length)
+        output.append(NSAttributedString(string: Self.editedWord, attributes: style.editedMark))
+        return MessageText(
+            attributed: output,
+            inlineEmoji: inlineEmoji,
+            inlineSymbols: inlineSymbols,
+            links: links,
+            spoilers: spoilers,
+            plates: plates,
+            quotes: quotes,
+            codeBlocks: codeBlocks,
+            plainLabel: plainLabel,
+            overlines: overlines,
+            awaitsHighlighting: awaitsHighlighting,
+            editedMark: EditedMark(range: range, bodyLength: bodyLength, editedAt: editedAt)
+        )
+    }
+
+    /// Discord's word for it, in its parentheses (`C8sXIM`, "edited").
+    static let editedWord = "(edited)"
 }
 
 /// Everything the builder needs from the session to resolve a mention into a
