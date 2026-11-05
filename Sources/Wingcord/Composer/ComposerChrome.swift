@@ -19,12 +19,14 @@ import SwiftUI
 /// Both arrangements are `alignment: .bottom`, so a composer grown to three
 /// lines keeps its controls on the last one rather than centring them against a
 /// paragraph.
-struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View>: View {
+struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View, Strip: View>: View {
     var shape: ChromeShape
     @ViewBuilder var leading: Leading
     @ViewBuilder var input: Input
     @ViewBuilder var controls: Controls
     @ViewBuilder var send: Send
+    /// A voice message's waveform: behind the field and the controls, the width of both.
+    @ViewBuilder var strip: Strip
 
     /// The plate's corner.
     ///
@@ -42,8 +44,11 @@ struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View>: V
         if shape.enclosesFlankingControls {
             HStack(alignment: .bottom, spacing: Spacing.hair) {
                 leading
-                input
-                controls
+                HStack(alignment: .bottom, spacing: Spacing.hair) {
+                    input
+                    controls
+                }
+                .background(alignment: .bottom) { strip }
                 ComposerSendDivider()
                 send
             }
@@ -56,6 +61,7 @@ struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View>: V
                     input
                     controls
                 }
+                .background(alignment: .bottom) { strip }
                 // The field's own inset. The trailing side is the last control's
                 // air, so both of its sides match.
                 .padding(.leading, Spacing.snug)
@@ -92,10 +98,12 @@ private struct ComposerSendDivider: View {
 /// reason: a radius that tracked a three-line field would round it into a
 /// lozenge. Bottom-aligned, so a grown field keeps its controls on the last
 /// line.
-struct MessagesComposerChrome<Leading: View, Input: View, Trailing: View>: View {
+struct MessagesComposerChrome<Leading: View, Input: View, Trailing: View, Strip: View>: View {
     @ViewBuilder var leading: Leading
     @ViewBuilder var input: Input
     @ViewBuilder var trailing: Trailing
+    /// A voice message's waveform: behind the words and the controls, the width of both.
+    @ViewBuilder var strip: Strip
 
     var body: some View {
         HStack(alignment: .bottom, spacing: Spacing.base) {
@@ -104,6 +112,7 @@ struct MessagesComposerChrome<Leading: View, Input: View, Trailing: View>: View 
                 input
                 trailing
             }
+            .background(alignment: .bottom) { strip }
             // The words start a capsule's corner in; the send disc sits as far
             // from the end as from the top and bottom.
             .padding(.leading, Spacing.snug + Spacing.hair)

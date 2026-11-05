@@ -458,6 +458,8 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     struct Preview: Hashable, Sendable {
         var text: String
         var sentAt: Date
+        /// A voice message, which wears a mic beside its words.
+        var isVoiceNote = false
     }
 
     /// Whether this row draws the taller, two-line form.

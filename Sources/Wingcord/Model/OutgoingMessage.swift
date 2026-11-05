@@ -37,6 +37,8 @@ struct OutgoingMessage: Identifiable, Equatable, Sendable {
         var listenAlong: ListenAlongInvite?
         /// A reply at a moment of a clip — Discord's timeline comment.
         var mediaMention: MediaMention?
+        /// A voice message: its one file is the message.
+        var isVoiceMessage = false
     }
 
     enum State: Hashable, Sendable {
@@ -58,7 +60,10 @@ struct OutgoingMessage: Identifiable, Equatable, Sendable {
 
     var shape: Shape { Shape(id: id, state: state) }
     var nonce: String { String(id.rawValue) }
-    var isUpload: Bool { !files.isEmpty }
+    /// **Not a voice note**, which draws as itself straight away: its echo has the file
+    /// and the waveform, and what would otherwise be a card with a bar is the row it's
+    /// about to become. It's a few kilobytes, so that's over before a bar would be read.
+    var isUpload: Bool { !files.isEmpty && !request.isVoiceMessage }
 
     /// The line an upload's card is named by: the file, or how many — Discord's
     /// "Uploading 3 Files".

@@ -287,11 +287,18 @@ struct SidebarChannelRow: View {
                 // The newest message where it is known; what they are doing
                 // where it is not. Typing has its own mark on the row.
                 if let preview = channel.preview {
-                    Text(preview.text)
-                        .font(.system(.callout))
-                        .foregroundStyle(channel.isUnread ? Ink.primary : Ink.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    HStack(spacing: Spacing.tight) {
+                        if preview.isVoiceNote {
+                            Image(systemName: VoiceNoteWords.symbol)
+                                .font(.system(.caption2))
+                                .accessibilityHidden(true)
+                        }
+                        Text(preview.text)
+                            .font(.system(.callout))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .foregroundStyle(channel.isUnread ? Ink.primary : Ink.secondary)
                 } else if let line = channel.activityLine {
                     ActivityLineView(line: line)
                 }

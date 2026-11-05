@@ -321,6 +321,8 @@ public actor MediaSession {
     /// share sends no voice and a watch plays nothing of its own — its sound
     /// is played by the call's, through `StreamAudio`.
     private let audio: VoiceAudioEngine?
+    /// A voice message is listening, so the processor stays open whatever the mute.
+    private var isRecordingVoiceNote = false
     private var camera: CameraCapture?
     /// A watched stream's sound, mixed into this call's output. See
     /// `setStreamAudio`.
@@ -1362,7 +1364,7 @@ public actor MediaSession {
             await audio.stop()
             return false
         }
-        audio.isInputMuted = isMuted
+        audio.isInputMuted = isMuted && !isRecordingVoiceNote
         audioSend.isMuted = isMuted
 
         // **Announced before the first packet, and silently fatal to miss.**
@@ -1373,9 +1375,37 @@ public actor MediaSession {
         return true
     }
 
+    // MARK: A voice message, during the call
+
+    /// Lends the call's microphone to a voice message.
+    ///
+    /// **The same frames the call gets, the same way.** A second engine would fight this
+    /// one for the input device and for the voice processor, and a Mac has one of those.
+    /// Listening to the running one means the note hears what the call hears.
+    ///
+    /// **A muted call stays muted.** The processor is told to listen again, because
+    /// muted it hands over silence and the note would be empty, but the call's own
+    /// send path holds its own mute, and that's what decides what leaves the machine.
+    ///
+    /// - Returns: false when this session has no microphone to lend.
+    public func beginVoiceNote(_ tap: @escaping @Sendable (UnsafePointer<Int16>, Float) -> Void) -> Bool {
+        guard let audio else { return false }
+        isRecordingVoiceNote = true
+        audio.setCaptureTap(tap)
+        audio.isInputMuted = false
+        return true
+    }
+
+    /// Takes it back, and the processor goes back to what the call's mute says.
+    public func endVoiceNote() {
+        isRecordingVoiceNote = false
+        audio?.setCaptureTap(nil)
+        audio?.isInputMuted = isMuted
+    }
+
     public func setMuted(_ muted: Bool) {
         isMuted = muted
-        audio?.isInputMuted = muted
+        audio?.isInputMuted = muted && !isRecordingVoiceNote
         audioSend.isMuted = muted
         if reducer.selfMuted(muted) { updateVideoQuality() }
     }

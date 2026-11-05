@@ -703,7 +703,13 @@ extension AppModel {
                 preview: latestDirectMessages[channelID]
                     .flatMap { $0.id == channel.lastMessageID ? $0 : nil }
                     .flatMap { message in
-                        previewLine(for: message).map { SidebarChannel.Preview(text: $0, sentAt: message.sentAt) }
+                        previewLine(for: message).map {
+                            SidebarChannel.Preview(
+                                text: $0,
+                                sentAt: message.sentAt,
+                                isVoiceNote: message.content.isEmpty && VoiceNoteWords.isVoiceNote(message)
+                            )
+                        }
                     }
             ))
         }
@@ -787,7 +793,9 @@ extension AppModel {
             }
         }
         if text.isEmpty {
-            if let attachment = message.attachments.first {
+            if VoiceNoteWords.isVoiceNote(message) {
+                text = VoiceNoteWords.preview
+            } else if let attachment = message.attachments.first {
                 let type = attachment.contentType ?? ""
                 text = type.hasPrefix("image/") ? "Picture" : type.hasPrefix("video/") ? "Video" : attachment.filename
             } else if !message.stickers.isEmpty {

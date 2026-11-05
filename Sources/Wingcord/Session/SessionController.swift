@@ -1509,7 +1509,9 @@ final class SessionController {
               let window = NSApp?.keyWindow
         else { return }
         let name = model.users[message.authorID]?.preferredName ?? "Someone"
-        let body = message.content.isEmpty ? "sent an attachment" : message.content
+        let body = !message.content.isEmpty
+            ? message.content
+            : VoiceNoteWords.isVoiceNote(message) ? "sent a voice message" : "sent an attachment"
         NSAccessibility.post(
             element: window,
             notification: .announcementRequested,
@@ -2588,7 +2590,8 @@ final class SessionController {
         attachments: [PendingAttachment] = [],
         poll: PollDraft? = nil,
         listenAlong: ListenAlongInvite? = nil,
-        mediaMention: MediaMention? = nil
+        mediaMention: MediaMention? = nil,
+        isVoiceMessage: Bool = false
     ) -> MessageID? {
         guard Self.isSendable(
             content, stickerIDs: stickerIDs, attachments: attachments, poll: poll, listenAlong: listenAlong
@@ -2602,7 +2605,8 @@ final class SessionController {
             stickerIDs: stickerIDs,
             poll: poll,
             listenAlong: listenAlong,
-            mediaMention: mediaMention
+            mediaMention: mediaMention,
+            isVoiceMessage: isVoiceMessage
         )
         // **Sending from older messages brings the reader back** — first, so
         // the echo lands in the window the reader is going to. Somebody who has
@@ -2614,7 +2618,7 @@ final class SessionController {
         let entry = OutgoingMessage(
             id: id,
             request: request,
-            echo: model.echo(of: request, id: id, in: channelID, author: author),
+            echo: model.echo(of: request, id: id, in: channelID, author: author, files: attachments),
             state: .sending,
             files: attachments
         )
@@ -2643,7 +2647,8 @@ final class SessionController {
             attachments: entry.files,
             poll: entry.request.poll,
             listenAlong: entry.request.listenAlong,
-            mediaMention: entry.request.mediaMention
+            mediaMention: entry.request.mediaMention,
+            isVoiceMessage: entry.request.isVoiceMessage
         )
     }
 
@@ -2713,6 +2718,13 @@ final class SessionController {
     }
 
     private func deliver(_ entry: OutgoingMessage, in channelID: ChannelID) async {
+        // `--demo` has nobody to send to, so what the reader recorded lands as it would.
+        if LaunchOptions.current.usesDemoFixtures, entry.request.isVoiceMessage {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            receiveOwn(entry.echo, in: channelID)
+            return
+        }
         do {
             let uploaded = try await upload(entry.files, in: channelID) { [weak self] fraction in
                 self?.reportUpload(fraction, of: entry.id, in: channelID)
@@ -2733,11 +2745,13 @@ final class SessionController {
                     attachments: uploaded,
                     poll: entry.request.poll,
                     listenAlong: listenAlong,
-                    mediaMention: entry.request.mediaMention
+                    mediaMention: entry.request.mediaMention,
+                    flags: entry.request.isVoiceMessage ? .isVoiceMessage : []
                 )
             }
             // Discord's copy is newer than the echo the cursor was moved to.
             receiveOwn(message, in: channelID)
+            keepVoiceNote(of: entry, as: message)
             // **When Discord has taken it, not when Return was pressed** —
             // Discord's own `SLOWMODE_RESET_COOLDOWN` follows the POST.
             // Started earlier, a send that fails would leave the reader
@@ -2748,6 +2762,19 @@ final class SessionController {
             guard !Task.isCancelled else { return }
             refuse(entry, in: channelID, because: error)
         }
+    }
+
+    /// A note that's gone up never has to come back down: the recording becomes the
+    /// copy this machine plays from.
+    private func keepVoiceNote(of entry: OutgoingMessage, as message: Message) {
+        guard entry.request.isVoiceMessage,
+              let file = entry.files.first,
+              let attachment = message.attachments.first
+        else { return }
+        // It may be playing under the echo's id.
+        model.voicePlayer.rename(AttachmentID(rawValue: entry.id.rawValue), to: attachment.id)
+        try? VoiceNoteCache.store(file.url, for: attachment.id)
+        try? FileManager.default.removeItem(at: file.url.deletingLastPathComponent())
     }
 
     /// Takes in one of the reader's own messages a route answered with — a
@@ -2873,7 +2900,8 @@ final class SessionController {
                 altText: file.altText,
                 originalContentType: originalTypes[index],
                 clip: file.clip,
-                isThumbnail: file.isThumbnail
+                isThumbnail: file.isThumbnail,
+                voice: file.voice
             ))
         }
         return uploaded

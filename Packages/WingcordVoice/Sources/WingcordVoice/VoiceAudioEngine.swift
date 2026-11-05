@@ -28,6 +28,19 @@ public final class VoiceAudioEngine: @unchecked Sendable {
     /// 48 kHz mono `Int16`, 960 samples — one Opus packet's worth — and its
     /// level, 0…1. Called from the capture tap's queue, never the main actor.
     public var onCaptureFrame: (@Sendable (UnsafePointer<Int16>, Float) -> Void)?
+
+    /// A second listener, for a voice message.
+    ///
+    /// **Its own slot, and locked**, because `onCaptureFrame` is set once before the
+    /// engine starts and never touched again, and a voice message starts and ends
+    /// in the middle of a call. Taken only for the moment it takes to copy a
+    /// pointer, so it costs the capture thread nothing it would notice.
+    private let captureTap = Mutex<(@Sendable (UnsafePointer<Int16>, Float) -> Void)?>(nil)
+
+    /// Starts or stops listening to the frames `onCaptureFrame` gets.
+    public func setCaptureTap(_ tap: (@Sendable (UnsafePointer<Int16>, Float) -> Void)?) {
+        captureTap.withLock { $0 = tap }
+    }
     /// Fired when the voice processor hears speech while the input is muted.
     public var onSpeechWhileMuted: (@Sendable () -> Void)?
 
@@ -936,6 +949,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
         // device's own thread.
         let width = OpusFormat.voiceFrameCount
         let monitors = levels.monitors.load(ordering: .relaxed)
+        let tap = captureTap.withLock { $0 }
         drained.withUnsafeBufferPointer { buffer in
             guard let base = buffer.baseAddress else { return }
             for start in stride(from: 0, to: buffer.count, by: width) {
@@ -943,6 +957,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
                 let level = Self.rootMeanSquare(frame, count: width)
                 levels.captured.store(level.bitPattern, ordering: .relaxed)
                 onCaptureFrame?(frame, level)
+                tap?(frame, level)
                 if monitors { monitor(frame, frames: width) }
             }
         }

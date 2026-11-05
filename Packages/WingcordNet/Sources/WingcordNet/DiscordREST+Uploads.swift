@@ -53,6 +53,22 @@ public struct UploadSlot: Sendable {
     }
 }
 
+/// What makes a file a voice message: how long it runs and how it looks.
+///
+/// Discord's `durationSecs` and `waveform`, which its attachment writer puts on the
+/// entry as `duration_secs` and `waveform`. The message's `IS_VOICE_MESSAGE` flag says
+/// the rest.
+public struct VoiceNoteUpload: Sendable, Hashable {
+    public var durationSeconds: Double
+    /// Base64, at most 256 bytes: see `VoiceWaveform.encode`.
+    public var waveform: String
+
+    public init(durationSeconds: Double, waveform: String) {
+        self.durationSeconds = durationSeconds
+        self.waveform = waveform
+    }
+}
+
 /// A file the caller wants a slot for.
 public struct UploadRequest: Sendable {
     public var filename: String
@@ -64,14 +80,18 @@ public struct UploadRequest: Sendable {
     public var isSpoiler: Bool
     /// What makes it a Discord clip rather than a video — see `ClipUpload`.
     public var clip: ClipUpload?
+    /// What makes it a voice message.
+    public var voice: VoiceNoteUpload?
 
     public init(
         filename: String,
         size: Int,
         altText: String? = nil,
         isSpoiler: Bool = false,
-        clip: ClipUpload? = nil
+        clip: ClipUpload? = nil,
+        voice: VoiceNoteUpload? = nil
     ) {
+        self.voice = voice
         self.filename = filename
         self.size = size
         self.altText = altText
@@ -101,6 +121,8 @@ public struct UploadedAttachment: Sendable {
     public var clip: ClipUpload?
     /// A media post's own picture for the board: Discord's `is_thumbnail`.
     public var isThumbnail: Bool
+    /// The voice half, as `clip` is the clip's.
+    public var voice: VoiceNoteUpload?
 
     public init(
         id: String,
@@ -109,8 +131,10 @@ public struct UploadedAttachment: Sendable {
         altText: String? = nil,
         originalContentType: String? = nil,
         clip: ClipUpload? = nil,
-        isThumbnail: Bool = false
+        isThumbnail: Bool = false,
+        voice: VoiceNoteUpload? = nil
     ) {
+        self.voice = voice
         self.isThumbnail = isThumbnail
         self.id = id
         self.filename = filename
@@ -143,8 +167,11 @@ extension DiscordREST {
                 var is_clip = false
                 /// A clip's own fields, as `getUploadPayload` writes them.
                 var clip: ClipFields?
+                /// A voice note's, from the same writer.
+                var duration_secs: Double?
+                var waveform: String?
 
-                enum CodingKeys: String, CodingKey { case filename, file_size, id, is_clip }
+                enum CodingKeys: String, CodingKey { case filename, file_size, id, is_clip, duration_secs, waveform }
 
                 func encode(to encoder: any Encoder) throws {
                     var container = encoder.container(keyedBy: CodingKeys.self)
@@ -152,6 +179,8 @@ extension DiscordREST {
                     try container.encode(file_size, forKey: .file_size)
                     try container.encode(id, forKey: .id)
                     try container.encode(is_clip, forKey: .is_clip)
+                    try container.encodeIfPresent(duration_secs, forKey: .duration_secs)
+                    try container.encodeIfPresent(waveform, forKey: .waveform)
                     try clip?.encode(to: encoder)
                 }
             }
@@ -172,7 +201,9 @@ extension DiscordREST {
                 file_size: file.size,
                 id: String(index),
                 is_clip: file.clip != nil,
-                clip: file.clip.map(ClipFields.init)
+                clip: file.clip.map(ClipFields.init),
+                duration_secs: file.voice?.durationSeconds,
+                waveform: file.voice?.waveform
             )
         })
         let response = try await post(

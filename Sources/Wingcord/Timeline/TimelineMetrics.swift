@@ -170,8 +170,17 @@ nonisolated enum TimelineMetrics {
     static let hiddenMediaTileHeight: CGFloat = 40
     static let hiddenMediaGap: CGFloat = 4
     /// A voice note's bar.
-    static let voiceNoteHeight: CGFloat = 44
-    static let voiceNoteMaxWidth: CGFloat = 320
+    /// The disc, and the air around it inside the capsule: the same on three sides. A
+    /// bubble's own padding is most of that already.
+    static let voiceNoteDisc: CGFloat = 32
+    static let voiceNoteInset: CGFloat = 8
+    static let voiceNoteBareInset: CGFloat = 2
+    static let voiceNoteGap: CGFloat = 10
+    /// Room for "19:59", which a note can't exceed, so the bars don't shift as it counts.
+    static let voiceNoteTimeWidth: CGFloat = 38
+    static let voiceNotePill = CGSize(width: 34, height: 20)
+    /// Bars short of this and a note in a narrow panel is a stub: two seconds' worth.
+    static let voiceNoteMinimumBars: CGFloat = 50
     /// Between reaction chips and the content above them.
     static let reactionGap: CGFloat = 6
     static let reactionChipHeight: CGFloat = 22

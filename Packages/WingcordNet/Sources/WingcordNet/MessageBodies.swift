@@ -40,8 +40,13 @@ struct AttachmentBody: Encodable {
     /// (its `d` in the attachment module: `a.is_clip=!0, a.title=…`).
     var clip: ClipFields?
     var is_thumbnail: Bool?
+    /// A voice note's two fields, from the same writer as the clip's.
+    var duration_secs: Double?
+    var waveform: String?
 
     init(_ attachment: UploadedAttachment) {
+        duration_secs = attachment.voice?.durationSeconds
+        waveform = attachment.voice?.waveform
         is_thumbnail = attachment.isThumbnail ? true : nil
         id = attachment.id
         filename = attachment.filename
@@ -53,6 +58,7 @@ struct AttachmentBody: Encodable {
 
     enum CodingKeys: String, CodingKey {
         case id, filename, uploaded_filename, description, original_content_type, is_thumbnail
+        case duration_secs, waveform
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -63,6 +69,8 @@ struct AttachmentBody: Encodable {
         try container.encodeIfPresent(description, forKey: .description)
         try container.encodeIfPresent(original_content_type, forKey: .original_content_type)
         try container.encodeIfPresent(is_thumbnail, forKey: .is_thumbnail)
+        try container.encodeIfPresent(duration_secs, forKey: .duration_secs)
+        try container.encodeIfPresent(waveform, forKey: .waveform)
         try clip?.encode(to: encoder)
     }
 }

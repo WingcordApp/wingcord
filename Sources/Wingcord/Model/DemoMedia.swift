@@ -718,6 +718,15 @@ nonisolated enum DemoMedia {
             let lock = NSLock()
             var file: AVAudioFile?
             var isDone = false
+            var lastBuffer = Date.now
+
+            /// Closes the file so it's whole before anybody reads it. True the first time.
+            func finish() -> Bool {
+                guard !isDone else { return false }
+                isDone = true
+                file?.close()
+                return true
+            }
         }
         let synthesizer = AVSpeechSynthesizer()
         let utterance = AVSpeechUtterance(string: text)
@@ -729,13 +738,10 @@ nonisolated enum DemoMedia {
                 sink.lock.lock()
                 defer { sink.lock.unlock() }
                 guard !sink.isDone, let pcm = buffer as? AVAudioPCMBuffer else { return }
+                sink.lastBuffer = .now
                 if pcm.frameLength == 0 {
-                    sink.isDone = true
                     let wrote = sink.file != nil
-                    // Closed here, so the file is whole before anybody reads it.
-                    sink.file?.close()
-                    sink.file = nil
-                    continuation.resume(returning: wrote)
+                    if sink.finish() { continuation.resume(returning: wrote) }
                     return
                 }
                 if sink.file == nil {
@@ -745,6 +751,24 @@ nonisolated enum DemoMedia {
                     )
                 }
                 try? sink.file?.write(from: pcm)
+            }
+            // **The empty buffer that ends it doesn't always come.** Measured on macOS
+            // 27.3: every word delivered, then nothing, and this waited for ever. A
+            // voice that's stopped talking for a second and a half has finished.
+            Task.detached {
+                while true {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    let (isOver, finished, wrote) = sink.lock.withLock {
+                        // Longer before the first word: a voice has to load.
+                        let patience: TimeInterval = sink.file == nil ? 8 : 1.5
+                        let isQuiet = Date.now.timeIntervalSince(sink.lastBuffer) > patience
+                        guard sink.isDone || isQuiet else { return (false, false, false) }
+                        let wrote = sink.file != nil
+                        return (true, isQuiet && sink.finish(), wrote)
+                    }
+                    if finished { continuation.resume(returning: wrote) }
+                    if isOver { return }
+                }
             }
         }
         withExtendedLifetime(synthesizer) {}

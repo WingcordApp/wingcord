@@ -398,6 +398,75 @@ final class TimelineCanvasView: NSView {
     var onToggleFavoriteGIF: ((GIF) -> Void)?
     /// Starts or stops a music card's thirty-second clip.
     var onTogglePreview: ((URL) -> Void)?
+    /// A voice note's disc: plays it, or pauses it.
+    var onToggleVoiceNote: ((VoiceNoteSlot) -> Void)?
+    /// A press on a note's bars, and each move of the drag after it.
+    var onScrubVoiceNote: ((VoiceNoteSlot, Double, VoiceNoteScrub) -> Void)?
+    /// A note's speed pill, which is every note's speed.
+    var onCycleVoiceRate: (() -> Void)?
+    /// Where the notes stand, asked at paint time, since it moves every frame.
+    var voicePlayback: (() -> VoiceNotePlayback)?
+    /// The note being dragged across, and where its row starts.
+    private var voiceScrub: (voice: VoiceNoteSlot, rowX: CGFloat)?
+    /// Repaints the playing note, and nothing else, while it plays.
+    private var voiceLink: CADisplayLink?
+    private var voiceRevision: UInt64 = 0
+    private var isVoiceLive = false
+
+    /// Something changed about the notes: redraw them, and keep the clock going for as
+    /// long as a bar could be moving.
+    func apply(voiceRevision revision: UInt64, isLive: Bool) {
+        if voiceRevision != revision {
+            voiceRevision = revision
+            invalidateVoiceRows()
+        }
+        isVoiceLive = isLive
+        reconcileVoiceLink()
+    }
+
+    /// A link holds its target, so one left running keeps a canvas that's left its window.
+    private func reconcileVoiceLink() {
+        if isVoiceLive, window != nil {
+            guard voiceLink == nil else { return }
+            let link = displayLink(target: self, selector: #selector(stepVoiceNote))
+            // Thirty is enough for bars this size, and sixty is all they could use.
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+            link.add(to: .main, forMode: .common)
+            voiceLink = link
+        } else if let link = voiceLink {
+            link.invalidate()
+            voiceLink = nil
+        }
+    }
+
+    /// Whether this transcript has a note on it, laid out, in sight or not.
+    func holdsVoiceNote(_ id: AttachmentID) -> Bool {
+        rows.contains { row in
+            guard case .message(let message) = row.kind else { return false }
+            return message.attachments.contains { $0.voice?.attachmentID == id }
+        }
+    }
+
+    /// Only the row with the note on it, and only while it's in sight.
+    @objc private func stepVoiceNote(_ link: CADisplayLink) {
+        guard let current = voicePlayback?().current else { return }
+        for index in visibleRowRange() {
+            guard case .message(let row) = rows[index].kind else { continue }
+            for slot in row.attachments where slot.voice?.attachmentID == current {
+                let frame = rowFrame(at: index)
+                setNeedsDisplay(slot.rect.offsetBy(dx: frame.minX, dy: frame.minY))
+            }
+        }
+    }
+
+    private func invalidateVoiceRows() {
+        for index in visibleRowRange() {
+            guard case .message(let row) = rows[index].kind,
+                  row.attachments.contains(where: { $0.voice != nil })
+            else { continue }
+            invalidateRow(index)
+        }
+    }
     /// Raises Spotify's own player beside the card, with the card's rect.
     var onOpenMusicPlayer: ((SpotifyUnfurl, CGRect) -> Void)?
     /// Which clip is playing, so the chip that started it can offer to stop it.
@@ -1121,6 +1190,7 @@ final class TimelineCanvasView: NSView {
     /// display link running for a transcript nobody can see.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        reconcileVoiceLink()
         refreshStickerAnimation()
         reconcileFilms()
         // A transcript hears about super reactions arriving while it is in a
@@ -1239,8 +1309,13 @@ final class TimelineCanvasView: NSView {
     /// the composer. Nothing flies for a row with no bubble.
     func launchBubble(nonce: MessageID, from launch: SendLaunch, reducesMotion: Bool) {
         guard let index = messageRows[nonce], case .message(let row) = rows[index].kind,
-              let bubble = row.bubbles?.bubble, let block = row.textBlock, let window
+              let bubble = row.bubbles?.bubble, let window
         else { return }
+        // Words, or the one thing that flies without any: a voice note, whose picture
+        // travels where words would.
+        let block = row.textBlock
+        let voice = block == nil ? row.attachments.first(where: { $0.voice != nil }) : nil
+        guard block != nil || voice != nil else { return }
         let frame = rowFrame(at: index)
         let scale = window.backingScaleFactor
         let ink = ThemeInk.current
@@ -1263,21 +1338,27 @@ final class TimelineCanvasView: NSView {
                 rim: onAccent ? nil : tint.rim,
                 frost: frost,
                 window: frost == nil ? nil : windowInCanvas,
-                words: BubbleFlight.wordsImage(
-                    block, style: style, plates: onAccent ? ink.ownBubblePlates : nil, scale: scale
-                ),
-                wordsFrame: CGRect(
-                    x: row.textOrigin.x - bubble.rect.minX,
-                    y: row.textOrigin.y - bubble.rect.minY,
-                    width: block.size.width,
-                    height: block.size.height
-                ),
-                firstBaseline: block.firstBaseline
+                words: block.map {
+                    BubbleFlight.wordsImage(
+                        $0, style: style, plates: onAccent ? ink.ownBubblePlates : nil, scale: scale
+                    )
+                } ?? voice.flatMap { TimelineRowPainter.voiceNoteImage($0, style: style, scale: scale) },
+                wordsFrame: block.map {
+                    CGRect(
+                        x: row.textOrigin.x - bubble.rect.minX,
+                        y: row.textOrigin.y - bubble.rect.minY,
+                        width: $0.size.width,
+                        height: $0.size.height
+                    )
+                } ?? voice.map { $0.rect.offsetBy(dx: -bubble.rect.minX, dy: -bubble.rect.minY) } ?? .zero,
+                // A note has no baseline: its middle travels along the field's.
+                firstBaseline: block?.firstBaseline ?? (voice?.rect.height ?? 0) / 2
             ),
             takeOff: BubbleFlight.TakeOff(
                 firstBaseline: convert(launch.firstBaseline, from: nil),
                 field: convert(launch.field, from: nil),
-                fontScale: launch.fontSize / style.bodyFont.pointSize,
+                // A note isn't set in the field's type, so there's nothing to grow.
+                fontScale: block == nil ? 1 : launch.fontSize / style.bodyFont.pointSize,
                 isOneLine: launch.isOneLine
             ),
             scale: scale,
@@ -1515,6 +1596,11 @@ final class TimelineCanvasView: NSView {
                     }
                 }
                 state.playingPreviewURL = playingPreview
+                if case .message(let message) = row.kind,
+                   message.attachments.contains(where: { $0.voice != nil })
+                {
+                    state.voicePlayback = voicePlayback?()
+                }
                 // The welcome header carries no message, and one control; a
                 // fold's line the same.
                 if hoveredRow == index {
@@ -1828,6 +1914,15 @@ final class TimelineCanvasView: NSView {
             films.setBadge(filmBadge(), scale: window?.backingScaleFactor ?? 2)
         case .previewClip(let url):
             onTogglePreview?(url)
+        case .voiceToggle(let voice):
+            onToggleVoiceNote?(voice)
+        case .voiceBars(let voice):
+            voiceScrub = (voice, frame.minX)
+            onScrubVoiceNote?(voice, voice.fraction(atX: point.x - frame.minX), .began)
+        case .voiceRate:
+            onCycleVoiceRate?()
+        case .voiceCard:
+            break
         case .openMusicPlayer(let card, let rect):
             DiagnosticLog.trace(
                 "spotify", "open chip hit \(card.key) wired=\(onOpenMusicPlayer != nil)"
@@ -1981,6 +2076,13 @@ final class TimelineCanvasView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        // The pointer's height doesn't matter once it's holding the bars.
+        if let voiceScrub {
+            let point = convert(event.locationInWindow, from: nil)
+            let x = point.x - voiceScrub.rowX
+            onScrubVoiceNote?(voiceScrub.voice, voiceScrub.voice.fraction(atX: x), .moved)
+            return
+        }
         guard isSelecting, let current = selection else {
             super.mouseDragged(with: event)
             return
@@ -1994,6 +2096,10 @@ final class TimelineCanvasView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if voiceScrub != nil {
+            voiceScrub = nil
+            return
+        }
         guard isSelecting else {
             super.mouseUp(with: event)
             return
@@ -2175,6 +2281,13 @@ final class TimelineCanvasView: NSView {
         case playVideo(EmbedVideo, CGRect)
         /// The Preview chip on a music card.
         case previewClip(URL)
+        /// A voice note's disc, its bars, and its speed pill.
+        case voiceToggle(VoiceNoteSlot)
+        case voiceBars(VoiceNoteSlot)
+        case voiceRate(VoiceNoteSlot)
+        /// The rest of a voice note's capsule, which does nothing and swallows the
+        /// click: it isn't a picture to open.
+        case voiceCard
         /// The Open chip, which raises Spotify's own player. Carries the card's
         /// rect so the panel can be anchored to it — §1.
         case openMusicPlayer(SpotifyUnfurl, CGRect)
@@ -2489,6 +2602,15 @@ final class TimelineCanvasView: NSView {
                 return .downloadAttachment(index: attachmentIndex, rect: button)
             }
         }
+        // A voice note's controls, a little more than their shapes: the bars are thin
+        // and two points of air between them is still the bars.
+        for slot in row.attachments where slot.rect.contains(local) {
+            guard let voice = slot.voice else { continue }
+            if voice.pill.insetBy(dx: -4, dy: -6).contains(local) { return .voiceRate(voice) }
+            if voice.disc.insetBy(dx: -4, dy: -4).contains(local) { return .voiceToggle(voice) }
+            if voice.barsRect.insetBy(dx: -3, dy: -8).contains(local) { return .voiceBars(voice) }
+            return .voiceCard
+        }
         // A text preview is its hosted card's to answer, which sits over it.
         for (attachmentIndex, slot) in row.attachments.enumerated()
         where slot.kind != .textPreview && slot.rect.contains(local) {
@@ -2653,6 +2775,14 @@ final class TimelineCanvasView: NSView {
                 cursor = url == nil && customID == nil ? nil : .pointingHand
             case .dismissEphemeral(let origin), .cancelUpload(let origin):
                 component = origin
+                cursor = .pointingHand
+            case .voiceToggle(let voice):
+                component = voice.disc.origin
+                cursor = .pointingHand
+            case .voiceRate(let voice):
+                component = voice.pill.origin
+                cursor = .pointingHand
+            case .voiceBars:
                 cursor = .pointingHand
             case .pollAnswer(let answerID, let origin):
                 component = origin
@@ -2979,7 +3109,17 @@ final class TimelineCanvasView: NSView {
                     button.setAccessibilityFrameInParentSpace(rect)
                     return button as NSAccessibilityElement
                 }
-                return [element] + buttons
+                // A voice note says what it is and how long, and pressing it plays it.
+                let notes = row.attachments.compactMap(\.voice).map { voice in
+                    let button = PressableAccessibilityElement()
+                    button.press = { [weak self] in self?.onToggleVoiceNote?(voice) }
+                    button.setAccessibilityRole(.button)
+                    button.setAccessibilityLabel(VoiceNoteWords.spoken(seconds: voice.duration))
+                    button.setAccessibilityParent(self)
+                    button.setAccessibilityFrameInParentSpace(voice.disc.offsetBy(dx: frame.minX, dy: frame.minY))
+                    return button as NSAccessibilityElement
+                }
+                return [element] + buttons + notes
             case .collapsedGroup(let slot):
                 // A fold that opens is a button; one that cannot is a line.
                 let element = PressableAccessibilityElement()

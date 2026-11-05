@@ -39,6 +39,8 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
     var clip: ClipUpload?
     /// A media post's own picture for the board. It goes up first.
     var isThumbnail = false
+    /// What makes it a voice message: only ever set by the recorder.
+    var voice: VoiceNoteUpload?
 
     init(url: URL, id: UUID = UUID()) {
         self.id = id
@@ -65,6 +67,7 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
         copy.anonymise = anonymise
         copy.clip = clip
         copy.isThumbnail = isThumbnail
+        copy.voice = voice
         return copy
     }
 
@@ -76,7 +79,8 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
             size: size,
             altText: altText,
             isSpoiler: isSpoiler,
-            clip: clip
+            clip: clip,
+            voice: voice
         )
     }
 
@@ -88,13 +92,18 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
             && lhs.isSpoiler == rhs.isSpoiler
             && lhs.anonymise == rhs.anonymise
             && lhs.clip == rhs.clip
+            && lhs.voice == rhs.voice
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
     /// Whether AnonymiseFileNames renames this file when it is sent.
+    ///
+    /// **Never a voice note**: `voice-message.ogg` gives away nothing, and a client may
+    /// know it by that name. There's also no tile to turn it off on.
     func isAnonymised(by settings: AppSettings) -> Bool {
-        settings.anonymisesFileNames && (anonymise ?? settings.anonymisesByDefault)
+        guard voice == nil else { return false }
+        return settings.anonymisesFileNames && (anonymise ?? settings.anonymisesByDefault)
     }
 
     /// AnonymiseFileNames as the plugin runs it, on `uploadFiles`: each file it

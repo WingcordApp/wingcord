@@ -160,8 +160,12 @@ struct ComposerContainer: View {
             appLauncherRequest: model.appLauncherRequest?.channelID == channelID
                 ? model.appLauncherRequest
                 : nil,
-            takeAppLauncherRequest: { model.appLauncherRequest = nil }
+            takeAppLauncherRequest: { model.appLauncherRequest = nil },
+            voiceNote: voiceNote
         )
+        // What's been said stays in the channel it was said in: see `VoiceNoteRecorder.left`.
+        .onChange(of: channelID) { before, _ in model.leftVoiceNoteChannel(before) }
+        .onDisappear { model.leftVoiceNoteChannel(channelID) }
         // A shortcode the reader finished typing becomes its emoji — see
         // `applyClosedShortcode`. Keyed on the text so it runs once per change
         // rather than on every evaluation of this body.
@@ -254,6 +258,51 @@ struct ComposerContainer: View {
     // MARK: Slash commands
 
     private var pendingCommand: PendingCommand? { model.messages(in: channelID)?.command }
+
+    /// A voice message's half of the composer, from the recorder and the player.
+    private var voiceNote: ComposerVoiceNote? {
+        guard post == nil else { return nil }
+        let recorder = model.voiceRecorder
+        let player = model.voicePlayer
+        let phase: ComposerVoiceNote.Phase = switch recorder.flow.phase(in: channelID) {
+        case .idle: .idle
+        case .recording: .recording
+        case .review: .review
+        }
+        let held = phase == .review ? recorder.held : nil
+        let id = VoiceNotePlayer.heldNote
+        return ComposerVoiceNote(
+            phase: phase,
+            isOffered: model.canRecordVoiceNote(in: channelID),
+            isPlaying: player.current == id && player.isPlaying,
+            durationSeconds: held?.file.durationSeconds ?? 0,
+            values: held?.values ?? [],
+            clock: VoiceNoteClock(
+                meter: recorder.meter,
+                level: { recorder.level },
+                elapsed: { recorder.elapsedSeconds },
+                stoppedAt: { recorder.stoppedAt },
+                position: { player.position(of: id) },
+                rate: { player.rate }
+            ),
+            start: { model.startVoiceNote(in: channelID) },
+            stop: { recorder.stop() },
+            discard: { model.discardVoiceNote() },
+            send: { model.sendVoiceNote(in: channelID, launch: $0) },
+            togglePlay: {
+                guard let held = recorder.held else { return }
+                player.toggle(id, source: held.file.url, duration: held.file.durationSeconds)
+            },
+            seek: { fraction, isPress in
+                guard let held = recorder.held else { return }
+                if isPress || player.current != id {
+                    player.play(id, source: held.file.url, duration: held.file.durationSeconds, from: fraction)
+                } else {
+                    player.seek(toFraction: fraction)
+                }
+            }
+        )
+    }
 
     /// The `/` query, when the bar is holding a draft rather than an edit.
     ///

@@ -711,6 +711,7 @@ extension AppModel {
         if !message.content.isEmpty {
             return String(message.content.prefix(140))
         }
+        if VoiceNoteWords.isVoiceNote(message) { return VoiceNoteWords.preview }
         if !message.attachments.isEmpty {
             return message.attachments.count == 1
                 ? message.attachments[0].filename

@@ -63,10 +63,16 @@ public final class OpusEncoder {
         /// passage is a stream whose next note arrives as a new talkspurt,
         /// gathered again and played late.
         case soundshare
+        /// A voice message: a voice, going to a file rather than across a network.
+        ///
+        /// No forward error correction, since nothing is lost on the way to a disk,
+        /// and every frame written, since a file with holes in it is a file that
+        /// plays quickly through every pause.
+        case voiceNote
 
         public var channels: Int32 {
             switch self {
-            case .voice: OpusFormat.voiceChannels
+            case .voice, .voiceNote: OpusFormat.voiceChannels
             case .soundshare: OpusFormat.channels
             }
         }
@@ -89,7 +95,7 @@ public final class OpusEncoder {
         guard let state = opus_encoder_create(
             OpusFormat.sampleRate,
             signal.channels,
-            signal == .voice ? OPUS_APPLICATION_VOIP : OPUS_APPLICATION_AUDIO,
+            signal == .soundshare ? OPUS_APPLICATION_AUDIO : OPUS_APPLICATION_VOIP,
             &error
         ), error == OPUS_OK else {
             throw OpusFailure.create(error)
@@ -109,14 +115,14 @@ public final class OpusEncoder {
         // `PACKET_LOSS_PERC` has to be fed from what the receiver is actually
         // seeing. `updateExpectedLoss` is that feedback, and without it FEC is
         // a flag that is on and inert.
-        set(OPUS_SET_INBAND_FEC_REQUEST, 1)
-        set(OPUS_SET_PACKET_LOSS_PERC_REQUEST, 5)
+        set(OPUS_SET_INBAND_FEC_REQUEST, signal == .voiceNote ? 0 : 1)
+        set(OPUS_SET_PACKET_LOSS_PERC_REQUEST, signal == .voiceNote ? 0 : 5)
         // Discontinuous transmission: silence is not sent at all. Together with
         // the app's own gate this is what keeps an idle channel of eight people
         // from being eight streams of encoded room tone. A stream's sound is
         // sent whole — see `Signal.soundshare`.
         set(OPUS_SET_DTX_REQUEST, signal == .voice ? 1 : 0)
-        set(OPUS_SET_SIGNAL_REQUEST, signal == .voice ? OPUS_SIGNAL_VOICE : OPUS_SIGNAL_MUSIC)
+        set(OPUS_SET_SIGNAL_REQUEST, signal == .soundshare ? OPUS_SIGNAL_MUSIC : OPUS_SIGNAL_VOICE)
         // Full band. The default is already this at 48 kHz; naming it means a
         // future bitrate change cannot quietly narrow the band instead.
         set(OPUS_SET_BANDWIDTH_REQUEST, OPUS_BANDWIDTH_FULLBAND)
@@ -124,6 +130,14 @@ public final class OpusEncoder {
     }
 
     deinit { opus_encoder_destroy(state) }
+
+    /// How many samples the encoder holds back before the sound starts, which a file
+    /// has to tell its decoder to skip: Ogg Opus's pre-skip.
+    public var lookahead: Int {
+        var value: Int32 = 0
+        wc_opus_encoder_get(state, OPUS_GET_LOOKAHEAD_REQUEST, &value)
+        return Int(value)
+    }
 
     /// Re-arms FEC for the loss the far end is reporting.
     ///

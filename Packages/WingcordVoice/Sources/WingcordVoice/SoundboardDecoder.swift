@@ -4,10 +4,10 @@ import Foundation
 
 // MARK: - Turning a soundboard clip into samples
 //
-// **macOS cannot decode a soundboard sound.** Discord serves them as Ogg Opus,
-// and AudioToolbox supports neither the container nor the codec — every format
-// CoreAudio ships is a different one. So the clip is demuxed here and decoded
-// through the same libopus the call itself uses.
+// **Demuxed here, and decoded through the libopus the call itself uses.** Discord
+// serves soundboard sounds as Ogg Opus, which AudioToolbox couldn't read when this
+// was written. macOS 27 opens it (docs/VOICE-MESSAGES.md), but this path works on
+// the bytes in memory and hands the mixer the exact format it takes.
 //
 // Anything that is *not* Ogg goes to `AVAudioFile`, which covers the handful of
 // MP3s among Discord's own defaults and anything they add later in a format the

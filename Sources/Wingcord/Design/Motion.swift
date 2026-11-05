@@ -281,7 +281,11 @@ private struct MotionResolutionModifier: ViewModifier {
         // Game Mode reduces motion as the system setting does, while it
         // throttles — Discord's own Game Mode lever.
         content.environment(
-            \.motion, MotionResolver(reduceMotion: reduceMotion || GameMode.shared.isThrottling)
+            \.motion,
+            MotionResolver(
+                reduceMotion: reduceMotion || GameMode.shared.isThrottling
+                    || LaunchOptions.current.forcesReducedMotion
+            )
         )
     }
 }

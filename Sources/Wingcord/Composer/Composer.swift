@@ -198,8 +198,15 @@ struct Composer: View {
     /// page is already set on the store; this only opens the control.
     var appLauncherRequest: AppLauncherRequest?
     var takeAppLauncherRequest: () -> Void = {}
+    /// A voice message, in this conversation. Nil is a bar with no microphone: the
+    /// settings preview, and a post being written.
+    var voiceNote: ComposerVoiceNote?
 
     @Environment(\.motion) private var motion
+    private var reduceMotion: Bool { motion.reduceMotion }
+    /// The bar has the keys while a note's going: Return, Escape and Space mean something
+    /// else then, and a hidden field must not be typed into.
+    @FocusState private var isVoiceFocused: Bool
     @State private var isFocused = false
     /// Where the field's words are, read at the moment of a send.
     @State private var textAnchor = EditorAnchor()
@@ -406,47 +413,186 @@ struct Composer: View {
                     // the field, which is right: there is nothing to add. The
                     // settings preview draws it inert, as it draws the other
                     // controls.
-                    if isReorderable || !attachActions.isEmpty {
+                    if isReorderable || !attachActions.isEmpty || isVoiceActive {
                         attachControl
                     }
                 } input: {
                     field
                 } controls: {
                     HStack(spacing: Spacing.hair) {
-                        silentTypingButton
-                        expressionControls
+                        if !isVoiceActive {
+                            silentTypingButton
+                                .transition(.materialize)
+                            expressionControls
+                                .transition(.materialize)
+                        }
+                        voiceControl(stopSide: Metrics.composerControl)
                     }
                 } send: {
                     if showsSendControl {
-                        ComposerSendButton(shape: shape, isArmed: canCommit, action: pressedReturn)
+                        // Always drawn in this arrangement, its own body beside the
+                        // field, and armed by a note the way it's armed by words.
+                        ComposerSendButton(
+                            shape: shape,
+                            isArmed: voicePhase == .idle ? canCommit : voicePhase == .review,
+                            usesReturnKey: !isVoiceActive,
+                            action: voicePhase == .review ? voiceSend : pressedReturn
+                        )
                     }
+                } strip: {
+                    voiceStrip(.inline)
                 }
                 .animation(motion.glassMorph, value: shape)
             } else {
                 MessagesComposerChrome {
-                    if !menuActions.isEmpty {
+                    if !menuActions.isEmpty || isVoiceActive {
                         attachControl
                     }
                 } input: {
                     field
                 } trailing: {
-                    silentTypingButton
-                    emojiControl
-                    if showsSendControl {
-                        MessagesSendButton(isArmed: canCommit, action: pressedReturn)
+                    if !isVoiceActive {
+                        silentTypingButton
+                            .transition(.materialize)
+                        emojiControl
+                            .transition(.materialize)
                     }
+                    // Stop slides to the end when the send disc leaves, and play
+                    // moves back one when it returns: the same control all along.
+                    voiceControl(stopSide: MessagesSendButton.side)
+                    if showsSendControl, voicePhase != .recording {
+                        MessagesSendButton(
+                            isArmed: voicePhase == .review || canCommit,
+                            usesReturnKey: !isVoiceActive,
+                            action: voicePhase == .review ? voiceSend : pressedReturn
+                        )
+                        // Popping in on the beat the bars rise.
+                        .transition(.scale(scale: 0.3).combined(with: .opacity))
+                    }
+                } strip: {
+                    voiceStrip(.messages)
                 }
             }
         }
+        .animation(motion.panel, value: voicePhase)
         .contentShape(.rect)
+        // The keys, while a note's going. Not a shortcut on each button, since those
+        // fire from anywhere in the window and Space belongs to whatever's being typed in.
+        .focusable(isVoiceActive)
+        .focused($isVoiceFocused)
+        .focusEffectDisabled()
+        .onKeyPress(.return) {
+            switch voicePhase {
+            case .recording: voiceNote?.stop()
+            case .review: voiceSend()
+            case .idle: return .ignored
+            }
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            guard isVoiceActive else { return .ignored }
+            voiceNote?.discard()
+            return .handled
+        }
+        .onKeyPress(.space) {
+            guard isVoiceActive else { return .ignored }
+            if voicePhase == .review { voiceNote?.togglePlay() }
+            return .handled
+        }
         // Clicking anywhere on the bar puts the caret in the field, which is
         // what every composer on this platform does.
-        .onTapGesture { isFocused = true }
+        .onTapGesture {
+            if isVoiceActive {
+                isVoiceFocused = true
+            } else {
+                isFocused = true
+            }
+        }
         // And so does opening a conversation. `.task(id:)` rather than
         // `.onChange`, so the first channel of a session is focused too — a
         // change handler has nothing to compare against on the way in.
         // Nil asks for nothing yet: a card whose title goes first.
-        .task(id: focusKey) { if focusKey != nil { isFocused = true } }
+        .task(id: focusKey) {
+            guard focusKey != nil else { return }
+            if isVoiceActive {
+                isVoiceFocused = true
+            } else {
+                isFocused = true
+            }
+        }
+        .onChange(of: voicePhase) { before, after in
+            if before == .idle {
+                // A press that opens the picker's popover isn't going to close it.
+                openControl = nil
+                isAttachMenuOpen = false
+                isFocused = false
+                isVoiceFocused = true
+            } else if after == .idle {
+                isVoiceFocused = false
+                isFocused = true
+            }
+        }
+    }
+
+    // MARK: A voice message
+
+    private var voicePhase: ComposerVoiceNote.Phase { voiceNote?.phase ?? .idle }
+    private var isVoiceActive: Bool { voicePhase != .idle }
+
+    private func voiceSend() {
+        voiceNote?.send(textAnchor.voiceNoteLaunch(fieldPadding: Spacing.tight))
+    }
+
+    /// Mic, stop, play and pause, in one spot.
+    @ViewBuilder
+    private func voiceControl(stopSide: CGFloat) -> some View {
+        if let voiceNote, voiceNote.isShown {
+            let mode: ComposerVoiceControl.Mode = switch voiceNote.phase {
+            case .idle: .mic
+            case .recording: .stop
+            case .review: voiceNote.isPlaying ? .pause : .play
+            }
+            ComposerVoiceControl(mode: mode, stopSide: stopSide) {
+                switch voiceNote.phase {
+                case .idle:
+                    Haptics.pop()
+                    voiceNote.start()
+                case .recording:
+                    Haptics.pop()
+                    voiceNote.stop()
+                case .review:
+                    voiceNote.togglePlay()
+                }
+            }
+        }
+    }
+
+    /// The composer as a waveform, behind the controls so they can come and go over it.
+    ///
+    /// **Two views, each in its own `if`, because each leaves its own way**: the bars sink to
+    /// the centre line and the time just fades. A transition inside something that's coming
+    /// or going isn't honoured, only the outermost one is, so these can't share a container.
+    @ViewBuilder
+    private func voiceStrip(_ layout: ComposerVoiceLayout) -> some View {
+        if let voiceNote, voiceNote.isActive {
+            ComposerVoiceBars(note: voiceNote, layout: layout)
+                .frame(height: Metrics.composerControlHeight)
+                .transition(.voiceBarsSink(reduceMotion: reduceMotion))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(
+                    voiceNote.phase == .recording
+                        ? "Recording voice message"
+                        : VoiceNoteWords.spoken(seconds: voiceNote.durationSeconds)
+                ))
+        }
+        if let voiceNote, voiceNote.isActive {
+            ComposerVoiceTimer(note: voiceNote)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: Metrics.composerControlHeight)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .transition(.opacity)
+        }
     }
 
     /// The words: the command being filled in, if any, and the editor.
@@ -506,6 +652,14 @@ struct Composer: View {
         // what leaves a 32-point control centred inside a 38-point bar
         // rather than setting the bar's height itself.
         .padding(.vertical, Spacing.tight)
+        // **Still here while a note's going, only out of sight**, so what was typed,
+        // the caret and its undo all come back as they were. A many-lined draft's bar
+        // settles to one line.
+        .opacity(isVoiceActive ? 0 : 1)
+        .allowsHitTesting(!isVoiceActive)
+        .accessibilityHidden(isVoiceActive)
+        .frame(maxHeight: isVoiceActive ? Metrics.composerControlHeight : nil, alignment: .bottom)
+        .clipped()
     }
 
     /// **One field, three destinations.** A command borrows the bar exactly as
@@ -754,9 +908,20 @@ struct Composer: View {
     }
 
     private var attachControl: some View {
-        let action: (() -> Void)? = isReorderable ? nil : { pressedPlus() }
+        let action: (() -> Void)? = isReorderable ? nil : {
+            if isVoiceActive {
+                voiceNote?.discard()
+            } else {
+                pressedPlus()
+            }
+        }
         // Messages' `+` is a glass circle of its own, which is the pill's.
-        return ComposerAttachButton(shape: inlineControls ? shape : .pill, isActive: isAttachMenuOpen, action: action)
+        return ComposerAttachButton(
+            shape: inlineControls ? shape : .pill,
+            isActive: isAttachMenuOpen,
+            isCancel: isVoiceActive,
+            action: action
+        )
             .popover(isPresented: $isAttachMenuOpen, arrowEdge: .top) {
                 ComposerAttachMenu(actions: menuActions) { isAttachMenuOpen = false }
             }

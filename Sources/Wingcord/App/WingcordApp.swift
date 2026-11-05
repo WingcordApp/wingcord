@@ -66,6 +66,7 @@ struct WingcordApp: App {
         // the house palette, and the window would come up in True Black for one
         // frame before correcting itself.
         _ = ThemeStore.shared
+        VoiceNoteRecorder.clearLeftovers()
         let model = AppModel()
         if LaunchOptions.current.usesDemoFixtures {
             DemoFixtures.populate(model)
@@ -92,6 +93,11 @@ struct WingcordApp: App {
         if LaunchOptions.current.usesDemoFixtures {
             model.sessionController.startNowPlayingLocally()
             DemoCaptureSelfTest.runIfAsked(model)
+            // On the next turn, once there's a window to open it in.
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1))
+                DemoVoiceNotes.openRequestedChannel(model)
+            }
         }
     }
 
@@ -457,6 +463,13 @@ struct WingcordCommands: Commands {
                     model.openPollEditor(in: channelID)
                 }
                 .disabled(!model.menuContext.isConversation)
+                // D4: no key of its own by default. The composer's the place for this,
+                // and an accidental shortcut here opens somebody's microphone.
+                Button("Record Voice Message") {
+                    guard let channelID = model.menuContext.channelID else { return }
+                    model.startVoiceNote(in: channelID)
+                }
+                .disabled(!model.canRecordVoiceNote(in: model.menuContext.channelID))
                 ShortcutMenuItem(shortcut: .viewGIFs, model: model)
                 ShortcutMenuItem(shortcut: .viewEmojis, model: model)
                 ShortcutMenuItem(shortcut: .viewStickers, model: model)
@@ -620,7 +633,7 @@ struct WingcordCommands: Commands {
 /// Flags rather than a build configuration, so a release build can be driven
 /// into a deterministic state for a screenshot or a benchmark without shipping
 /// a second code path.
-struct LaunchOptions: Sendable {
+nonisolated struct LaunchOptions: Sendable {
     var usesDemoFixtures = false
     /// Pretends a game is in front, so the overlay comes up without one.
     ///
@@ -632,6 +645,13 @@ struct LaunchOptions: Sendable {
     /// the panel presents at shield level and covers the menu bar, which is
     /// right over a game and wrong over a desktop somebody is working on.
     var pretendsAGameIsRunning = false
+    /// A made-up voice in place of the microphone, so a voice message can be recorded
+    /// with nobody talking and no system prompt: `--synthetic-microphone`. The demo
+    /// falls back to this by itself where the microphone's refused.
+    var usesSyntheticMicrophone = false
+    /// Reduce Motion for this one run, so its paths can be looked at without flipping the
+    /// system's setting under everything else on the Mac: `--reduce-motion`.
+    var forcesReducedMotion = false
 
     static let current: LaunchOptions = {
         let arguments = Set(ProcessInfo.processInfo.arguments)
@@ -643,7 +663,9 @@ struct LaunchOptions: Sendable {
             // identifier is the switch now, whatever it was launched with.
             usesDemoFixtures: arguments.contains("--demo")
                 || Bundle.main.bundleIdentifier == "dev.wingcord.Wingcord.demo",
-            pretendsAGameIsRunning: arguments.contains("--overlay")
+            pretendsAGameIsRunning: arguments.contains("--overlay"),
+            usesSyntheticMicrophone: arguments.contains("--synthetic-microphone"),
+            forcesReducedMotion: arguments.contains("--reduce-motion")
         )
     }()
 }

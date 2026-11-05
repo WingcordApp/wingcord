@@ -12,6 +12,19 @@ final class EditorAnchor {
     /// Set once, by the editor that owns the field.
     weak var container: MarkdownEditorContainer?
 
+    /// Where a voice note leaves from: the field around it, whatever's typed there, with
+    /// its middle on the line the bars were on. The words aren't what's flying.
+    func voiceNoteLaunch(fieldPadding: CGFloat) -> SendLaunch? {
+        guard let container, container.window != nil else { return nil }
+        let field = container.convert(container.bounds, to: nil).insetBy(dx: 0, dy: -fieldPadding)
+        return SendLaunch(
+            firstBaseline: CGPoint(x: field.minX, y: field.midY),
+            field: field,
+            fontSize: 0,
+            isOneLine: true
+        )
+    }
+
     /// The words' first line and the field around them, in window space.
     ///
     /// - Parameter fieldPadding: the air the owner keeps around the field, so

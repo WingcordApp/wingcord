@@ -134,28 +134,45 @@ nonisolated struct ComposerControlShape: Shape {
 /// `.interactive()` in the first case only: the displacement scales with the
 /// surface, so on a 38-point circle it reads as the control responding, and on a
 /// region inside a larger plate there is no separate body to displace.
+///
+/// **`+` is the ✕ while a voice message is going**, because a plus turned 45° is a cross:
+/// the same glyph in the same circle, rotating there and back on a spring. Under Reduce
+/// Motion there's no rotation, and the symbol changes in place.
 struct ComposerAttachButton: View {
     var shape: ChromeShape
     /// Its menu is open — drawn as the trailing controls draw an open flyout.
     var isActive = false
+    /// Turned into the ✕.
+    var isCancel = false
     var action: (() -> Void)?
+
+    @Environment(\.motion) private var motion
+    private var reduceMotion: Bool { motion.reduceMotion }
+
+    private var label: String { isCancel ? "Discard Voice Message" : "More message options" }
+
+    private func glyph(_ font: Font) -> some View {
+        Image(systemName: reduceMotion && isCancel ? "xmark" : "plus")
+            .font(font)
+            .contentTransition(.opacity)
+            .rotationEffect(.degrees(!reduceMotion && isCancel ? 45 : 0))
+            .animation(motion.momentum, value: isCancel)
+    }
 
     var body: some View {
         if shape.enclosesFlankingControls {
-            ComposerControlButton(label: "More message options", isActive: isActive, shape: shape, action: action) {
-                Image(systemName: "plus")
-                    .font(.system(size: 19, weight: .regular))
+            ComposerControlButton(label: label, isActive: isActive, shape: shape, action: action) {
+                glyph(.system(size: 19, weight: .regular))
             }
             // The expression controls' box — see `ComposerEnclosedSlot`.
             .modifier(ComposerEnclosedSlot())
         } else {
             ComposerCircleBody(action: action) {
-                Image(systemName: "plus")
-                    .font(Typeface.controlGlyph)
+                glyph(Typeface.controlGlyph)
                     .foregroundStyle(InkColor.solid)
             }
-            .help("More message options")
-            .accessibilityLabel(Text("More message options"))
+            .help(label)
+            .accessibilityLabel(Text(label))
         }
     }
 }
@@ -172,6 +189,8 @@ struct ComposerAttachButton: View {
 struct ComposerSendButton: View {
     var shape: ChromeShape
     var isArmed: Bool
+    /// See `MessagesSendButton`.
+    var usesReturnKey = true
     var action: () -> Void
 
     @Environment(\.motion) private var motion
@@ -192,7 +211,7 @@ struct ComposerSendButton: View {
         // A `Return` shortcut on a disabled button is inert, which is what keeps
         // this from swallowing the key the text field needs while there is
         // nothing to send.
-        .keyboardShortcut(.return, modifiers: [])
+        .keyboardShortcut(usesReturnKey ? KeyboardShortcut(.return, modifiers: []) : nil)
         .animation(motion.glassMorph, value: isArmed)
         .accessibilityLabel(Text("Send"))
     }
@@ -222,6 +241,10 @@ struct ComposerSendButton: View {
 /// to send, so the field's end never moves under the caret.
 struct MessagesSendButton: View {
     var isArmed: Bool
+    /// A voice note's send takes Return through the bar's own focus: a shortcut here
+    /// fires from anywhere in the window, and sending a note is not undone by a look of
+    /// surprise.
+    var usesReturnKey = true
     var action: () -> Void
 
     @Environment(\.motion) private var motion
@@ -246,7 +269,7 @@ struct MessagesSendButton: View {
         .disabled(!isArmed)
         // See `ComposerSendButton`: inert while disabled, so the field keeps
         // the key while there is nothing to send.
-        .keyboardShortcut(.return, modifiers: [])
+        .keyboardShortcut(usesReturnKey ? KeyboardShortcut(.return, modifiers: []) : nil)
         .animation(motion.standard, value: isArmed)
         .help("Send")
         .accessibilityLabel(Text("Send"))

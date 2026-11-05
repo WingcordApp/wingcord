@@ -476,7 +476,7 @@ enum DemoFixtures {
                     // Without this the composer's `+` is correctly hidden and
                     // the demo shows a bar with a control missing — a fixture
                     // that misrepresents the app is worse than no fixture.
-                    .attachFiles, .embedLinks, .useApplicationCommands,
+                    .attachFiles, .embedLinks, .useApplicationCommands, .sendVoiceMessages,
                 ]
             )
         ]
@@ -596,7 +596,7 @@ enum DemoFixtures {
                 position: 0,
                 permissions: [
                     .viewChannel, .readMessageHistory, .sendMessages, .addReactions,
-                    .attachFiles, .embedLinks, .connect, .speak, .createInvite,
+                    .attachFiles, .embedLinks, .sendVoiceMessages, .connect, .speak, .createInvite,
                     .useApplicationCommands,
                 ]
             ),
@@ -786,6 +786,7 @@ enum DemoFixtures {
         populateInvokedCommands(model, person: userIDs[1])
         populateRoster(model, guildID: firstGuild, me: me)
         populateForumsAndInvites(model, guildID: firstGuild, me: me, people: userIDs)
+        DemoVoiceNotes.populate(model, guildID: firstGuild, me: me, people: userIDs)
         // **Nitro, as its own badges say** ("Nitro · Gold"), so every part of
         // the profile editor can be tried. `--demo-free` shows the account
         // without it — the locks, the notes, a server profile that is only a

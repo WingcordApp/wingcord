@@ -89,6 +89,9 @@ nonisolated enum TimelineRowPainter {
         /// The preview clip playing anywhere in the app, so the one card that
         /// started it draws a stop glyph and every other draws a play.
         var playingPreviewURL: URL?
+        /// Where the voice notes stand, on a row that has one: read at paint time, since
+        /// it moves every frame while one plays and no layout could hold it.
+        var voicePlayback: VoiceNotePlayback?
         /// The shared animation clock's current time.
         ///
         /// Passed in rather than read here: the painter is `nonisolated` so a
@@ -718,6 +721,8 @@ nonisolated enum TimelineRowPainter {
         }
 
         for (index, slot) in row.attachments.enumerated() {
+            // A note on its way out of the composer: the flight has its pixels.
+            if slot.kind == .voice, state.hidesBubble { continue }
             let frame = slot.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
             drawAttachment(
                 slot,
@@ -739,7 +744,9 @@ nonisolated enum TimelineRowPainter {
                 // it is on the button itself.
                 download: state.hoveredAttachment == index && slot.downloadRect != nil
                     ? state.hoveredComponent == slot.downloadRect?.origin
-                    : nil
+                    : nil,
+                voicePlayback: state.voicePlayback,
+                voiceHover: state.hoveredAttachment == index ? state.hoveredComponent : nil
             )
         }
 
@@ -1846,7 +1853,10 @@ nonisolated enum TimelineRowPainter {
         favorite: FavoriteBadge?,
         /// Whether a file card shows its Download — nil where it does not —
         /// and whether the pointer is on it.
-        download: Bool? = nil
+        download: Bool? = nil,
+        /// Where the voice notes stand, and which of a note's controls the pointer's on.
+        voicePlayback: VoiceNotePlayback? = nil,
+        voiceHover: CGPoint? = nil
     ) {
         // A spoiler stays covered until it is clicked, and the click that
         // uncovers it is not the click that opens it — a picture somebody hid
@@ -1870,7 +1880,15 @@ nonisolated enum TimelineRowPainter {
                 drawClipHeader(clip, in: frame, context: context, style: style, images: images, scale: scale)
             }
         case .voice:
-            drawVoiceNote(slot, in: frame, context: context, style: style)
+            drawVoiceNote(
+                slot,
+                in: frame,
+                context: context,
+                style: style,
+                playback: voicePlayback,
+                hover: voiceHover,
+                clock: clock
+            )
         case .textPreview:
             // The hosted card draws it.
             break
@@ -2281,86 +2299,214 @@ nonisolated enum TimelineRowPainter {
         )
     }
 
-    /// A voice note: a play glyph, a waveform and how long it runs.
+    /// A voice note: `(▶) bars 0:12 [1×]`.
     ///
-    /// The bars are derived from the file name rather than from Discord's
-    /// base64 waveform — decoding that per repaint is work inside a draw, and
-    /// the shape carries no information the reader acts on. What matters is that
-    /// the row reads as a voice message rather than as a failed picture.
+    /// **Real bars, from the waveform the message carried.** Played bars in the accent
+    /// and the rest in a strong ink, with nothing pale: the bars are the whole of what
+    /// this row says. A note that's playing repaints on the canvas's display link, and
+    /// only this row does.
+    ///
+    /// **A bar the playhead's just passed swells and settles**, worked out from how long
+    /// ago that was. Nothing holds per-bar state, so a seek can't set off a burst.
     private static func drawVoiceNote(
         _ slot: AttachmentSlot,
         in frame: CGRect,
         context: CGContext,
-        style: MessageTextStyle
+        style: MessageTextStyle,
+        playback: VoiceNotePlayback?,
+        hover: CGPoint?,
+        clock: TimeInterval
     ) {
-        context.addPath(CGPath(
-            roundedRect: frame,
-            cornerWidth: frame.height / 2,
-            cornerHeight: frame.height / 2,
-            transform: nil
-        ))
-        context.setFillColor(ThemeInk.current.cardFill)
+        guard let voice = slot.voice else { return }
+        let ink = ThemeInk.current
+        let shift = CGPoint(x: frame.minX - slot.rect.minX, y: frame.minY - slot.rect.minY)
+        func moved(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: shift.x, dy: shift.y) }
+        let radius = frame.height / 2
+
+        if !voice.isBare {
+            context.addPath(CGPath(roundedRect: frame, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            context.setFillColor(ink.cardFill)
+            context.fillPath()
+            context.addPath(CGPath(
+                roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
+                cornerWidth: radius - 0.5,
+                cornerHeight: radius - 0.5,
+                transform: nil
+            ))
+            context.setStrokeColor(ink.hoverFill)
+            context.setLineWidth(1)
+            context.strokePath()
+        }
+
+        let id = voice.attachmentID
+        let isCurrent = playback?.current == id
+        let isPlaying = isCurrent && playback?.isPlaying == true
+        let isLoading = isCurrent && playback?.isLoading == true
+        let hasFailed = playback?.failed.contains(id) == true
+        let position = playback?.position(of: id)
+
+        // The disc.
+        let disc = moved(voice.disc)
+        // On an accent bubble the accent can't be what's lit, so white takes its place,
+        // and what's left to play is a white that's been let down.
+        let themeAccent = NSColor(cgColor: ink.accent) ?? .controlAccentColor
+        let accent = voice.isOnAccent ? NSColor.white : themeAccent
+        let unplayed = voice.isOnAccent ? NSColor.white.withAlphaComponent(0.55) : style.primaryColor
+        let text = voice.isOnAccent ? NSColor.white : style.primaryColor
+        let glyphTint = voice.isOnAccent ? themeAccent : NSColor.white
+        let isDiscLit = hover == voice.disc.origin
+        context.setFillColor(
+            (hasFailed ? NSColor.systemRed : accent).withAlphaComponent(isDiscLit ? 0.85 : 1).cgColor
+        )
+        context.fillEllipse(in: disc)
+        if isLoading {
+            drawVoiceSpinner(in: disc, tint: glyphTint, clock: clock, context: context)
+        } else {
+            let symbol = hasFailed ? "arrow.clockwise" : isPlaying ? "pause.fill" : "play.fill"
+            let side: CGFloat = 14
+            // A play triangle's weight sits left of its box, so it looks centred a
+            // point to the right.
+            let nudge: CGFloat = symbol == "play.fill" ? 1 : 0
+            drawSymbol(
+                symbol,
+                tint: hasFailed ? .white : glyphTint,
+                in: CGRect(x: disc.midX - side / 2 + nudge, y: disc.midY - side / 2, width: side, height: side),
+                context: context
+            )
+        }
+
+        // The bars.
+        let bars = moved(voice.barsRect)
+        let count = voice.bars.count
+        let played = position.map { seconds -> Int in
+            guard voice.duration > 0 else { return 0 }
+            return Int((seconds / voice.duration * Double(count)).rounded())
+        } ?? 0
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            || LaunchOptions.current.forcesReducedMotion
+        let rate = Double(playback?.rate ?? 1)
+        func addBar(_ index: Int, height: CGFloat) {
+            let barRect = CGRect(
+                x: bars.minX + CGFloat(index) * VoiceWaveform.barStep,
+                y: bars.midY - height / 2,
+                width: VoiceWaveform.barWidth,
+                height: height
+            )
+            context.addPath(CGPath(
+                roundedRect: barRect,
+                cornerWidth: VoiceWaveform.barCorner,
+                cornerHeight: VoiceWaveform.barCorner,
+                transform: nil
+            ))
+        }
+        for index in voice.bars.indices where index >= played {
+            addBar(index, height: VoiceWaveform.barHeight(voice.bars[index]))
+        }
+        context.setFillColor(unplayed.cgColor)
         context.fillPath()
+        if played > 0 {
+            for index in 0..<min(played, count) {
+                var value = voice.bars[index]
+                if isPlaying, !reduceMotion, let position, count > 0 {
+                    let passedAt = Double(index + 1) / Double(count) * voice.duration
+                    value = VoiceWaveform.popped(value, age: (position - passedAt) / max(rate, 0.25))
+                }
+                addBar(index, height: VoiceWaveform.barHeight(value))
+            }
+            context.setFillColor(accent.cgColor)
+            context.fillPath()
+        }
 
-        let inset = TimelineMetrics.attachmentCardInset
-        let glyph = CGRect(x: frame.minX + inset, y: frame.midY - 9, width: 18, height: 18)
-        drawSymbol("play.fill", tint: style.linkColor, in: glyph, context: context)
-
-        let durationWidth = slot.durationLabel.isEmpty
-            ? 0
-            : TimelineLayoutEngine.measure(slot.durationLabel, font: style.metadataFont) + 8
-        let barsX = glyph.maxX + Spacing.base
-        let barsWidth = max(0, frame.maxX - inset - durationWidth - barsX)
-        drawWaveform(
-            in: CGRect(x: barsX, y: frame.midY - 8, width: barsWidth, height: 16),
-            seed: slot.filename,
-            color: style.linkColor.withAlphaComponent(0.55),
+        // How long is left, or all of it, for one nobody's touched.
+        let remaining = position.map { voice.duration - $0 } ?? voice.duration
+        let font = NSFont.monospacedDigitSystemFont(ofSize: style.metadataFont.pointSize, weight: .medium)
+        let time = moved(voice.timeRect)
+        _ = drawText(
+            VoiceWaveform.timeLabel(remaining),
+            font: font,
+            color: text,
+            at: CGPoint(x: time.minX, y: time.midY - font.pointSize / 2 - 2),
+            maxWidth: time.width,
             context: context
         )
-        guard !slot.durationLabel.isEmpty else { return }
+
+        // The speed pill.
+        let pill = moved(voice.pill)
+        let isPillLit = hover == voice.pill.origin
+        context.addPath(CGPath(
+            roundedRect: pill, cornerWidth: pill.height / 2, cornerHeight: pill.height / 2, transform: nil
+        ))
+        context.setFillColor(isPillLit ? ink.selectionFill : ink.hoverFill)
+        context.fillPath()
+        let label = voiceRateLabel(playback?.rate ?? 1)
+        let labelWidth = TimelineLayoutEngine.measure(label, font: font)
         _ = drawText(
-            slot.durationLabel,
-            font: style.metadataFont,
-            color: style.tertiaryColor,
-            at: CGPoint(
-                x: frame.maxX - inset - durationWidth + 8,
-                y: frame.midY - style.metadataFont.pointSize / 2 - 1
-            ),
-            maxWidth: durationWidth,
+            label,
+            font: font,
+            color: text,
+            at: CGPoint(x: pill.midX - labelWidth / 2, y: pill.midY - font.pointSize / 2 - 2),
+            maxWidth: pill.width,
             context: context
         )
     }
 
-    /// Bars across a box. Deterministic on the seed, so the same note draws the
-    /// same shape on every repaint rather than shimmering.
-    private static func drawWaveform(
-        in frame: CGRect,
-        seed: String,
-        color: NSColor,
-        context: CGContext
+    /// A note as a picture, for its flight out of the composer: the row's own pixels, so
+    /// the landing swaps a layer for exactly what it was showing.
+    static func voiceNoteImage(
+        _ slot: AttachmentSlot,
+        style: MessageTextStyle,
+        scale: CGFloat
+    ) -> CGImage? {
+        let width = Int((slot.rect.width * scale).rounded(.up))
+        let height = Int((slot.rect.height * scale).rounded(.up))
+        guard width > 0, height > 0,
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: scale, y: -scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        drawVoiceNote(
+            slot,
+            in: CGRect(origin: .zero, size: slot.rect.size),
+            context: context,
+            style: style,
+            playback: nil,
+            hover: nil,
+            clock: 0
+        )
+        NSGraphicsContext.restoreGraphicsState()
+        return context.makeImage()
+    }
+
+    /// What the pill says: Discord's numbers, with its leading zero gone.
+    static func voiceRateLabel(_ rate: Float) -> String {
+        rate == 0.75 ? ".75×" : rate == 1.5 ? "1.5×" : "\(Int(rate))×"
+    }
+
+    /// A note coming down: a quarter of a ring going round, in the disc where the play
+    /// glyph will be.
+    private static func drawVoiceSpinner(
+        in disc: CGRect, tint: NSColor, clock: TimeInterval, context: CGContext
     ) {
-        guard frame.width > 8 else { return }
-        let barWidth: CGFloat = 2
-        let gap: CGFloat = 2
-        let count = Int(frame.width / (barWidth + gap))
-        guard count > 0 else { return }
-        context.setFillColor(color.cgColor)
-        var hash = UInt64(truncatingIfNeeded: seed.hashValue) | 1
-        for index in 0..<count {
-            // A cheap xorshift rather than `Double.random`: this runs inside a
-            // display pass and must not touch the system generator.
-            hash ^= hash << 13
-            hash ^= hash >> 7
-            hash ^= hash << 17
-            let level = 0.25 + Double(hash % 1000) / 1000 * 0.75
-            let height = frame.height * level
-            context.fill(CGRect(
-                x: frame.minX + CGFloat(index) * (barWidth + gap),
-                y: frame.midY - height / 2,
-                width: barWidth,
-                height: height
-            ))
-        }
+        let angle = CGFloat(clock.truncatingRemainder(dividingBy: 1)) * 2 * .pi
+        context.saveGState()
+        context.setStrokeColor(tint.cgColor)
+        context.setLineWidth(2)
+        context.setLineCap(.round)
+        context.addArc(
+            center: CGPoint(x: disc.midX, y: disc.midY),
+            radius: 7,
+            startAngle: angle,
+            endAngle: angle + .pi * 1.4,
+            clockwise: false
+        )
+        context.strokePath()
+        context.restoreGState()
     }
 
     /// The glyph for a document, from its extension.

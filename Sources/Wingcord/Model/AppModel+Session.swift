@@ -1,5 +1,6 @@
 import Foundation
 import WingcordCore
+import WingcordNet
 
 // MARK: - Session plumbing
 //
@@ -150,6 +151,71 @@ extension AppModel {
         }
     }
 
+    /// Whether the mic is offered here. See `VoiceNoteEligibility`.
+    func canRecordVoiceNote(in channelID: ChannelID?) -> Bool {
+        guard let channelID, let channel = channelIndex[channelID] else { return false }
+        let box = messages(in: channelID)
+        return VoiceNoteEligibility(
+            isPrivate: channel.kind.isPrivate,
+            canSendVoiceMessages: permissionGate.canSendVoiceMessages(in: channelID),
+            isForumLike: channel.isForumLike,
+            isEditing: box?.editing != nil,
+            hasFiles: !(box?.attachments.isEmpty ?? true),
+            isFillingCommand: box?.command != nil,
+            isScheduling: box?.scheduledAt != nil
+        ).isOffered
+    }
+
+    /// The mic's press, or the menu's. Anything already typed waits in the draft.
+    func startVoiceNote(in channelID: ChannelID) {
+        guard canRecordVoiceNote(in: channelID) || voiceRecorder.flow.channelID == channelID else { return }
+        // The menu's own press finds the note it would interrupt the same way.
+        voiceRecorder.start(in: channelID)
+    }
+
+    /// A channel's composer went away: what's going stops, and what's held stays there.
+    func leftVoiceNoteChannel(_ channelID: ChannelID) {
+        if voiceRecorder.flow.channelID == channelID, voicePlayer.current == VoiceNotePlayer.heldNote {
+            voicePlayer.stop(VoiceNotePlayer.heldNote)
+        }
+        voiceRecorder.left(channelID)
+    }
+
+    /// The ✕, or Escape: whatever's been said is gone, and so's anything playing it.
+    func discardVoiceNote() {
+        voicePlayer.stop(VoiceNotePlayer.heldNote)
+        voiceRecorder.discard()
+    }
+
+    /// The held voice note, as a message of its own.
+    ///
+    /// **The words and the files aren't touched**, because they aren't part of it: a note
+    /// goes out as a message with no content, and what was typed before it is still
+    /// there. The reply goes with the note, as Discord's `eE` has it.
+    func sendVoiceNote(in channelID: ChannelID, launch: SendLaunch? = nil) {
+        guard voiceRecorder.flow.phase(in: channelID) == .review(channelID) else { return }
+        // Discord's composer refuses the same way: left where it is, to send when the
+        // wait's over.
+        guard !holdsForSlowmode(channelID), let held = voiceRecorder.takeForSending() else { return }
+        voicePlayer.stop(VoiceNotePlayer.heldNote)
+        var file = PendingAttachment(url: held.file.url)
+        file.voice = VoiceNoteUpload(durationSeconds: held.file.durationSeconds, waveform: held.waveform)
+        let box = messages(in: channelID)
+        let nonce = sessionController.send(
+            "",
+            in: channelID,
+            replyingTo: box?.replyingTo,
+            pingsRepliedAuthor: box?.replyPings ?? true,
+            attachments: [file],
+            isVoiceMessage: true
+        )
+        // The waveform lifts into its row, as words do. In Discord's columns nothing flies.
+        if let launch, let nonce, AppSettings.shared.usesMessageBubbles {
+            sendFlight = SendFlight(channelID: channelID, nonce: nonce, launch: launch)
+        }
+        mutateBox(channelID) { $0.replyingTo = nil }
+    }
+
     /// A GIF from the picker, sent as its URL, which every client unfurls back
     /// into an embed — Discord's `isGif` send.
     ///
@@ -173,11 +239,15 @@ extension AppModel {
     /// The reader's own message as the transcript draws it until Discord
     /// answers — Discord's `createMessage`, which carries the words, the reply
     /// and the stickers and nothing a server would have to add.
+    ///
+    /// - Parameter files: only a voice note's are drawn from here: an ordinary upload is
+    ///   a card of its own, and this is the one send whose file is the message.
     func echo(
         of request: OutgoingMessage.Request,
         id: MessageID,
         in channelID: ChannelID,
-        author: UserID
+        author: UserID,
+        files: [PendingAttachment] = []
     ) -> Message {
         let reference = request.replyingTo.map { replied in
             let quoted = message(replied, in: channelID)
@@ -186,7 +256,9 @@ extension AppModel {
                 channelID: channelID,
                 authorID: quoted?.authorID,
                 isAuthorBot: quoted.flatMap { users[$0.authorID]?.isBot } ?? false,
-                excerpt: MessageReference.excerpt(of: quoted?.content ?? ""),
+                excerpt: quoted.map(VoiceNoteWords.isVoiceNote) == true
+                    ? MessageReference.voiceMessageExcerpt
+                    : MessageReference.excerpt(of: quoted?.content ?? ""),
                 hasAttachment: !(quoted?.attachments.isEmpty ?? true)
                     || !(quoted?.stickers.isEmpty ?? true)
             )
@@ -197,7 +269,22 @@ extension AppModel {
             authorID: author,
             content: request.content,
             kind: reference == nil ? .default : .reply,
+            flags: request.isVoiceMessage ? .isVoiceMessage : [],
             payload: MessagePayload(
+                attachments: request.isVoiceMessage ? files.compactMap { file in
+                    file.voice.map { voice in
+                        Attachment(
+                            id: AttachmentID(rawValue: id.rawValue),
+                            filename: file.filename,
+                            url: file.url.absoluteString,
+                            proxyURL: file.url.absoluteString,
+                            contentType: "audio/ogg",
+                            size: file.size,
+                            waveform: voice.waveform,
+                            durationSeconds: voice.durationSeconds
+                        )
+                    }
+                } : [],
                 stickers: request.stickerIDs.compactMap(stickerRef),
                 poll: request.poll?.poll(postedAt: id.timestamp),
                 reference: reference,

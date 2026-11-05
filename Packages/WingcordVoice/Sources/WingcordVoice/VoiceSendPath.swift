@@ -121,7 +121,7 @@ struct TransmitGate {
 /// compiler cannot prove the locked state is disconnected when the closure
 /// returns, and refuses. This is the promise made explicit: the frame is read
 /// synchronously inside the lock and nothing keeps it.
-private struct CapturedFrame: @unchecked Sendable {
+struct CapturedFrame: @unchecked Sendable {
     let base: UnsafePointer<Int16>
 }
 

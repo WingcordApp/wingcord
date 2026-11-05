@@ -52,6 +52,10 @@ struct TimelineView: NSViewRepresentable {
     /// The clip playing anywhere in the app, so the chip that started it offers
     /// to stop it. Read by the container for the reason the accents are.
     var playingPreview: URL?
+    /// Moves when a voice note's state does, and whether one is moving. Read by the
+    /// container so a drawn canvas gets told.
+    var voiceRevision: UInt64 = 0
+    var isVoiceLive = false
     var jump: MessageJump?
     /// Whether the loaded window reaches the channel's newest message. False
     /// after a jump, or once scrolling up has trimmed the newest away — see
@@ -145,6 +149,8 @@ struct TimelineView: NSViewRepresentable {
             selectedSummary: selectedSummary,
             cardRevision: cardRevision,
             playingPreview: playingPreview,
+            voiceRevision: voiceRevision,
+            isVoiceLive: isVoiceLive,
             isCovered: isCovered,
             bookmarks: bookmarks,
             canSuperReact: canSuperReact,
@@ -176,6 +182,9 @@ struct TimelineView: NSViewRepresentable {
 @MainActor
 final class TimelineCoordinator: NSObject {
     private unowned let model: AppModel
+    /// The player, once this transcript has asked it to play something: what there is to
+    /// stop when the transcript goes away. See `stopVoiceNoteOnThisTranscript`.
+    private weak var voicePlayer: VoiceNotePlayer?
 
     private var scrollView: NSScrollView?
     private var documentView: TimelineDocumentView?
@@ -385,8 +394,30 @@ final class TimelineCoordinator: NSObject {
             self?.model.sessionController.toggleFavorite(gif)
         }
         canvas.onTogglePreview = { [weak self] url in
+            self?.model.voicePlayer.pause()
             self?.model.spotifyPreview.toggle(url)
         }
+        canvas.voicePlayback = { [weak self] in self?.model.voicePlayer.playback ?? VoiceNotePlayback() }
+        canvas.onToggleVoiceNote = { [weak self] voice in
+            guard let self else { return }
+            let player = self.model.voicePlayer
+            self.voicePlayer = player
+            player.toggle(voice.attachmentID, source: voice.source, duration: voice.duration)
+        }
+        canvas.onScrubVoiceNote = { [weak self] voice, fraction, stage in
+            guard let self else { return }
+            let player = self.model.voicePlayer
+            self.voicePlayer = player
+            switch stage {
+            // A press on the bars means "play from here".
+            case .began:
+                player.play(voice.attachmentID, source: voice.source, duration: voice.duration, from: fraction)
+            case .moved:
+                guard player.current == voice.attachmentID else { return }
+                player.seek(toFraction: fraction)
+            }
+        }
+        canvas.onCycleVoiceRate = { [weak self] in self?.model.voicePlayer.cycleRate() }
         canvas.onOpenMusicPlayer = { [weak self] card, rect in
             guard let self, let canvas = self.canvas else { return }
             self.model.openSpotifyPlayer(card, anchor: canvas.anchorInHostingRoot(rect))
@@ -755,9 +786,19 @@ final class TimelineCoordinator: NSObject {
     }
 
     /// Releases everything. Idempotent.
+    /// **Through a weak reference, not `model`**, because `tearDown` can run after the
+    /// store has gone (`model` is unowned, and a late read traps). Nothing's playing then.
+    private func stopVoiceNoteOnThisTranscript() {
+        guard let player = voicePlayer, let current = player.current,
+              canvas?.holdsVoiceNote(current) == true
+        else { return }
+        player.stop()
+    }
+
     func tearDown() {
         guard !isTornDown else { return }
         isTornDown = true
+        stopVoiceNoteOnThisTranscript()
         layoutTask?.cancel()
         layoutTask = nil
         prefetchTask?.cancel()
@@ -876,6 +917,8 @@ final class TimelineCoordinator: NSObject {
         selectedSummary: SelectedSummary?,
         cardRevision: UInt64,
         playingPreview: URL?,
+        voiceRevision: UInt64 = 0,
+        isVoiceLive: Bool = false,
         isCovered: Bool,
         bookmarks: Set<MessageID>,
         canSuperReact: Bool,
@@ -898,6 +941,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.apply(canAddReactions: canAddReactions)
         canvas?.apply(activityAccents: activityAccents)
         canvas?.apply(playingPreview: playingPreview)
+        canvas?.apply(voiceRevision: voiceRevision, isLive: isVoiceLive)
         canvas?.apply(activityInviteStatuses: activityInviteStatuses)
         canvas?.apply(uploadProgress: uploadProgress)
         if let scrollView,
@@ -1033,6 +1077,10 @@ final class TimelineCoordinator: NSObject {
             // that started it is about to stop existing, so the only way to stop
             // the sound would be to come back and find it.
             model.spotifyPreview.stop()
+            // Nor a voice note: it keeps playing as the reader scrolls and stops when they
+            // leave. Only one on this transcript, though: a thread panel moving on says
+            // nothing about what's playing beside it.
+            stopVoiceNoteOnThisTranscript()
             // And neither does a panel anchored to a row that is about to stop
             // existing — it would hang over the new channel pointing at nothing.
             model.closeSpotifyPlayer()

@@ -29,6 +29,8 @@ final class VoiceController {
     /// The call's media session. The share and the watch below are the same
     /// type, each its own session on the wire — see `MediaSession`.
     private var engine: MediaSession?
+    /// The call's session, to lend a voice message its microphone.
+    var currentSession: MediaSession? { engine }
     private var engineTask: Task<Void, Never>?
     /// The two halves of the credential, as they arrive.
     private var pendingSession: String?
@@ -729,6 +731,8 @@ final class VoiceController {
             )
         )
         self.engine = engine
+        // A second engine can't have the microphone, so a note going now stops here.
+        model.voiceRecorder.callChanged()
         // The call's side of clips, while clips are on — the plan says whose.
         engine.setClipTap(AppSettings.shared.clipsEnabled ? model.clipRecorder.callTap : nil)
         model.refreshClipCallPlan()
@@ -940,6 +944,8 @@ final class VoiceController {
         watchCredentials.removeAll()
         guard let engine else { return }
         self.engine = nil
+        // The note was borrowing this call's microphone.
+        model.voiceRecorder.callChanged()
         Task { await engine.stop() }
     }
 

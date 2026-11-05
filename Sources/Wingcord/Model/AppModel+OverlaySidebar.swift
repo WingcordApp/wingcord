@@ -288,6 +288,7 @@ extension AppModel {
             let line = MessageReference.excerpt(of: message.content)
             if !line.isEmpty { return line }
         }
+        if VoiceNoteWords.isVoiceNote(message) { return VoiceNoteWords.preview }
         if !message.attachments.isEmpty { return "Sent an attachment" }
         if !message.stickers.isEmpty { return "Sent a sticker" }
         if !message.embeds.isEmpty { return "Sent a link" }

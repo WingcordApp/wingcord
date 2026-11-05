@@ -302,6 +302,6 @@ struct AttachmentMosaicTests {
         #expect(laid.map(\.kind) == [.image, .voice])
         // The picture is alone in its mosaic, so it keeps its own shape.
         #expect(laid[0].cropsToFill == false)
-        #expect(laid[1].rect.height == TimelineMetrics.voiceNoteHeight)
+        #expect(laid[1].rect.height == TimelineMetrics.voiceNoteDisc + TimelineMetrics.voiceNoteInset * 2)
     }
 }

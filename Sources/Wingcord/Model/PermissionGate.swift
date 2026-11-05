@@ -249,6 +249,12 @@ final class PermissionGate {
         canSend(in: channelID) && permissions(in: channelID).contains(.attachFiles)
     }
 
+    /// Whether a voice message may be sent here: its own bit, in a server. A
+    /// conversation has no such switch, which `VoiceNoteEligibility` says.
+    func canSendVoiceMessages(in channelID: ChannelID) -> Bool {
+        canSend(in: channelID) && permissions(in: channelID).contains(.sendVoiceMessages)
+    }
+
     /// Whether a poll may be posted here — Discord's `I7` (module `969632`).
     ///
     /// **`SEND_POLLS` is its own bit**, the one a server clears to keep polls

@@ -1897,6 +1897,35 @@ final class AppModel {
     /// needs is `spotifyPreviewURL`, which the player writes back through its
     /// own callback. Observing an `AVPlayer` owner would invalidate readers on
     /// every internal change it makes.
+    /// The one voice message being recorded or held, and the one being played.
+    ///
+    /// **Observable themselves, and read narrowly.** Their own `revision` and `flow` are
+    /// what a view redraws for. What moves every frame isn't observed by anything.
+    @ObservationIgnored lazy var voiceRecorder: VoiceNoteRecorder = {
+        let recorder = VoiceNoteRecorder()
+        // The sound in the room would be in the note.
+        recorder.onWillRecord = { [weak self] in
+            self?.voicePlayer.pause()
+            self?.spotifyPreview.stop()
+        }
+        recorder.makeCapture = { [weak self] in
+            if let session = self?.sessionController.voice.currentSession {
+                return CallVoiceNoteCapture(session: session)
+            }
+            return LaunchOptions.current.usesSyntheticMicrophone
+                ? SyntheticVoiceNoteCapture()
+                : EngineVoiceNoteCapture()
+        }
+        if LaunchOptions.current.usesSyntheticMicrophone { recorder.requestAccess = { true } }
+        return recorder
+    }()
+
+    @ObservationIgnored lazy var voicePlayer: VoiceNotePlayer = {
+        let player = VoiceNotePlayer()
+        player.onWillPlay = { [weak self] in self?.spotifyPreview.stop() }
+        return player
+    }()
+
     @ObservationIgnored lazy var spotifyPreview: SpotifyPreviewPlayer = {
         let player = SpotifyPreviewPlayer()
         player.onChange = { [weak self] url in self?.spotifyPreviewURL = url }

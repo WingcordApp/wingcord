@@ -1434,6 +1434,8 @@ struct MessageDTO: Decodable, Sendable {
     /// reader loaded — and a header naming them "Unknown" over a grey circle is
     /// the whole feature failing on the case it exists for.
     struct QuotedDTO: Decodable, Sendable {
+        /// `IS_VOICE_MESSAGE` lives here, and a reply says so of what it answers.
+        var flags: UInt32?
         var author: UserDTO?
         var content: String?
         var attachments: [Anything]?
@@ -1550,7 +1552,11 @@ struct MessageDTO: Decodable, Sendable {
             // body is one line in the header, so its markdown is folded away
             // and its newlines with it — a header that wrapped would push the
             // message it belongs to down the page.
-            excerpt: MessageReference.excerpt(of: quoted?.content ?? ""),
+            // A voice message has no words to quote and says so, rather than asking for
+            // a click to see an attachment.
+            excerpt: MessageFlags(rawValue: quoted?.flags ?? 0).contains(.isVoiceMessage)
+                ? MessageReference.voiceMessageExcerpt
+                : MessageReference.excerpt(of: quoted?.content ?? ""),
             hasAttachment: !(quoted?.attachments?.isEmpty ?? true)
                 || !(quoted?.sticker_items?.isEmpty ?? true),
             isDeleted: referenced_message?.isDeleted == true

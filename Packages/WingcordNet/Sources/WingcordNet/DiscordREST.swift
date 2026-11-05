@@ -355,6 +355,8 @@ public actor DiscordREST {
     /// - Parameter sharedTheme: a custom theme to share — Discord's share
     ///   modal posts it as `shared_client_theme`, with or without words: the
     ///   fourth body that may be empty.
+    /// - Parameter flags: what the message is besides its words. A voice message is
+    ///   `IS_VOICE_MESSAGE` with empty content and one file, as Discord's `eE` sends it.
     public func sendMessage(
         in channelID: ChannelID,
         content: String,
@@ -367,7 +369,8 @@ public actor DiscordREST {
         listenAlong: (sessionID: String, partyID: String)? = nil,
         inventoryEntry: Data? = nil,
         sharedTheme: SharedClientTheme? = nil,
-        mediaMention: MediaMention? = nil
+        mediaMention: MediaMention? = nil,
+        flags: MessageFlags = []
     ) async throws -> Message {
         struct Body: Encodable {
             var content: String
@@ -410,7 +413,7 @@ public actor DiscordREST {
             nonce: nonce,
             message_reference: replyingTo.map(ReplyBody.init),
             allowed_mentions: replyingTo != nil && !pingsRepliedAuthor ? QuietReplyMentions() : nil,
-            flags: nil,
+            flags: flags.isEmpty ? nil : Int(flags.rawValue),
             sticker_ids: stickerIDs.isEmpty ? nil : stickerIDs.map(String.init),
             attachments: attachments.isEmpty ? nil : attachments.map(AttachmentBody.init),
             poll: poll.map(PollBody.init),

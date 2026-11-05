@@ -61,6 +61,10 @@ struct TimelineContainer: View {
             head: model.channelIndex[channelID].map(model.channelHead(for:)) ?? .channel,
             postActions: model.postActions(for: channelID),
             playingPreview: model.spotifyPreviewURL,
+            voiceRevision: model.voicePlayer.revision,
+            // The held note's in the composer, which keeps its own clock.
+            isVoiceLive: (model.voicePlayer.isPlaying || model.voicePlayer.isLoading)
+                && model.voicePlayer.current != VoiceNotePlayer.heldNote,
 
             // Read narrowly: a jump for a different channel is not this
             // transcript's business, and passing it would restart the

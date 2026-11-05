@@ -1012,6 +1012,9 @@ public struct MessageReference: Hashable, Sendable, Codable {
     /// runs with no font in hand. The painter truncates to the real width; this
     /// only stops a ten-kilobyte code block being carried around in every copy
     /// of the message that quotes it.
+    /// What a reply says of the voice message it answers.
+    public static let voiceMessageExcerpt = "Voice message"
+
     public static func excerpt(of content: String) -> String {
         guard !content.isEmpty else { return "" }
         let plain = MarkdownParser().parse(content).plainText

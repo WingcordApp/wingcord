@@ -590,6 +590,39 @@ nonisolated struct HiddenMediaSlot: Sendable {
     var noteRect: CGRect
 }
 
+/// What a voice note sits on.
+nonisolated enum VoiceNoteLook: Sendable {
+    case capsule, bubble, accentBubble
+}
+
+/// A voice note, laid out: `(▶) bars 0:12 [1×]`.
+///
+/// **The values are worked out once, here.** A note's waveform is base64 on the wire,
+/// and decoding it per repaint would be work inside a draw that runs sixty times a
+/// second while it plays. Rects are in the row's space, as every other slot's are.
+nonisolated struct VoiceNoteSlot: Sendable {
+    var attachmentID: AttachmentID
+    var source: URL?
+    var duration: Double
+    /// One value per bar, as drawn. See `VoiceWaveform.displayed`.
+    var bars: [Float]
+    var disc: CGRect
+    var barsRect: CGRect
+    var timeRect: CGRect
+    var pill: CGRect
+    /// **In a bubble, the bubble is its ground.** A capsule of its own in there is one
+    /// plate on another, for no reason a reader could name.
+    var isBare = false
+    /// On an accent bubble, where the accent can't say which bars have been played.
+    var isOnAccent = false
+
+    /// What a press on the bars means: how far through the note.
+    func fraction(atX x: CGFloat) -> Double {
+        guard barsRect.width > 0 else { return 0 }
+        return Double(max(0, min(1, (x - barsRect.minX) / barsRect.width)))
+    }
+}
+
 nonisolated struct AttachmentSlot: Sendable {
     var rect: CGRect
     var url: URL?
@@ -628,6 +661,8 @@ nonisolated struct AttachmentSlot: Sendable {
     var subtitleOrigin: CGPoint = .zero
     /// "0:14", under a clip's play badge. Empty when Discord sent no duration.
     var durationLabel: String = ""
+    /// A voice note's bars and controls. Nil on every other kind.
+    var voice: VoiceNoteSlot?
     /// Whether the picture is animated and should be drawn from a filmstrip
     /// rather than from a still. See `AnimatedImageStore`.
     var isAnimated: Bool = false
@@ -1938,6 +1973,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 origin: CGPoint(x: cardX, y: y),
                 availableWidth: cardWidth,
                 style: input.style,
+                voiceLook: !bubbled ? .capsule : ground == .accent ? .accentBubble : .bubble,
                 textPreviewHeight: { Self.textPreviewHeight($0, width: $1, input: input) }
             )
             for (index, slot) in content.attachments.enumerated() {
@@ -3887,6 +3923,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         origin: CGPoint,
         availableWidth: CGFloat,
         style: MessageTextStyle,
+        voiceLook: VoiceNoteLook = .capsule,
         textPreviewHeight: (Attachment, CGFloat) -> CGFloat? = { _, _ in nil }
     ) -> [AttachmentSlot] {
         guard !attachments.isEmpty else { return [] }
@@ -3950,7 +3987,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 attachments[index],
                 origin: CGPoint(x: origin.x, y: y),
                 availableWidth: availableWidth,
-                style: style
+                style: style,
+                voiceLook: voiceLook
             )
             slots[index] = slot
             y = slot.rect.maxY
@@ -3991,12 +4029,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         _ attachment: Attachment,
         origin: CGPoint,
         availableWidth: CGFloat,
-        style: MessageTextStyle
+        style: MessageTextStyle,
+        voiceLook: VoiceNoteLook
     ) -> AttachmentSlot {
         if attachment.waveform != nil || attachment.durationSeconds != nil,
            attachment.contentType?.hasPrefix("audio/") ?? false
         {
-            return voiceSlot(attachment, origin: origin, availableWidth: availableWidth)
+            return voiceSlot(attachment, origin: origin, availableWidth: availableWidth, look: voiceLook)
         }
         return fileSlot(attachment, origin: origin, availableWidth: availableWidth, style: style)
     }
@@ -4108,24 +4147,81 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         return CGSize(width: boxWidth.rounded(), height: boxHeight.rounded())
     }
 
-    /// A voice note: a waveform and how long it runs.
-    private static func voiceSlot(
+    /// A voice note: a disc, its bars, how long it runs, and how fast.
+    ///
+    /// **As wide as it is long**, as Discord's: half a second is a stub and anything
+    /// from 45 seconds on is the full width. A panel narrower than that takes bars away
+    /// rather than squeezing them, and `bars(_:count:)` averages what's left.
+    ///
+    /// - Parameter look: whether it's in a bubble, which brings its own padding.
+    static func voiceSlot(
         _ attachment: Attachment,
         origin: CGPoint,
-        availableWidth: CGFloat
+        availableWidth: CGFloat,
+        look: VoiceNoteLook = .capsule
     ) -> AttachmentSlot {
-        let width = min(availableWidth, TimelineMetrics.voiceNoteMaxWidth)
+        typealias Metric = TimelineMetrics
+        let duration = attachment.durationSeconds ?? 0
+        let isBare = look != .capsule
+        let inset = isBare ? Metric.voiceNoteBareInset : Metric.voiceNoteInset
+        let height = Metric.voiceNoteDisc + inset * 2
+        // The disc and the time and the pill are fixed, and the bars take what's left.
+        let fixed = inset + Metric.voiceNoteDisc + Metric.voiceNoteGap
+            + Metric.voiceNoteGap + Metric.voiceNoteTimeWidth
+            + Metric.voiceNoteGap / 2 + Metric.voiceNotePill.width + inset
+        let room = max(Metric.voiceNoteMinimumBars, availableWidth - fixed)
+        let count = VoiceWaveform.barCount(forWidth: min(VoiceWaveform.width(forDuration: duration), room))
+        let barsWidth = CGFloat(count) * VoiceWaveform.barStep - (VoiceWaveform.barStep - VoiceWaveform.barWidth)
+        let width = min(availableWidth, fixed + barsWidth)
+        let rect = CGRect(x: origin.x, y: origin.y, width: width, height: height)
+
+        let disc = CGRect(
+            x: rect.minX + inset,
+            y: rect.midY - Metric.voiceNoteDisc / 2,
+            width: Metric.voiceNoteDisc,
+            height: Metric.voiceNoteDisc
+        )
+        let barsRect = CGRect(
+            x: disc.maxX + Metric.voiceNoteGap,
+            y: rect.midY - VoiceWaveform.barMaximumHeight / 2,
+            width: barsWidth,
+            height: VoiceWaveform.barMaximumHeight
+        )
+        let timeRect = CGRect(
+            x: barsRect.maxX + Metric.voiceNoteGap,
+            y: rect.midY - 9,
+            width: Metric.voiceNoteTimeWidth,
+            height: 18
+        )
+        let pill = CGRect(
+            x: rect.maxX - inset - Metric.voiceNotePill.width,
+            y: rect.midY - Metric.voiceNotePill.height / 2,
+            width: Metric.voiceNotePill.width,
+            height: Metric.voiceNotePill.height
+        )
         return AttachmentSlot(
-            rect: CGRect(
-                x: origin.x, y: origin.y, width: width, height: TimelineMetrics.voiceNoteHeight
-            ),
+            rect: rect,
             url: nil,
             isSpoiler: attachment.isSpoiler,
             altText: attachment.description,
             decodeWidth: width,
             kind: .voice,
             filename: attachment.filename,
-            durationLabel: Self.durationLabel(attachment.durationSeconds)
+            durationLabel: Self.durationLabel(attachment.durationSeconds),
+            voice: VoiceNoteSlot(
+                attachmentID: attachment.id,
+                source: URL(string: attachment.url),
+                duration: duration,
+                bars: VoiceWaveform.displayed(
+                    VoiceWaveform.bars(VoiceWaveform.decode(attachment.waveform), count: count)
+                ),
+                disc: disc,
+                barsRect: barsRect,
+                timeRect: timeRect,
+                pill: pill,
+                isBare: isBare,
+                isOnAccent: look == .accentBubble
+            )
         )
     }
 
