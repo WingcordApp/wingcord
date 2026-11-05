@@ -268,6 +268,14 @@ public struct InviteCard: Hashable, Sendable {
     /// The event the link carried (`?event=`), as the invite answered with
     /// it — which, while it is not over, turns the card into the event's.
     public var event: ScheduledEvent?
+    /// `is_nickname_changeable` — whether the invite's sheet offers a Server
+    /// Nickname field (Discord's `504394`).
+    public var isNicknameChangeable: Bool
+    /// `roles` — what accepting grants: Discord's "Roles Granted". Also why a
+    /// member of the server still gets the sheet, if they lack one of them.
+    public var grantedRoles: [InviteGrantedRole]
+    /// `flags`' `IS_GUEST_INVITE`. A guest gets no Server Settings.
+    public var isGuestInvite: Bool
 
     public init(
         code: String,
@@ -290,8 +298,14 @@ public struct InviteCard: Hashable, Sendable {
         inviterUsername: String? = nil,
         inviterAvatarHash: String? = nil,
         expiresAt: Date? = nil,
-        event: ScheduledEvent? = nil
+        event: ScheduledEvent? = nil,
+        isNicknameChangeable: Bool = false,
+        grantedRoles: [InviteGrantedRole] = [],
+        isGuestInvite: Bool = false
     ) {
+        self.isNicknameChangeable = isNicknameChangeable
+        self.grantedRoles = grantedRoles
+        self.isGuestInvite = isGuestInvite
         self.code = code
         self.kind = kind
         self.guildID = guildID
@@ -313,6 +327,32 @@ public struct InviteCard: Hashable, Sendable {
         self.inviterAvatarHash = inviterAvatarHash
         self.expiresAt = expiresAt
         self.event = event
+    }
+
+    /// The invite's own picture, which Discord's modal draws on its right
+    /// (`getGuildSplashURL`). A server's banner is not used here: it's another
+    /// asset for another job.
+    public func splashURL(width: CGFloat) -> URL? {
+        guard let guildID, let splashHash else { return nil }
+        return URL(
+            string: "https://cdn.discordapp.com/splashes/\(guildID.rawValue)/\(splashHash).webp"
+                + "?size=\(CDN.rung(forSide: width))"
+        )
+    }
+
+    /// "Invite expires in 3 days" — Discord's `804070`, inside its last week and
+    /// never for one that has already gone.
+    public func expiryWords(now: Date) -> String? {
+        guard kind == .server, let expiresAt else { return nil }
+        let left = expiresAt.timeIntervalSince(now)
+        guard left > 0, left <= 7 * 86_400 else { return nil }
+        let minutes = Int(left / 60)
+        func words(_ count: Int, _ unit: String) -> String {
+            "Invite expires in \(count) \(unit)\(count == 1 ? "" : "s")"
+        }
+        if minutes >= 1_440 { return words(minutes / 1_440, "day") }
+        if minutes >= 60 { return words(minutes / 60, "hour") }
+        return words(max(1, minutes), "minute")
     }
 
     /// The server's mark — see `GuildMark`. Nil for a group or a friend link.
@@ -356,6 +396,19 @@ public struct InviteCard: Hashable, Sendable {
     }
 }
 
+/// A role an invite grants, as far as Discord's "Roles Granted" draws one.
+public struct InviteGrantedRole: Hashable, Sendable, Identifiable {
+    public var id: RoleID
+    public var name: String
+    public var colorValue: UInt32?
+
+    public init(id: RoleID, name: String, colorValue: UInt32? = nil) {
+        self.id = id
+        self.name = name
+        self.colorValue = colorValue
+    }
+}
+
 /// What asking about an invite came back with.
 public enum InviteLookup: Hashable, Sendable {
     case resolved(InviteCard)
@@ -382,6 +435,21 @@ extension InviteCard {
             if seen.insert(key).inserted { codes.append(key) }
         }
         return codes
+    }
+
+    /// The key of a link that is nothing but an invite, or nil for any other
+    /// link — so a clicked link goes to the invite sheet, or to the browser.
+    ///
+    /// **The whole link has to be one.** `codes(in:)` finds invites anywhere in
+    /// a message; here a page that merely mentions discord.gg in its path or
+    /// query is not an invite somebody clicked.
+    public static func key(ofLink link: String) -> String? {
+        var text = link.trimmingCharacters(in: .whitespacesAndNewlines)[...]
+        if let fragment = text.firstIndex(of: "#") { text = text[..<fragment] }
+        while text.hasSuffix("/") { text = text.dropLast() }
+        guard let match = String(text).wholeMatch(of: linkPattern) else { return nil }
+        let code = String(match.1)
+        return match.2.flatMap(eventID(inQuery:)).map { "\(code)?event=\($0)" } ?? code
     }
 
     /// The invite code a key names, without the event on it.

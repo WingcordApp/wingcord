@@ -159,11 +159,23 @@ public struct ForumQuery: Hashable, Sendable {
 
     /// The query a forum channel's own defaults imply, before the reader touches
     /// anything.
+    ///
+    /// **A media channel is always a gallery**, whatever it says: Discord's
+    /// `getDefaultLayout`, which is why its menu has no View as.
     public init(defaultsOf channel: Channel) {
         self.init(
             sortOrder: channel.defaultSortOrder ?? .recentActivity,
-            layout: channel.defaultForumLayout ?? .list
+            layout: channel.kind == .media ? .gallery : channel.defaultForumLayout ?? .list,
+            tagMatching: channel.defaultTagMatching ?? .some
         )
+    }
+
+    /// Discord's "Reset to default": the forum's own sort, layout and matching, and
+    /// the tags the reader has lit stay lit (`sE`).
+    public func resettingToDefaults(_ defaults: ForumQuery) -> ForumQuery {
+        var next = defaults
+        next.tags = tags
+        return next
     }
 
     /// Whether two queries ask the server the same question.

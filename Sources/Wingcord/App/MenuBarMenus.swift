@@ -141,6 +141,61 @@ struct ChannelInviteMenu: View {
     }
 }
 
+/// Channel › what a forum's toolbar row holds, because every control in it is also
+/// a command (INVARIANTS: "The chrome is ours"). The same questions the row's Sort &
+/// View asks, with the menu bar's checkmarks.
+struct ChannelForumMenu: View {
+    var model: AppModel
+
+    var body: some View {
+        if let forum = model.menuContext.forum, let channelID = model.menuContext.channelID {
+            Menu(forum.isMedia ? "Sort" : "Sort & View") {
+                Picker("Sort by", selection: choice(forum, channelID, \.sortOrder)) {
+                    ForEach(ForumSortOrder.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.inline)
+                // A media channel is always a gallery.
+                if !forum.isMedia {
+                    Picker("View as", selection: choice(forum, channelID, \.layout)) {
+                        ForEach(ForumLayout.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                }
+                if forum.hasTags {
+                    Picker("Tag Matching", selection: choice(forum, channelID, \.tagMatching)) {
+                        ForEach(TagMatching.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                }
+                Divider()
+                Button("Reset to default") {
+                    model.setForumQuery(forum.query.resettingToDefaults(forum.defaults), in: channelID)
+                }
+            }
+            if forum.hasGuidelines {
+                Button(model.areForumGuidelinesShown ? "Hide Guidelines" : "Show Guidelines") {
+                    model.areForumGuidelinesShown.toggle()
+                }
+            }
+        }
+    }
+
+    private func choice<Value: Hashable>(
+        _ forum: MenuContext.ForumMenu,
+        _ channelID: ChannelID,
+        _ path: WritableKeyPath<ForumQuery, Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { forum.query[keyPath: path] },
+            set: { value in
+                var next = forum.query
+                next[keyPath: path] = value
+                model.setForumQuery(next, in: channelID)
+            }
+        )
+    }
+}
+
 /// Channel › Developer — the ids and links Discord's developer mode copies.
 struct ChannelDeveloperMenu: View {
     var model: AppModel

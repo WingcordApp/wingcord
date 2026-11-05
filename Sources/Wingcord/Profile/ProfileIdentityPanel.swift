@@ -53,6 +53,8 @@ struct ProfileIdentityPanel: View {
     /// The card a frame and an effect are authored for. 452 ÷ 1,280 of the
     /// design's sheet, which is the same third of ours.
     static let width: CGFloat = 360
+    /// The Private Profile pill here: the card's 30, a little bigger.
+    private static let privatePillHeight: CGFloat = 34
     /// The banner strip: 264 in the handoff, full-bleed, and a plate in the
     /// person's own colour where there is no artwork — which is most accounts.
     private static let bannerHeight: CGFloat = 210
@@ -72,8 +74,6 @@ struct ProfileIdentityPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                // Above the banner, which is where Discord puts it.
-                if profile.isProfilePrivate { PrivateProfileBanner() }
                 banner
                 identity
                 // Discord's notice under the header, with its Retry.
@@ -144,6 +144,14 @@ struct ProfileIdentityPanel: View {
             }
         }
         .onHover { isHovered = $0 }
+        // A little bigger than the card's: this is the larger surface.
+        .overlay(alignment: .topLeading) {
+            if profile.isProfilePrivate {
+                PrivateProfilePill(height: Self.privatePillHeight)
+                    .environment(\.colorScheme, ground.wantsDarkInk ? .light : .dark)
+                    .padding(Spacing.base)
+            }
+        }
         .clipped()
     }
 

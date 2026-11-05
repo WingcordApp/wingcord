@@ -27,7 +27,10 @@ extension AppModel {
     var headerTitle: HeaderTitle {
         let chrome = channelChrome
         guard !chrome.name.isEmpty else { return .none }
-        let subtitle = chrome.titleSubtitle
+        // A forum's topic is its guidelines, whole paragraphs of them, and they have
+        // a control of their own on this row.
+        let isBoard = chrome.channelID.flatMap { channelIndex[$0] }?.isForumLike == true
+        let subtitle = isBoard ? "" : chrome.titleSubtitle
         guard let channelID = chrome.channelID, let channel = channelIndex[channelID],
               channel.kind.isPrivate
         else {

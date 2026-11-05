@@ -265,8 +265,10 @@ nonisolated enum AppShortcut: String, CaseIterable, Identifiable, Sendable {
         case .showThreads: model.menuContext.showsThreads
         case .voiceChat: model.menuContext.showsVoiceChat
         case .uploadFile, .replyToLastMessage, .forwardLastMessage, .viewEmojis, .viewGIFs, .viewStickers,
-             .jumpToOldestUnread, .createThread:
+             .jumpToOldestUnread:
             model.menuContext.isConversation
+        case .createThread:
+            model.menuContext.isConversation || model.menuContext.forum?.canPost == true
         case .startCall:
             model.menuContext.canStartCall && model.connectedVoiceChannelID != model.menuContext.channelID
         case .answerCall: model.incomingCallChannelID != nil
@@ -323,7 +325,13 @@ nonisolated enum AppShortcut: String, CaseIterable, Identifiable, Sendable {
             // Discord's: from inside a thread, a new one in its parent.
             guard let channelID = model.selectedChannelID, let channel = model.channelIndex[channelID] else { return }
             let parentID = channel.kind.isThread ? channel.parentID ?? channelID : channelID
-            model.startThread(in: parentID, location: "Keyboard Shortcut")
+            // A forum's thread is a post, and its card lives on the board.
+            if model.channelIndex[parentID]?.isForumLike == true {
+                if parentID != channelID { model.selectChannel(parentID) }
+                model.beginForumPost(in: parentID)
+            } else {
+                model.startThread(in: parentID, location: "Keyboard Shortcut")
+            }
         case .toggleCategories: model.toggleAllCategories()
         case .replyToLastMessage: model.replyToLatestMessage()
         case .forwardLastMessage: model.forwardLatestMessage()

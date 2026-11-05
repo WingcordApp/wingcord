@@ -294,36 +294,47 @@ extension DiscordREST {
     /// Opens a post in a forum.
     ///
     /// **A forum post is a thread whose first message is sent with it**, in one
-    /// call — there is no "create then send". `POST /channels/{forum}/threads`
-    /// with a nested `message` is the shape, and the reply is the thread channel
-    /// with that message already in it.
+    /// call — there is no "create then send". Discord's `659617`:
+    /// `POST /channels/{forum}/threads?use_nested_fields=true` with the message
+    /// nested, its files uploaded against the forum first, and the reply is the
+    /// thread channel with that message already in it.
     ///
-    /// Not in either capture: no post was created while recording. The route is
-    /// the documented one and the reply decodes as an ordinary channel, which is
-    /// the part that matters here.
+    /// Not in any capture: no post was created while recording. The body is read
+    /// off Discord's own request builder.
     public func createForumPost(
         in channelID: ChannelID,
         name: String,
         content: String,
         tags: [ForumTagID],
         autoArchiveMinutes: Int,
-        nonce: String
+        stickerIDs: [UInt64] = [],
+        attachments: [UploadedAttachment] = []
     ) async throws -> Channel {
-        struct MessageBody: Encodable { var content: String; var nonce: String }
+        struct MessageBody: Encodable {
+            var content: String
+            var sticker_ids: [String]?
+            var attachments: [AttachmentBody]?
+        }
         struct Body: Encodable {
             var name: String
             var auto_archive_duration: Int
             var applied_tags: [String]
             var message: MessageBody
         }
-        let dto = try await post(
-            "/channels/\(channelID.rawValue)/threads",
+        let dto = try await request(
+            method: "POST",
+            path: "/channels/\(channelID.rawValue)/threads",
             route: "channels/{id}/threads",
+            query: [URLQueryItem(name: "use_nested_fields", value: "true")],
             body: Body(
                 name: name,
                 auto_archive_duration: autoArchiveMinutes,
                 applied_tags: tags.map { String($0.rawValue) },
-                message: MessageBody(content: content, nonce: nonce)
+                message: MessageBody(
+                    content: content,
+                    sticker_ids: stickerIDs.isEmpty ? nil : stickerIDs.map(String.init),
+                    attachments: attachments.isEmpty ? nil : attachments.map(AttachmentBody.init)
+                )
             ),
             as: ChannelDTO.self
         )

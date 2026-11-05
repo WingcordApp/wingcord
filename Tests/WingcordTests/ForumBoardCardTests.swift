@@ -82,7 +82,7 @@ struct ForumBoardCardTests {
 
         let card = model.forumPresentation(for: forumID).posts.first
         #expect(card.map { String($0.preview.characters) } == "Post contains a blocked message")
-        #expect(card?.thumbnailURL == nil)
+        #expect(card?.media.isEmpty == true)
     }
 
     @Test("An ignored author is named before Discord's line")

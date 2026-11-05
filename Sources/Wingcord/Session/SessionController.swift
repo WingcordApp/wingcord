@@ -252,6 +252,8 @@ final class SessionController {
     var searchTask: Task<Void, Never>?
     /// The invite resolve behind the Add a Server field, replaced per keystroke.
     var inviteLookupTask: Task<Void, Never>?
+    /// A clicked invite link being looked up, for its sheet.
+    var inviteSheetTask: Task<Void, Never>?
     /// Discovery's grid, replaced whenever the tab, the category or the field
     /// moves. Its page-two fetch is a *second* task: a scroll to the bottom must
     /// not cancel the request that is filling the grid it is scrolling.
@@ -661,6 +663,10 @@ final class SessionController {
             // absent from the store. Clearing first means the rail never draws a
             // frame with a server in it that nothing can open.
             dropPreviewForNewSession()
+            // Discord's store starts over at `CONNECTION_OPEN`: the marks these
+            // were counted from may have moved while the socket was down.
+            model.forumPostUnreadCounts = [:]
+            model.forumUnreadsRequested = []
             applyReady(snapshot)
         case .readySupplemental(let snapshot):
             applyReadySupplemental(snapshot)
@@ -1035,6 +1041,7 @@ final class SessionController {
             model.channelIndex.patchLastMessage(message.id, in: message.channelID)
             model.messageContentRevision &+= 1
             bumpUnread(for: message)
+            model.countForumPostMessage(message)
             // **After the unread, and it is not the same question.** The unread
             // is bumped for a channel that is merely not selected; a banner is
             // posted only for one the reader is not *looking at*, which needs
@@ -1067,6 +1074,7 @@ final class SessionController {
                 box.messages[index] = merged
             }
             model.messageContentRevision &+= 1
+            model.applyOpenerUpdated(message)
 
         case .messageDeleted(let messageID, let channelID):
             model.mutateBox(channelID) { $0.remove(messageID) }
@@ -1270,8 +1278,11 @@ final class SessionController {
             model.railRevision &+= 1
             model.roleRevision &+= 1
 
-        case .threadUpserted(let thread, _, let membership):
-            model.applyThreadUpsert(thread, membership: membership)
+        case .forumUnreads(_, let counts):
+            model.applyForumUnreads(counts)
+
+        case .threadUpserted(let thread, let isNew, let membership):
+            model.applyThreadUpsert(thread, membership: membership, isNewlyCreated: isNew)
             // A thread carries its own limit, and a moderator can change it.
             model.reconcileSlowmode(in: thread.id)
 
@@ -1357,6 +1368,7 @@ final class SessionController {
             }
             model.readStates[channelID, default: ReadState()].lastAcknowledgedID = messageID
             model.readStates[channelID, default: ReadState()].mentionCount = mentionCount
+            model.noteForumPostRead(channelID)
             model.sidebarRevision &+= 1
             model.railRevision &+= 1
 
@@ -1809,6 +1821,11 @@ final class SessionController {
         let box = model.messages(in: channelID)
         guard box?.messages.isEmpty ?? true, box?.isLoadingHistory != true else {
             Self.trace("open \(channelID) already loaded")
+            subscribeMemberListPages(nil, for: channelID)
+            return
+        }
+        if let held = model.demoTranscript(for: channelID) {
+            model.setMessages(held, in: channelID)
             subscribeMemberListPages(nil, for: channelID)
             return
         }
@@ -2522,6 +2539,7 @@ final class SessionController {
         state.lastAcknowledgedID = messageID
         state.mentionCount = 0
         model.readStates[channelID] = state
+        model.noteForumPostRead(channelID)
         model.sidebarRevision &+= 1
         model.railRevision &+= 1
         Task { try? await rest.acknowledge(messageID, in: channelID) }
@@ -2809,7 +2827,7 @@ final class SessionController {
     /// one connection's bandwidth five ways while holding five buffers. The bar
     /// is one for the whole send, as Discord's is, weighted by size so a large
     /// file is most of it.
-    private func upload(
+    func upload(
         _ chosen: [PendingAttachment],
         in channelID: ChannelID,
         progress: @escaping @MainActor (Double) -> Void
@@ -2854,7 +2872,8 @@ final class SessionController {
                 uploadedFilename: slot.uploadedFilename,
                 altText: file.altText,
                 originalContentType: originalTypes[index],
-                clip: file.clip
+                clip: file.clip,
+                isThumbnail: file.isThumbnail
             ))
         }
         return uploaded

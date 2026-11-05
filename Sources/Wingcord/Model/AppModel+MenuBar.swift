@@ -39,6 +39,18 @@ nonisolated struct MenuContext: Equatable, Sendable {
     /// Whether the session is up — the menus' stand-in for `canNavigate`,
     /// which reads the rail.
     var isReady = false
+    /// What a forum's toolbar row is showing, taken here because the row's controls
+    /// are also commands. Nil anywhere else.
+    var forum: ForumMenu?
+
+    nonisolated struct ForumMenu: Equatable, Sendable {
+        var query: ForumQuery
+        var defaults: ForumQuery
+        var isMedia: Bool
+        var hasTags: Bool
+        var hasGuidelines: Bool
+        var canPost: Bool
+    }
 
     var isConversation: Bool { kind?.isConversation == true }
     var isPrivate: Bool { kind?.isPrivate == true }
@@ -72,6 +84,16 @@ extension AppModel {
         next.inviteGuilds = next.recipientID.map { invitableGuilds(for: $0) } ?? []
         (next.recentChannels, next.draftChannels) = recentsForMenu()
         next.isReady = connectionState == .ready
+        if let channel, channel.isForumLike {
+            next.forum = MenuContext.ForumMenu(
+                query: forumBoard(for: channel.id).query,
+                defaults: ForumQuery(defaultsOf: channel),
+                isMedia: channel.kind == .media,
+                hasTags: !channel.availableTags.isEmpty,
+                hasGuidelines: channel.topic?.isEmpty == false,
+                canPost: permissionGate.canSend(in: channel.id)
+            )
+        }
         if next != menuContext { menuContext = next }
     }
 

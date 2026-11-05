@@ -24,6 +24,7 @@ struct JoinServerPresenter: ViewModifier {
         // the presented view is not a dependency this view is invalidated by —
         // the card would never appear.
         let sheet = model.joinServerSheet
+        let _ = model.inviteSheet
 
         return content
             .modal(isPresented: sheetBinding) {
@@ -43,6 +44,21 @@ struct JoinServerPresenter: ViewModifier {
                     )
                 }
             }
+            // An invite link, clicked. A panel: a click beside it is No Thanks.
+            .modal(item: inviteBinding, style: .panel) { invite in
+                InviteAcceptSheet(
+                    state: invite,
+                    presentation: model.inviteSheetPresentation(invite),
+                    setNickname: { model.inviteSheet?.nickname = $0 },
+                    setAllowsDirectMessages: { model.inviteSheet?.allowsDirectMessages = $0 },
+                    setShowsActivity: { model.inviteSheet?.showsActivity = $0 },
+                    accept: { model.sessionController.acceptInviteSheet() },
+                    openNitro: {
+                        if let url = URL(string: "https://discord.com/nitro") { model.openExternal(url) }
+                    },
+                    dismiss: { model.closeInviteSheet() }
+                )
+            }
             // The root's own host. It presents every challenge raised while no
             // sheet is up; the Join sheet registers its own on top, because a
             // view a sheet covers cannot present anything.
@@ -57,6 +73,15 @@ struct JoinServerPresenter: ViewModifier {
                     CaptchaBridge { solver }
                 )
             }
+    }
+
+    /// **Nothing closes it while the accept is out.** A panel closes on a click
+    /// beside it, and this one's answer would land on nothing.
+    private var inviteBinding: Binding<InviteSheetState?> {
+        Binding(
+            get: { model.inviteSheet },
+            set: { if $0 == nil, model.inviteSheet?.isAccepting != true { model.closeInviteSheet() } }
+        )
     }
 
     /// **The setter may only clear the store when the store is still showing

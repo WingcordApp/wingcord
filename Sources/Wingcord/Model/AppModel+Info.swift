@@ -488,6 +488,8 @@ extension AppModel {
         }
         // An event in a server the reader is in opens its page here.
         if let link = EventLink.parse(string), openEventLink(link) { return }
+        // An invite is a sheet here, never the browser.
+        if openInviteLink(string) { return }
         guard InlineScannerSchemeCheck.isSafe(string), let url = URL(string: string) else {
             return
         }

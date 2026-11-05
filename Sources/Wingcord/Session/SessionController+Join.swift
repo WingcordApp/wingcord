@@ -132,6 +132,105 @@ extension SessionController {
         }
     }
 
+    // MARK: The invite sheet
+
+    /// Asks what a clicked link is, and hands the answer to the store.
+    ///
+    /// **A card on a spinner only if the answer needs one.** Most answer before
+    /// anybody would notice, and a sheet that opened only to close again, for a
+    /// server the reader is already in, is worse than a moment's wait.
+    func lookUpInviteForSheet(_ key: String) {
+        inviteSheetTask?.cancel()
+        inviteSheetTask = Task { [weak self] in
+            guard let self else { return }
+            let spinner = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled, let self else { return }
+                model.inviteSheet = InviteSheetState(key: key)
+            }
+            defer { spinner.cancel() }
+            do {
+                let lookup = try await rest.inviteCard(key)
+                spinner.cancel()
+                guard !Task.isCancelled else { return }
+                model.inviteLookups[key] = lookup
+                model.route(lookup, key: key)
+            } catch {
+                spinner.cancel()
+                guard !Task.isCancelled else { return }
+                Self.trace("invite sheet \(key) failed: \(Self.describe(error))")
+                model.inviteSheet = nil
+                model.reportActionFailure(Self.inviteFailure(error))
+            }
+        }
+    }
+
+    /// The slide landed: Discord's `972387`, with its location.
+    ///
+    /// **The sheet stays up until the answer**, with the knob at the end on a
+    /// spinner; a refusal sends the knob home and says why in the sheet.
+    func acceptInviteSheet() {
+        guard let sheet = model.inviteSheet, let card = sheet.card, !sheet.isAccepting else { return }
+        model.inviteSheet?.isAccepting = true
+        model.inviteSheet?.failure = nil
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if model.inviteSheet?.key == sheet.key { model.inviteSheet?.isAccepting = false }
+            }
+            if LaunchOptions.current.usesDemoFixtures {
+                await DemoFixtures.acceptInvite(card, model: model)
+                return
+            }
+            guard let sessionID = await socket?.currentSessionID else {
+                model.inviteSheet?.failure = "Not connected. Try again in a moment."
+                return
+            }
+            do {
+                switch card.kind {
+                case .server:
+                    let acceptance = try await rest.acceptInvite(
+                        card.code, sessionID: sessionID, source: "Desktop Invite Modal"
+                    )
+                    // What the switches said as the answer came, not as it left.
+                    let chosen = model.inviteSheet ?? sheet
+                    model.inviteSheet = nil
+                    model.applyInviteSettings(chosen, in: acceptance.guildID)
+                    let nickname = chosen.nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !nickname.isEmpty, card.isNicknameChangeable {
+                        writeInviteNickname(nickname, in: acceptance.guildID)
+                    }
+                    await land(acceptance, code: card.code)
+                case .groupDirectMessage, .friend:
+                    let channelID = try await rest.acceptInviteWithoutGuild(
+                        card.code, sessionID: sessionID, location: "Desktop Invite Modal"
+                    )
+                    model.inviteSheet = nil
+                    guard let channelID else { return }
+                    for _ in 0..<10 where model.channelIndex[channelID] == nil {
+                        try? await Task.sleep(for: .milliseconds(120))
+                    }
+                    if model.channelIndex[channelID] != nil { model.openDirectMessage(channelID) }
+                }
+            } catch {
+                Self.trace("invite sheet accept \(card.code) failed: \(Self.describe(error))")
+                model.inviteSheet?.failure = Self.joinFailure(error)
+            }
+        }
+    }
+
+    /// The nickname typed in the sheet. A refusal costs only the nickname.
+    private func writeInviteNickname(_ nickname: String, in guildID: GuildID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await rest.setNickname(nickname, in: guildID)
+            } catch {
+                Self.trace("invite nickname failed: \(Self.describe(error))")
+            }
+        }
+    }
+
     /// Takes the reader into a server an accept has just joined.
     private func land(_ acceptance: InviteAcceptance, code: String) async {
         // **An application joins nobody yet.** The accept opened a join request

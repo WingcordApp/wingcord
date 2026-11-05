@@ -16,18 +16,27 @@ import SwiftUI
 // grey stroke.
 
 /// One icon control in a header, standing alone on its own glass circle.
+///
+/// **Outline at rest, filled while what it opens is open** — here and in
+/// `HeaderGroupButton`, so no caller keeps a pair of names. The HIG's toolbar takes
+/// outline; the fill is the state.
 struct HeaderCircleButton: View {
     var systemImage: String
     var label: String
     var isActive = false
-    /// Its diameter. The header's own by default; on a row with a segmented strip,
-    /// the strip's, since controls side by side share one height.
-    var side: CGFloat = ShellMetrics.headerControl
+    /// Its diameter. The row's own by default (`headerControlSide`); a row with a
+    /// segmented strip takes the strip's, since controls side by side share one height.
+    var side: CGFloat?
     var action: () -> Void
 
+    @Environment(\.headerControlSide) private var rowSide
+
     var body: some View {
+        let side = side ?? rowSide
         Button(action: action) {
             Image(systemName: systemImage)
+                .symbolVariant(isActive ? .fill : .none)
+                .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: ShellMetrics.headerGlyph, weight: .medium))
                 .foregroundStyle(InkColor.solid)
                 .frame(width: side, height: side)
@@ -48,12 +57,14 @@ struct HeaderCircleButton: View {
 struct HeaderControlGroup<Content: View>: View {
     @ViewBuilder var content: Content
 
+    @Environment(\.headerControlSide) private var rowSide
+
     var body: some View {
         HStack(spacing: 0) {
             content
         }
         .padding(.horizontal, 3)
-        .frame(height: ShellMetrics.headerControl)
+        .frame(height: rowSide)
         .glassEffect(.regular, in: .capsule)
     }
 }
@@ -68,14 +79,17 @@ struct HeaderGroupButton: View {
     var action: () -> Void
 
     @Environment(\.motion) private var motion
+    @Environment(\.headerControlSide) private var rowSide
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
+                .symbolVariant(isActive ? .fill : .none)
+                .contentTransition(.symbolEffect(.replace))
                 .font(.system(size: ShellMetrics.headerGlyph, weight: .medium))
                 .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(InkColor.solid))
-                .frame(width: ShellMetrics.headerControl - 4, height: ShellMetrics.headerControl - 6)
+                .frame(width: rowSide - 4, height: rowSide - 6)
                 .background {
                     Capsule().fill(fill)
                 }
@@ -107,6 +121,8 @@ struct HeaderCreateMenu<Items: View>: View {
     var label: String
     @ViewBuilder var items: Items
 
+    @Environment(\.headerControlSide) private var rowSide
+
     var body: some View {
         Menu {
             items
@@ -130,12 +146,18 @@ struct HeaderCreateMenu<Items: View>: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .frame(width: 56, height: ShellMetrics.headerControl)
+        .frame(width: 56, height: rowSide)
         .contentShape(.capsule)
         .glassEffect(.regular.interactive(), in: .capsule)
         .help(label)
         .accessibilityLabel(Text(label))
     }
+}
+
+extension EnvironmentValues {
+    /// How tall this toolbar row's controls are. The header's own, or on a row with
+    /// a segmented strip in it the strip's: controls side by side share one height.
+    @Entry var headerControlSide: CGFloat = ShellMetrics.headerControl
 }
 
 nonisolated enum HeaderControlFill {

@@ -635,6 +635,16 @@ public actor GatewaySocket {
     /// picker opens: `requestSoundboardSounds(e){this.send(31,{guild_ids:e})}`,
     /// the ids as strings. Answered by one `SOUNDBOARD_SOUNDS` dispatch per
     /// server.
+    public func requestForumUnreads(
+        guildID: GuildID,
+        channelID: ChannelID,
+        threads: [(threadID: ChannelID, ackMessageID: MessageID)]
+    ) {
+        guard !threads.isEmpty else { return }
+        Self.trace("request forum unreads for \(threads.count) posts in \(channelID)")
+        send(ForumUnreadsRequest(guildID: guildID, channelID: channelID, threads: threads))
+    }
+
     public func requestSoundboardSounds(guildIDs: [GuildID]) {
         guard !guildIDs.isEmpty else { return }
         struct Request: Encodable {
@@ -1809,6 +1819,8 @@ public enum GatewayUpdate: Sendable {
         threads: [Channel],
         memberships: [ThreadMember]
     )
+    /// How many messages a board's posts have past the marks it asked about.
+    case forumUnreads(ChannelID, counts: [ChannelID: Int])
     /// Our own membership of one thread moved: joined, left, muted, or the
     /// notification setting changed.
     case threadMembershipChanged(ThreadMember)
@@ -2113,6 +2125,13 @@ public enum GatewayUpdate: Sendable {
                 threads: (payload.threads ?? []).map { $0.domain(guildID: payload.guild_id) },
                 memberships: memberships
             )
+        case .forumUnreads(let payload):
+            guard payload.permission_denied != true else { return nil }
+            var counts: [ChannelID: Int] = [:]
+            for thread in payload.threads ?? [] {
+                if let count = thread.count { counts[thread.thread_id] = count }
+            }
+            self = .forumUnreads(payload.channel_id, counts: counts)
         case .threadMemberUpdate(let payload):
             // This one *does* carry `user_id` — it is a full thread member
             // object — so the fallback is only reached before READY.

@@ -202,6 +202,38 @@ struct InviteDTO: Decodable, Sendable {
     /// The event a link's `?event=` asked about, whole — what Discord's
     /// invite card turns into while it is not over (`346542`'s `ly`).
     var guild_scheduled_event: InviteEventDTO?
+    /// Whether the sheet may offer a Server Nickname (`504394`). Not captured.
+    var is_nickname_changeable: Bool?
+    /// What accepting grants: "Roles Granted" (`897288`). Read one by one, so a
+    /// role this can't read costs that role, never the invite. Not captured.
+    var roles: [Lossy<InviteRoleDTO>]?
+    /// `1` is `IS_GUEST_INVITE`. Not captured.
+    var flags: Int?
+
+    /// A role, as far as "Roles Granted" draws one.
+    struct InviteRoleDTO: Decodable, Sendable {
+        var id: RoleID
+        var name: String?
+        var color: Int?
+    }
+
+    /// One element that may fail on its own.
+    struct Lossy<Element: Decodable & Sendable>: Decodable, Sendable {
+        var value: Element?
+        init(from decoder: any Decoder) throws {
+            value = try? Element(from: decoder)
+        }
+    }
+
+    private var grantedRoles: [InviteGrantedRole] {
+        (roles ?? []).compactMap(\.value).map {
+            InviteGrantedRole(
+                id: $0.id,
+                name: $0.name ?? "",
+                colorValue: $0.color.flatMap { $0 > 0 ? UInt32(exactly: $0) : nil }
+            )
+        }
+    }
 
     /// The invite's event, read on its own: one this cannot read costs the
     /// card its event, never the invite.
@@ -289,7 +321,10 @@ struct InviteDTO: Decodable, Sendable {
                 profile: profile?.domain,
                 inviterID: inviter?.id, inviterName: inviterName, inviterUsername: inviter?.username,
                 inviterAvatarHash: inviter?.avatar, expiresAt: expiresAt,
-                event: guild_scheduled_event?.event?.domain(fallbackGuildID: guildID)
+                event: guild_scheduled_event?.event?.domain(fallbackGuildID: guildID),
+                isNicknameChangeable: is_nickname_changeable ?? false,
+                grantedRoles: grantedRoles,
+                isGuestInvite: (flags ?? 0) & 1 != 0
             )
         }
     }

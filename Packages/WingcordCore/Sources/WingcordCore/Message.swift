@@ -454,6 +454,33 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         )
     }
 
+    /// The same box with different attachments. See `replacingReactions`.
+    public func replacingAttachments(_ attachments: [Attachment]) -> MessagePayload {
+        MessagePayload(
+            attachments: attachments,
+            embeds: embeds,
+            reactions: reactions,
+            stickers: stickers,
+            components: components,
+            displayComponents: displayComponents,
+            poll: poll,
+            mentionedUserIDs: mentionedUserIDs,
+            mentionedRoleIDs: mentionedRoleIDs,
+            mentionsEveryone: mentionsEveryone,
+            reference: reference,
+            forwarded: forwarded,
+            webhookID: webhookID,
+            nonce: nonce,
+            activityInvite: activityInvite,
+            listenAlong: listenAlong,
+            interaction: interaction,
+            applicationID: applicationID,
+            thread: thread,
+            sharedTheme: sharedTheme,
+            mediaMention: mediaMention
+        )
+    }
+
     /// The same box with a different poll. See `replacingReactions`.
     public func replacingPoll(_ poll: Poll?) -> MessagePayload {
         MessagePayload(
@@ -672,6 +699,9 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
     /// A Discord clip: who was in it, what happened in it — nil for any other
     /// file. docs/CLIPS-PRESENCE.md, Phase 4.1.
     public var clip: AttachmentClip?
+    /// Discord's `IS_THUMBNAIL`: the picture a media post chose to stand for it on
+    /// its board.
+    public var isThumbnail = false
 
     public init(
         id: AttachmentID,
@@ -687,7 +717,8 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
         durationSeconds: Double? = nil,
         isMarkedAnimated: Bool = false,
         placeholder: String? = nil,
-        clip: AttachmentClip? = nil
+        clip: AttachmentClip? = nil,
+        isThumbnail: Bool = false
     ) {
         self.id = id
         self.filename = filename
@@ -703,6 +734,7 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
         self.isMarkedAnimated = isMarkedAnimated
         self.placeholder = placeholder
         self.clip = clip
+        self.isThumbnail = isThumbnail
     }
 
     public var isImage: Bool {

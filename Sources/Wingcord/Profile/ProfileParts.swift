@@ -1290,31 +1290,34 @@ struct RolePickerList: View {
     }
 }
 
-/// "Private Profile", across the head of the card.
-///
-/// **A nine-point lock beside the handle is not a label, it is a speck.** That
-/// is what this replaced, and a reader who has not been told what it means will
-/// never find out — the badge row beside it is full of small marks that all
-/// look like decoration. Discord gives the fact a strip of its own above the
-/// banner, glyph and words together, and it is the first thing on the card.
+/// "Private Profile", in the card's top-left corner, across from its ⋯.
 ///
 /// **A label, never a filter.** The route says `private: true` and still hands
 /// over the mutual servers the reader can see for themselves; hiding them would
 /// be inventing a restriction the server did not make.
-struct PrivateProfileBanner: View {
+///
+/// **Clear glass with no press response**: the material of the ⋯ it sits across
+/// from, without the part that says it can be pressed. It used to be a strip of
+/// its own above the banner, which pushed the whole card down (Alex, 2026-11-04).
+struct PrivateProfilePill: View {
+    /// The ⋯'s 30 on the card and the column. A little more on the full profile.
+    var height: CGFloat = 30
+
+    private var isLarge: Bool { height > 30 }
+
     var body: some View {
-        HStack(spacing: Spacing.tight) {
+        HStack(spacing: Spacing.tight + Spacing.hair) {
             Image(systemName: "lock.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: isLarge ? 12 : 11, weight: .semibold))
             Text("Private Profile")
-                .font(.system(.subheadline, weight: .semibold))
+                .font(.system(size: isLarge ? 13 : 12, weight: .semibold))
+                .lineLimit(1)
         }
         .foregroundStyle(InkColor.primary)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, Spacing.base)
-        // Over the person's own ground rather than a grey plate, so the strip
-        // belongs to the card instead of sitting on it.
-        .background(profilePrivateStrip)
+        .padding(.horizontal, isLarge ? 14 : 12)
+        .frame(height: height)
+        .fixedSize()
+        .chromeOverMedia()
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text("This profile is private"))
     }
@@ -1805,7 +1808,6 @@ struct ProfileAvatar: View {
 /// invisible on every light-themed profile before an unthemed card could be
 /// light too.
 private let profileSkeletonLine = Color.relative(dark: 0.08, light: 0.07)
-private let profilePrivateStrip = Color.relative(dark: 0.10, light: 0.06)
 
 /// The badge flyout's two pages.
 private enum BadgePanel {

@@ -24,7 +24,15 @@ extension AppModel {
         if let found = messageBoxes[channelID]?.messages.first(where: { $0.id == messageID }) {
             return found
         }
-        return pinnedMessages[channelID]?.first { $0.id == messageID }
+        if let pinned = pinnedMessages[channelID]?.first(where: { $0.id == messageID }) {
+            return pinned
+        }
+        // A post's opening message, from its board: reacting to one on its row
+        // doesn't need its transcript open.
+        guard messageID.rawValue == channelID.rawValue,
+              let forumID = channelIndex[channelID]?.parentID
+        else { return nil }
+        return forumBoards[forumID]?.firstMessages[channelID]
     }
 
     /// What the reader may do to one message. Nil when the message is gone.

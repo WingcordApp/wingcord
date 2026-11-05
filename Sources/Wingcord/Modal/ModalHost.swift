@@ -394,8 +394,20 @@ private struct ModalContentFade: ViewModifier {
 /// Gives a card the keyboard when it lands — its first field, or the card
 /// itself so typing does not go on into the composer behind it — and hands
 /// it back to whatever had it when the card goes.
+///
+/// **The card holds the keyboard from the start, and its field takes it once the
+/// card has landed.** AppKit snaps a field editor's frame to whole device pixels as
+/// it's made, in the card's scale at that moment, and a card growing out of a button
+/// starts at 0.14, where a pixel is 3.57 points: a title's words sat 3 points high
+/// until something refocused them (measured, 2026-11-05). What's typed in between is
+/// kept for the field.
 private struct ModalFocusAnchor: NSViewRepresentable {
     var isTop: Bool
+
+    /// Close enough to full size that a pixel is a pixel.
+    private static let landed = 0.97
+
+    @Environment(\.modalMorphProgress) private var morph
 
     func makeNSView(context: Context) -> Anchor {
         Anchor()
@@ -403,6 +415,7 @@ private struct ModalFocusAnchor: NSViewRepresentable {
 
     func updateNSView(_ nsView: Anchor, context: Context) {
         nsView.isTop = isTop
+        if morph >= Self.landed { nsView.cardLanded() }
     }
 
     final class Anchor: NSView {
@@ -410,10 +423,22 @@ private struct ModalFocusAnchor: NSViewRepresentable {
         private weak var previous: NSResponder?
         private weak var owner: NSWindow?
         private var hasFocused = false
+        private var hasLanded = false
+        /// Holding the keyboard until the card lands.
+        private var isHolding = false
+        private var earlyKeys: [NSEvent] = []
 
         override var acceptsFirstResponder: Bool { true }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func keyDown(with event: NSEvent) {
+            if isHolding {
+                earlyKeys.append(event)
+            } else {
+                super.keyDown(with: event)
+            }
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -428,14 +453,39 @@ private struct ModalFocusAnchor: NSViewRepresentable {
         }
 
         private func focus() {
-            guard !hasFocused, isTop, let window, let root = window.contentView else { return }
+            guard !hasFocused, isTop, let window else { return }
             hasFocused = true
-            let card = convert(bounds, to: nil)
-            if let field = Self.firstField(in: root, within: card) {
-                window.makeFirstResponder(field)
-            } else {
-                window.makeFirstResponder(self)
-            }
+            // Something in the card asked for it already, such as its message when a
+            // post comes back with a title: that was the card's own choice.
+            guard !isResponderInCard(of: window) else { return }
+            window.makeFirstResponder(self)
+            isHolding = true
+            if hasLanded { giveToField() }
+        }
+
+        /// The card has reached its size. Reported as it animates, so once is kept.
+        func cardLanded() {
+            guard !hasLanded else { return }
+            hasLanded = true
+            if isHolding { giveToField() }
+        }
+
+        private func giveToField() {
+            isHolding = false
+            let keys = earlyKeys
+            earlyKeys = []
+            // A click while it was growing has already put the keyboard somewhere.
+            guard isTop, let window, window.firstResponder === self, let root = window.contentView,
+                  let field = Self.firstField(in: root, within: convert(bounds, to: nil))
+            else { return }
+            window.makeFirstResponder(field)
+            for key in keys { window.firstResponder?.keyDown(with: key) }
+        }
+
+        private func isResponderInCard(of window: NSWindow) -> Bool {
+            guard let view = window.firstResponder as? NSView, view !== previous else { return false }
+            let frame = view.convert(view.bounds, to: nil)
+            return convert(bounds, to: nil).insetBy(dx: -1, dy: -1).contains(frame)
         }
 
         private func handBack() {

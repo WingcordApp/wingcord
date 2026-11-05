@@ -10,6 +10,10 @@ import WingcordCore
 /// eviction of the transcript never takes unsent input with it.
 struct ComposerContainer: View {
     var channelID: ChannelID
+    /// Writing a forum post's first message rather than a message: the forum's own
+    /// box holds the words and the files, and the card holds the rest. Nil is every
+    /// other composer in the app.
+    var post: ForumPostComposing?
 
     @Environment(AppModel.self) private var model
     /// The file panel. `@State` here rather than on the store, because it is
@@ -42,7 +46,13 @@ struct ComposerContainer: View {
             silentTyping: settings.silentTyping && settings.silentTypingShowsIcon
                 ? SilentTypingControl(isOn: settings.silentTypingIsOn) { settings.silentTypingIsOn.toggle() }
                 : nil,
-            focusKey: channelID,
+            focusKey: post == nil ? AnyHashable(channelID) : post?.focusKey,
+            returnSubmits: post == nil,
+            minimumLines: post == nil ? 1 : 6,
+            maximumLines: post == nil ? Metrics.composerMaxLines : 14,
+            placeholderOverride: post == nil ? nil : "Enter a message...",
+            showsSendControl: post == nil,
+            isInCard: post != nil,
             canSend: model.permissionGate.canSend(in: channelID),
             reply: reply,
             isEditing: box?.editing != nil,
@@ -68,7 +78,8 @@ struct ComposerContainer: View {
                     // not typing, and telling the channel it is keeps the
                     // indicator alive through a minute of somebody backspacing.
                     let previous = model.messages(in: channelID)?.draft ?? ""
-                    if newValue.count > previous.count {
+                    // A post nobody has made yet has nobody to tell.
+                    if post == nil, newValue.count > previous.count {
                         model.sessionController.reportTyping(in: channelID)
                     }
                     model.mutateBox(channelID) { $0.draft = newValue }
@@ -107,11 +118,26 @@ struct ComposerContainer: View {
             commitMention: commitMention,
             mentionChip: { [channelID] in model.composerChip(for: $0, in: channelID) },
             mentionChipRevision: model.composerChipRevision,
-            onPick: { model.apply($0.pick, in: channelID) },
+            onPick: { item in
+                // A post's sticker waits with the post: there's nowhere to send
+                // one to yet.
+                if post != nil, case .sticker(let id) = item.pick {
+                    model.forumPostDrafts[channelID, default: ForumPostDraft()].stickerID = id
+                } else {
+                    model.apply(item.pick, in: channelID)
+                }
+            },
             // Straight out rather than into the draft: picking a GIF is a
-            // whole message, and the draft is left as it was.
-            onPickGIF: { model.sendGIF($0.url, in: channelID) },
-            activityChannelID: channelID,
+            // whole message, and the draft is left as it was. A post has no
+            // conversation to send it to yet, so there it's the post's words.
+            onPickGIF: { gif in
+                if post != nil {
+                    model.apply(.insert(gif.url.absoluteString), in: channelID)
+                } else {
+                    model.sendGIF(gif.url, in: channelID)
+                }
+            },
+            activityChannelID: post == nil ? channelID : nil,
             commandQuery: commandQuery,
             commandSections: commandSections,
             pickCommand: pick(_:),
@@ -202,6 +228,14 @@ struct ComposerContainer: View {
     /// photos need `ATTACH_FILES`; the rest gate themselves on the store.
     private var attachActions: ComposerAttachActions {
         let canAttach = model.canAttachFiles(in: channelID)
+        // Files and pictures: the rest of the menu is for a conversation that
+        // exists.
+        if post != nil {
+            return ComposerAttachActions(
+                uploadFile: canAttach ? { isChoosingFiles = true } : nil,
+                selectPhotos: canAttach ? { isPickingPhotos = true } : nil
+            )
+        }
         return ComposerAttachActions(
             uploadFile: canAttach ? { isChoosingFiles = true } : nil,
             selectPhotos: canAttach ? { isPickingPhotos = true } : nil,
@@ -228,7 +262,7 @@ struct ComposerContainer: View {
     /// open a command list over it.
     private var commandQuery: String? {
         let box = model.messages(in: channelID)
-        guard box?.editing == nil, box?.command == nil else { return nil }
+        guard post == nil, box?.editing == nil, box?.command == nil else { return nil }
         guard model.permissionGate.canUseCommands(in: channelID) else { return nil }
         return CommandQuery.query(in: box?.draft ?? "")
     }
@@ -514,6 +548,10 @@ struct ComposerContainer: View {
     }
 
     private func send(launch: SendLaunch?) {
+        if let post {
+            post.submit()
+            return
+        }
         // Return commits whichever the bar is holding. One entry point, so the
         // send control, the key press and the menu item cannot disagree about
         // what pressing Send means while an edit is open.
@@ -524,4 +562,13 @@ struct ComposerContainer: View {
         let draft = model.messages(in: channelID)?.draft ?? ""
         model.sendMessage(draft, in: channelID, launch: launch)
     }
+}
+
+/// What a forum post's card asks of the composer.
+struct ForumPostComposing {
+    /// Changing this moves the caret into the field. Nil asks for nothing: the
+    /// card's title goes first.
+    var focusKey: AnyHashable?
+    /// The field's own send, should anything press it.
+    var submit: () -> Void
 }

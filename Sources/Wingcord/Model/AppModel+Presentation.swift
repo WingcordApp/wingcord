@@ -491,7 +491,8 @@ extension AppModel {
             // A channel whose history the reader cannot load has pins they
             // cannot read either — the route answers 403, and a control that
             // opens onto a refusal is the inert control §5.5 is about.
-            canShowPins: !isCall && permissionGate.canReadHistory(channelID),
+            // A board has posts, each with its own pins, and none of its own.
+            canShowPins: !isCall && !channel.isForumLike && permissionGate.canReadHistory(channelID),
             arePinsShown: openPinsChannelID == channelID,
             canShowThreads: !isCall && canBrowseThreads(in: channelID),
             areThreadsShown: openThreadsChannelID == channelID,

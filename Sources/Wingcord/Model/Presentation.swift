@@ -675,6 +675,12 @@ struct WorkspacePresentation: Hashable, Sendable {
             return false
         }
 
+        /// A forum or media channel's board.
+        var isForum: Bool {
+            if case .forum = self { return true }
+            return false
+        }
+
         /// One of the home's own pages — Friends, Message Requests — which
         /// carry their own lists, and leave no conversation to search: the
         /// one selected behind them is not what the reader is looking at.

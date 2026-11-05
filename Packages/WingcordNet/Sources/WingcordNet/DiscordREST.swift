@@ -462,6 +462,44 @@ public actor DiscordREST {
         ).domain
     }
 
+    /// Adds uploaded files to a message that's already sent: Discord's own PATCH in
+    /// `538899`, every attachment it keeps followed by the new ones. An attachment
+    /// left out of the list is deleted, which is why the old ones are in it.
+    public func addAttachments(
+        _ uploaded: [UploadedAttachment],
+        keeping existing: [Attachment],
+        to messageID: MessageID,
+        in channelID: ChannelID
+    ) async throws -> Message {
+        struct Kept: Encodable {
+            var id: String
+            var filename: String
+        }
+        enum Entry: Encodable {
+            case kept(Kept)
+            case added(AttachmentBody)
+
+            func encode(to encoder: any Encoder) throws {
+                switch self {
+                case .kept(let kept): try kept.encode(to: encoder)
+                case .added(let added): try added.encode(to: encoder)
+                }
+            }
+        }
+        struct Body: Encodable {
+            var attachments: [Entry]
+        }
+        let kept = existing.map { Entry.kept(Kept(id: $0.id.description, filename: $0.filename)) }
+        let added = uploaded.map { Entry.added(AttachmentBody($0)) }
+        return try await request(
+            method: "PATCH",
+            path: "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)",
+            route: "channels/\(channelID.rawValue)/messages/:id",
+            body: Body(attachments: kept + added),
+            as: MessageDTO.self
+        ).domain
+    }
+
     public func deleteMessage(_ messageID: MessageID, in channelID: ChannelID) async throws {
         _ = try await requestData(
             method: "DELETE",

@@ -148,6 +148,12 @@ struct WingcordApp: App {
                 .presentsInvokedCommand()
                 .presentsGuildSurfaces()
                 .presentsJoinServer()
+                // **Every link a view opens with `openURL`** goes past the invite
+                // sheet first, `Link` and markdown too, so none of them can skip
+                // it for the browser.
+                .environment(\.openURL, OpenURLAction { url in
+                    model.openInviteLink(url.absoluteString) ? .handled : .systemAction
+                })
                 .presentsSearchFilters()
                 .presentsVoiceSurfaces()
                 // **Last, so it draws over every one of them.** ⌘K is reached
@@ -454,7 +460,12 @@ struct WingcordCommands: Commands {
                 ShortcutMenuItem(shortcut: .viewGIFs, model: model)
                 ShortcutMenuItem(shortcut: .viewEmojis, model: model)
                 ShortcutMenuItem(shortcut: .viewStickers, model: model)
-                ShortcutMenuItem(shortcut: .createThread, model: model)
+                ShortcutMenuItem(
+                    shortcut: .createThread,
+                    model: model,
+                    title: model.menuContext.forum == nil ? nil : "New Post…"
+                )
+                ChannelForumMenu(model: model)
                 Divider()
                 ChannelProfileMenu(model: model)
                 Divider()

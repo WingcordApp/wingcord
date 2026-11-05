@@ -38,8 +38,16 @@ struct ForumPostPresentation: Hashable, Sendable, Identifiable {
     /// Empty until `post-data` answers, which is why the row is laid out to look
     /// finished without it.
     var preview: AttributedString
-    /// The first image on the opening message, for the row's thumbnail.
-    var thumbnailURL: URL?
+    /// The opening message's words alone, for a gallery card that has already said
+    /// who wrote them.
+    var openingWords: String
+    /// The title, with what a search matched lit.
+    var titleText: AttributedString
+    /// What the opening message leads with: the first is a list row's thumbnail,
+    /// and a gallery card lays out the first four.
+    var media: [ForumPostMedia]
+    /// The reaction its row offers. See `ForumPostReaction`.
+    var reaction: ForumPostReaction?
     var messageCount: Int
     /// When the post last had a message. Falls back to its own creation time,
     /// which the id carries.
@@ -59,23 +67,41 @@ struct ForumPostPresentation: Hashable, Sendable, Identifiable {
     var isMuted: Bool
     /// Discord's "NEW" — see `ForumOrder.isNew`.
     var isNew: Bool
+    /// Whether it has anything the reader hasn't read: new, or answered since they
+    /// opened it. Discord dims a read post's title; here a read one is lighter in
+    /// weight, because pale text is what it would otherwise take.
+    var isUnread: Bool
+    /// Discord's "(N New)": how many, in its words, on a post they've opened.
+    var unreadWords: String?
     /// The post's tags the board's filter has lit, drawn emphasised as
     /// Discord's are. Carried on the post so a row comparing only its post
     /// still redraws when the filter changes.
     var filteredTagIDs: Set<ForumTagID>
-    /// The reaction Discord offers on every post here, when the forum sets one.
-    var defaultReaction: EmojiRef?
+}
+
+/// The one reaction a post's row offers: Discord's `eC` and `eS`.
+///
+/// **The most-used one, or the forum's own default where nobody has reacted yet.**
+/// One chip rather than the transcript's two for an emoji with both kinds, so its
+/// number is everybody who reacted with it.
+struct ForumPostReaction: Hashable, Sendable {
+    var emoji: EmojiRef
+    /// The kind a click would add or take off.
+    var kind: ReactionKind
+    /// Nil for a default nobody has used, which shows no number.
+    var count: Int?
+    var isMine: Bool
+    /// A super reaction's colours, where somebody sent one.
+    var palette: SuperReactionPalette?
+    /// On a locked archive, or for a reader who can only look.
+    var isReadOnly: Bool
 }
 
 /// The whole board.
 struct ForumPresentation: Hashable, Sendable {
     var channelID: ChannelID
     var name: String
-    /// A forum's `topic` is its guidelines, shown above the list rather than in
-    /// the header — it is prose, not a subtitle.
-    var guidelines: String?
     var query: ForumQuery
-    var availableTags: [ForumTag]
     /// The live posts in Discord's order — the pinned post first — or a
     /// search's results.
     var posts: [ForumPostPresentation]
@@ -87,7 +113,10 @@ struct ForumPresentation: Hashable, Sendable {
     var hasMore: Bool
     /// Whether the reader may open a post here at all.
     var canPost: Bool
-    var requiresTag: Bool
+    /// A media channel, which leads with its pictures at 16:9.
+    var isMedia: Bool
+    /// Other people's posts waiting behind "N New Posts".
+    var newPostCount: Int
     /// What is in the board's search field.
     var searchText: String
     /// Whether `posts` is a set of search results rather than the browse list.
@@ -97,16 +126,15 @@ struct ForumPresentation: Hashable, Sendable {
         ForumPresentation(
             channelID: channelID,
             name: "",
-            guidelines: nil,
             query: ForumQuery(),
-            availableTags: [],
             posts: [],
             olderPosts: [],
             isLoading: false,
             loadFailed: false,
             hasMore: false,
             canPost: false,
-            requiresTag: false,
+            isMedia: false,
+            newPostCount: 0,
             searchText: "",
             isSearching: false
         )
@@ -141,6 +169,11 @@ struct ForumMemoKey: Hashable, Sendable {
     /// read state — and against the forum's mark as the board opened.
     var readStateCount: Int
     var readMark: MessageID?
+    /// A post's "(N New)" and its title's weight go when it's read, which moves no
+    /// count. Every read cursor moves this one.
+    var sidebarRevision: UInt64
+    /// Whether anything is drawn from a post's embeds.
+    var showsEmbeds: Bool
     /// An opening message from somebody blocked or ignored is not previewed.
     var blockedUserIDs: Set<UserID>
     var ignoredUserIDs: Set<UserID>
@@ -173,6 +206,8 @@ extension AppModel {
             threadSearchFailed: threadSearchFailed,
             readStateCount: readStates.count,
             readMark: forumReadMarks[channelID],
+            sidebarRevision: sidebarRevision,
+            showsEmbeds: AppSettings.shared.showsEmbeds,
             blockedUserIDs: blockedUserIDs,
             ignoredUserIDs: ignoredUserIDs
         )
@@ -209,6 +244,12 @@ extension AppModel {
 
         let readMark = forumReadMarks[channelID]
         let joinedAt = guildID.flatMap { guilds[$0]?.joinedAt }
+        let isMedia = channel.kind == .media
+        // A row's thumbnail is small and a gallery's picture isn't, and the CDN
+        // is asked for what'll be drawn.
+        let mediaWidth = board.query.layout == .gallery ? ForumGallery.maximumWidth : Metrics.forumThumbnail
+        let showsEmbeds = AppSettings.shared.showsEmbeds
+        let defaultReaction = usableDefaultReaction(of: channel)
 
         func present(_ postID: ChannelID) -> ForumPostPresentation? {
             guard let post = channelIndex[postID] else { return nil }
@@ -237,6 +278,17 @@ extension AppModel {
             // An applied tag the forum no longer defines is dropped: a deleted
             // tag leaves its id on every post that had it.
             let tags = post.appliedTags.compactMap { tagsByID[$0] }
+            let isArchived = post.threadMetadata?.isArchived ?? false
+            let isNew = ForumOrder.isNew(
+                post, readMark: readMark, isOpened: readStates[postID] != nil, joinedAt: joinedAt
+            )
+            // Discord's `yz`: opened, with a mark, and something past it.
+            let readState = readStates[postID]
+            let hasTrackedUnread = !isArchived && readState?.lastAcknowledgedID != nil
+                && readState?.isUnread(newest: post.lastMessageID) == true
+            let messageCount = post.threadMessageCount ?? 0
+            // Nothing of a hidden author's message is drawn: its picture least of all.
+            let shownOpener: Message? = if case .shown(let message) = opener { message } else { nil }
 
             return ForumPostPresentation(
                 id: postID,
@@ -249,12 +301,15 @@ extension AppModel {
                 } ?? nil,
                 monogram: user?.monogram ?? "",
                 preview: Self.previewLine(author: name, colorValue: color, opener: opener),
-                thumbnailURL: firstMessage.flatMap { message in
-                    // Nothing of a hidden author's message is drawn — its
-                    // picture least of all.
-                    if case .shown = opener { Self.thumbnailURL(message) } else { nil }
+                openingWords: Self.openerWords(opener) ?? "",
+                titleText: Self.highlighted(post.name, matching: isSearching ? phrase : ""),
+                media: shownOpener.map {
+                    ForumPostCard.media(of: $0, isMediaChannel: isMedia, width: mediaWidth, showsEmbeds: showsEmbeds)
+                } ?? [],
+                reaction: firstMessage.flatMap { message in
+                    forumReaction(on: message, of: post, defaultReaction: defaultReaction)
                 },
-                messageCount: post.threadMessageCount ?? 0,
+                messageCount: messageCount,
                 // `lastMessageID` is a snowflake, so its own timestamp is the
                 // last activity — there is no separate date field, and the
                 // post's id is the fallback for one that has never been
@@ -262,15 +317,16 @@ extension AppModel {
                 lastActivity: post.lastMessageID?.timestamp ?? postID.timestamp,
                 postedAt: post.threadMetadata?.createdAt ?? postID.timestamp,
                 isPinned: post.isPinnedPost,
-                isArchived: post.threadMetadata?.isArchived ?? false,
+                isArchived: isArchived,
                 isLocked: post.threadMetadata?.isLocked ?? false,
                 isFollowed: threadMemberships[postID] != nil,
                 isMuted: threadMemberships[postID]?.isMutedNow() ?? false,
-                isNew: ForumOrder.isNew(
-                    post, readMark: readMark, isOpened: readStates[postID] != nil, joinedAt: joinedAt
-                ),
-                filteredTagIDs: board.query.tags.intersection(tags.map(\.id)),
-                defaultReaction: channel.defaultReaction
+                isNew: isNew,
+                isUnread: isNew || hasTrackedUnread,
+                unreadWords: hasTrackedUnread
+                    ? ForumPostCard.unreadWords(count: forumPostUnreadCounts[postID], total: messageCount)
+                    : nil,
+                filteredTagIDs: board.query.tags.intersection(tags.map(\.id))
             )
         }
 
@@ -280,9 +336,7 @@ extension AppModel {
         return ForumPresentation(
             channelID: channelID,
             name: channel.name,
-            guidelines: channel.topic?.isEmpty == false ? channel.topic : nil,
             query: board.query,
-            availableTags: channel.availableTags,
             posts: posts,
             olderPosts: olderPosts,
             isLoading: isSearching ? isSearchingThreads : board.isLoading,
@@ -292,7 +346,11 @@ extension AppModel {
             // would splice the two lists together.
             hasMore: board.hasMore && !isSearching,
             canPost: permissionGate.canSend(in: channelID),
-            requiresTag: channel.requiresTag,
+            isMedia: isMedia,
+            // A post the filter would hide isn't news to this board.
+            newPostCount: isSearching ? 0 : board.waitingPostIDs.count { postID in
+                channelIndex[postID].map { ForumOrder.matches($0, query: board.query) } ?? false
+            },
             searchText: threadSearchText,
             isSearching: isSearching
         )
@@ -314,13 +372,7 @@ extension AppModel {
     /// alone, without the name; an ignored author named before "Post contains
     /// an ignored message"; "Original message was deleted".
     private static func previewLine(author: String, colorValue: UInt32?, opener: Opener) -> AttributedString {
-        let words: String? = switch opener {
-        case .shown(let message): Self.excerpt(message)
-        case .loading: nil
-        case .deleted: "Original message was deleted"
-        case .blocked: "Post contains a blocked message"
-        case .ignored: "Post contains an ignored message"
-        }
+        let words = openerWords(opener)
         var line = AttributedString()
         if case .blocked = opener {} else if !author.isEmpty {
             var name = AttributedString(author)
@@ -328,15 +380,26 @@ extension AppModel {
             line.append(name)
             if words != nil {
                 var separator = AttributedString(": ")
-                separator.foregroundColor = InkColor.tertiary
+                separator.foregroundColor = InkColor.secondary
                 line.append(separator)
             }
         }
         guard let words else { return line }
         var body = AttributedString(words)
-        body.foregroundColor = InkColor.tertiary
+        body.foregroundColor = InkColor.secondary
         line.append(body)
         return line
+    }
+
+    /// What the opening message comes to as words, or Discord's for why it can't.
+    private static func openerWords(_ opener: Opener) -> String? {
+        switch opener {
+        case .shown(let message): excerpt(message)
+        case .loading: nil
+        case .deleted: "Original message was deleted"
+        case .blocked: "Post contains a blocked message"
+        case .ignored: "Post contains an ignored message"
+        }
     }
 
     /// A board's two sections: the live posts in Discord's order, then the
@@ -364,9 +427,17 @@ extension AppModel {
         let liveThreads = channelIndex.threadIDs(inParent: channelID)
             .compactMap { channelIndex[$0] }
             .filter { $0.threadMetadata?.isArchived != true }
-        let live = ForumOrder.livePosts(liveThreads, query: board.query)
+        let live = ForumOrder.heldPosts(
+            liveThreads, query: board.query, held: board.liveOrder, waiting: board.waitingPostIDs
+        )
         let liveIDs = Set(liveThreads.map(\.id))
-        return (live, board.postIDs.filter { !liveIDs.contains($0) })
+        // The server already filtered these for the board's own question; a page
+        // from before a filter changed is what the second test is for.
+        let older = board.postIDs.filter { postID in
+            !liveIDs.contains(postID)
+                && (channelIndex[postID].map { ForumOrder.matches($0, query: board.query) } ?? true)
+        }
+        return (live, older)
     }
 
     /// The opening message reduced to one line.
@@ -375,7 +446,9 @@ extension AppModel {
     /// blank — a picture, then the text — would otherwise preview as nothing at
     /// all, which is indistinguishable from a preview that has not loaded.
     private static func excerpt(_ message: Message) -> String {
-        let collapsed = message.content
+        // The words as they read, not as they were typed: `**` is markup, and
+        // Discord's row draws it.
+        let collapsed = MarkdownParser().parse(message.content).plainText
             .split(whereSeparator: \.isNewline)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespaces)
@@ -385,19 +458,94 @@ extension AppModel {
         return ""
     }
 
-    /// The first image on a post's opening message.
-    ///
-    /// The **proxy** URL, as everywhere else in this app: Discord's own CDN
-    /// proxy is what serves a resized variant, and the original is the full
-    /// upload — a row thumbnail pulling a 4 MB photograph is the same fault as
-    /// decoding one on the main thread.
-    private static func thumbnailURL(_ message: Message) -> URL? {
-        for attachment in message.attachments {
-            guard attachment.contentType?.hasPrefix("image/") == true,
-                  !attachment.isSpoiler
+    /// A title with a search's words lit, as Discord's does.
+    private static func highlighted(_ title: String, matching phrase: String) -> AttributedString {
+        var text = AttributedString(title)
+        guard !phrase.isEmpty else { return text }
+        for match in ForumPostCard.matches(of: phrase, in: title) {
+            guard let start = AttributedString.Index(match.lowerBound, within: text),
+                  let end = AttributedString.Index(match.upperBound, within: text)
             else { continue }
-            return URL(string: attachment.proxyURL)
+            text[start..<end].backgroundColor = Palette.accent.opacity(0.28)
         }
-        return nil
+        return text
     }
+
+    /// The forum's default reaction, if the reader could use it: Discord's `Ck`. A
+    /// custom one arrives with only its id, so its name comes from the server's list,
+    /// and one that isn't there isn't offered.
+    private func usableDefaultReaction(of forum: Channel) -> EmojiRef? {
+        guard let emoji = forum.defaultReaction else { return nil }
+        guard let id = emoji.id else { return emoji.name.isEmpty ? nil : emoji }
+        return forum.guildID.flatMap { guildEmojis[$0] }?.first { $0.id == id }
+    }
+
+    /// What a post's row offers to react with: Discord's `eC` and `eS`.
+    private func forumReaction(
+        on opener: Message,
+        of post: Channel,
+        defaultReaction: EmojiRef?
+    ) -> ForumPostReaction? {
+        let isLockedArchive = post.threadMetadata.map { $0.isArchived && $0.isLocked } ?? false
+        let allowed = permissionGate.actions(for: opener)
+        guard let top = ForumPostCard.topReaction(of: opener.reactions) else {
+            guard let defaultReaction, isLockedArchive || allowed.contains(.addReaction) else { return nil }
+            return ForumPostReaction(
+                emoji: defaultReaction, kind: .normal, count: nil, isMine: false,
+                palette: nil, isReadOnly: isLockedArchive
+            )
+        }
+        return ForumPostReaction(
+            emoji: top.emoji,
+            kind: top.isMineBurst ? .burst : .normal,
+            count: top.count + top.burstCount,
+            isMine: top.isMine || top.isMineBurst,
+            palette: top.burstCount > 0 ? SuperReactionPalette(colors: top.burstColors) : nil,
+            isReadOnly: isLockedArchive || !allowed.contains(.joinReaction)
+        )
+    }
+}
+
+/// A post started and not yet sent: Discord's `ThreadSettings` draft, the title and
+/// the tags, with what else this one holds. The message and its files are the forum's
+/// own message box, as any channel's draft is.
+struct ForumPostDraft: Hashable, Sendable {
+    var title = ""
+    var tags: Set<ForumTagID> = []
+    /// A sticker picked for the post: Discord's sticker preview.
+    var stickerID: UInt64?
+    /// A media post's own picture for the board (`l$`).
+    var thumbnail: PendingAttachment?
+
+    var isEmpty: Bool { title.isEmpty && tags.isEmpty && stickerID == nil && thumbnail == nil }
+}
+
+/// "Add media to the original post?", while it's open.
+struct ForumAddMediaPrompt {
+    var postID: ChannelID
+    var files: [PendingAttachment]
+    /// "Don't Add": sends them as the reply they were going to be.
+    var sendAnyway: () -> Void
+    var isUploading = false
+    var failure: String?
+
+    init(postID: ChannelID, files: [PendingAttachment], sendAnyway: @escaping () -> Void) {
+        self.postID = postID
+        self.files = files
+        self.sendAnyway = sendAnyway
+    }
+}
+
+/// Why a post wasn't made, by where it's said.
+struct ForumPostRefusal: Equatable, Sendable {
+    /// Discord's `ipgKDg`, where AutoMod didn't say more.
+    static let blocked = "This post cannot be sent because it contains content blocked by this community. "
+        + "Please revise your post and try again."
+
+    var titleError: String?
+    var messageError: String?
+    var tagError: String?
+    var generalError: String?
+
+    var isEmpty: Bool { titleError == nil && messageError == nil && tagError == nil && generalError == nil }
 }

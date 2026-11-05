@@ -64,7 +64,8 @@ extension AppModel {
         in channelID: ChannelID,
         stickerIDs: [UInt64] = [],
         launch: SendLaunch? = nil,
-        checksEmbeds: Bool = true
+        checksEmbeds: Bool = true,
+        checksPostMedia: Bool = true
     ) {
         // The plugin's APNG branch: nothing is sent — words, reply and tray
         // stay — and the sticker joins the tray as a GIF, or is refused where
@@ -77,6 +78,7 @@ extension AppModel {
             }
             return
         }
+        let asWritten = (content: content, stickerIDs: stickerIDs)
         let rewrite = applyingFakeNitro(content, stickerIDs: stickerIDs, in: channelID)
         // **Asked before anything empties**: Cancel leaves the draft, the
         // reply and the tray exactly where they were.
@@ -107,6 +109,17 @@ extension AppModel {
         guard !holdsForSlowmode(channelID) else { return }
         guard let box else {
             sessionController.send(content, in: channelID, replyingTo: nil, stickerIDs: stickerIDs)
+            return
+        }
+        // Asked with everything still where it is, as the prompt above is: Cancel
+        // leaves the words and the files in the composer.
+        if checksPostMedia, offersAddingMedia(box.attachments, to: channelID) {
+            forumAddMediaPrompt = ForumAddMediaPrompt(postID: channelID, files: box.attachments) { [weak self] in
+                self?.sendMessage(
+                    asWritten.content, in: channelID, stickerIDs: asWritten.stickerIDs, launch: launch,
+                    checksEmbeds: false, checksPostMedia: false
+                )
+            }
             return
         }
         let nonce = sessionController.send(
@@ -431,6 +444,7 @@ extension AppModel {
         in channelID: ChannelID,
         _ transform: ([Reaction]) -> [Reaction]?
     ) {
+        updateBoardReactions(of: messageID, in: channelID, transform)
         guard let index = messageBoxes[channelID]?.messages.firstIndex(where: { $0.id == messageID }),
               let message = messageBoxes[channelID]?.messages[index],
               let reactions = transform(message.reactions)
@@ -443,5 +457,24 @@ extension AppModel {
                 .replacingReactions(reactions)
         }
         messageContentRevision &+= 1
+    }
+
+    /// A post's opening message is on its board as well as in its transcript, and
+    /// usually only there: nobody has to have opened a post for its row to show a
+    /// reaction arriving, as Discord's `969043` keeps it.
+    private func updateBoardReactions(
+        of messageID: MessageID,
+        in channelID: ChannelID,
+        _ transform: ([Reaction]) -> [Reaction]?
+    ) {
+        guard messageID.rawValue == channelID.rawValue,
+              let forumID = channelIndex[channelID]?.parentID,
+              let opener = forumBoards[forumID]?.firstMessages[channelID],
+              let reactions = transform(opener.reactions)
+        else { return }
+        var updated = opener
+        updated.payload = (opener.payload ?? MessagePayload()).replacingReactions(reactions)
+        forumBoards[forumID]?.firstMessages[channelID] = updated
+        threadRevision &+= 1
     }
 }

@@ -154,6 +154,8 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
     /// The layout the forum opens in. Discord's 0 is resolved on decode — see
     /// `ForumLayout.init(rawChannelValue:)`.
     public var defaultForumLayout: ForumLayout?
+    /// Whether the forum's filter opens on any tag or all of them.
+    public var defaultTagMatching: TagMatching?
     /// Slow mode *inside* new posts, in seconds. Copied onto a post at creation;
     /// the forum's own `rateLimitPerUser` throttles making posts instead.
     public var defaultThreadRateLimitPerUser: Int?
@@ -221,6 +223,7 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         defaultReaction: EmojiRef? = nil,
         defaultSortOrder: ForumSortOrder? = nil,
         defaultForumLayout: ForumLayout? = nil,
+        defaultTagMatching: TagMatching? = nil,
         defaultThreadRateLimitPerUser: Int? = nil,
         template: String? = nil,
         flags: ChannelFlags = [],
@@ -256,6 +259,7 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         self.defaultReaction = defaultReaction
         self.defaultSortOrder = defaultSortOrder
         self.defaultForumLayout = defaultForumLayout
+        self.defaultTagMatching = defaultTagMatching
         self.defaultThreadRateLimitPerUser = defaultThreadRateLimitPerUser
         self.template = template
         self.flags = flags

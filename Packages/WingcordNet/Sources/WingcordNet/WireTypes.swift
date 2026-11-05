@@ -374,6 +374,8 @@ struct ChannelDTO: Decodable, Sendable {
     var default_reaction_emoji: DefaultReactionDTO?
     var default_sort_order: Int?
     var default_forum_layout: Int?
+    /// "match_some" or "match_all". Not captured; read as Discord's channel record reads it.
+    var default_tag_setting: String?
     var default_thread_rate_limit_per_user: Int?
     var template: String?
     var flags: Int?
@@ -421,6 +423,7 @@ struct ChannelDTO: Decodable, Sendable {
             defaultReaction: default_reaction_emoji?.domain,
             defaultSortOrder: default_sort_order.flatMap(ForumSortOrder.init(rawValue:)),
             defaultForumLayout: default_forum_layout.map(ForumLayout.init(rawChannelValue:)),
+            defaultTagMatching: default_tag_setting.flatMap(TagMatching.init(rawValue:)),
             defaultThreadRateLimitPerUser: default_thread_rate_limit_per_user,
             template: template,
             flags: ChannelFlags(rawValue: flags ?? 0),
@@ -588,6 +591,51 @@ struct ThreadDeleteDTO: Decodable, Sendable {
     var guild_id: GuildID?
     var parent_id: ChannelID?
     var type: Int?
+}
+
+/// Op 28, what `FORUM_UNREADS` answers: `s.REQUEST_FORUM_UNREADS=28` in the web
+/// build, whose `requestForumUnreads` writes exactly these fields. **A wrong op closes
+/// the socket with 4001**, so the number is pinned by a test. Not captured.
+struct ForumUnreadsRequest: Encodable {
+    struct Body: Encodable {
+        struct Thread: Encodable {
+            var thread_id: String
+            var ack_message_id: String
+        }
+
+        var guild_id: String
+        var channel_id: String
+        var threads: [Thread]
+    }
+
+    var op = 28
+    var d: Body
+
+    init(guildID: GuildID, channelID: ChannelID, threads: [(threadID: ChannelID, ackMessageID: MessageID)]) {
+        d = Body(
+            guild_id: String(guildID.rawValue),
+            channel_id: String(channelID.rawValue),
+            threads: threads.map {
+                Body.Thread(thread_id: String($0.threadID.rawValue), ack_message_id: String($0.ackMessageID.rawValue))
+            }
+        )
+    }
+}
+
+/// `FORUM_UNREADS`: how many messages each of a board's posts has past the mark
+/// it was asked about. Discord's `eV(["FORUM_UNREADS"], …)` in the web build reads
+/// exactly these fields, and drops the whole answer on `permission_denied`.
+struct ForumUnreadsDTO: Decodable, Sendable {
+    struct Thread: Decodable, Sendable {
+        var thread_id: ChannelID
+        /// Absent where the server has lost track. Discord keeps no count for
+        /// those, and a post with none says "1+".
+        var count: Int?
+    }
+
+    var channel_id: ChannelID
+    var permission_denied: Bool?
+    var threads: [Thread]?
 }
 
 /// `THREAD_LIST_SYNC` — every thread the account can now see in the named
@@ -1007,6 +1055,9 @@ struct AttachmentDTO: Decodable, Sendable {
     /// `IS_ANIMATED` in an attachment's `flags` — web `d4c7976eccf337f1`'s
     /// attachment flag enum; captured on both GIF attachments in the HARs.
     static let isAnimatedFlag = 1 << 5
+    /// `IS_THUMBNAIL`, a media post's own picture for the board (`sbO` in the web
+    /// build; read by `256265`).
+    static let isThumbnailFlag = 1 << 1
     /// `HAS_TIMELINE_COMMENTS` — somebody has replied at a moment of the clip
     /// (web build 641803).
     static let hasTimelineCommentsFlag = 1 << 8
@@ -1048,7 +1099,8 @@ struct AttachmentDTO: Decodable, Sendable {
             durationSeconds: duration_secs,
             isMarkedAnimated: (flags ?? 0) & Self.isAnimatedFlag != 0,
             placeholder: MediaPlaceholder.accepted(placeholder, version: placeholder_version),
-            clip: clip
+            clip: clip,
+            isThumbnail: (flags ?? 0) & Self.isThumbnailFlag != 0
         )
     }
 }

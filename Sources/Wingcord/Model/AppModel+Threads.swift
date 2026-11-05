@@ -48,6 +48,12 @@ struct ForumBoard {
     /// spinning for ever. Cleared by the next successful page.
     var loadFailed = false
 
+    /// The live posts in the order they were last put in: what keeps a row from
+    /// moving under somebody reading it. See `ForumOrder.heldPosts`.
+    var liveOrder: [ChannelID] = []
+    /// Other people's new posts since then, waiting behind "N New Posts".
+    var waitingPostIDs: Set<ChannelID> = []
+
     /// How many posts the server has handed over, duplicates included.
     ///
     /// **Not `postIDs.count`, and the difference is load-bearing.** Paging is by
@@ -212,6 +218,14 @@ extension AppModel {
             // the list does not feel like it is lagging behind the field.
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled, let self else { return }
+            if LaunchOptions.current.usesDemoFixtures {
+                threadSearchResults = channelIndex.threadIDs(inParent: channelID).filter {
+                    channelIndex[$0]?.name.localizedCaseInsensitiveContains(phrase) == true
+                }
+                isSearchingThreads = false
+                threadRevision &+= 1
+                return
+            }
             await sessionController.searchThreads(in: channelID, name: phrase)
         }
     }
@@ -287,12 +301,76 @@ extension AppModel {
             sessionController.acknowledge(newest, in: channelID)
         }
         loadThreadList(channelID)
+        refreshForumOrder(channelID)
+        requestForumUnreads(in: channelID)
+        if LaunchOptions.current.usesDemoFixtures { DemoFixtures.scheduleForumArrivals(in: channelID, model: self) }
+    }
+
+    /// Puts a board's live posts back in order, and shows what was waiting: Discord's
+    /// `refreshThreadIds`, on opening a board, its query changing, a thread list
+    /// syncing, and "N New Posts".
+    func refreshForumOrder(_ channelID: ChannelID) {
+        var board = forumBoard(for: channelID)
+        let live = channelIndex.threadIDs(inParent: channelID)
+            .compactMap { channelIndex[$0] }
+            .filter { $0.threadMetadata?.isArchived != true }
+        board.liveOrder = ForumOrder.livePosts(live, query: board.query)
+        board.waitingPostIDs = []
+        forumBoards[channelID] = board
+        threadRevision &+= 1
+    }
+
+    // MARK: How many are new
+
+    /// Asks how many messages each post the reader has opened has past their mark:
+    /// Discord's `D` in `435470`, at most 180 at a time, and each post once per
+    /// connection. **Op 28**, `s.REQUEST_FORUM_UNREADS` in the web build.
+    func requestForumUnreads(in channelID: ChannelID) {
+        // Only on a session that's up: an op on a socket that hasn't identified or
+        // resumed yet is a 4003, which is a reconnect. Until then they say "1+".
+        guard connectionState == .ready, let socket = sessionController.socket,
+              let guildID = channelIndex.guildID(of: channelID)
+        else { return }
+        let board = forumBoard(for: channelID)
+        var wanted: [(threadID: ChannelID, ackMessageID: MessageID)] = []
+        for postID in board.liveOrder where wanted.count < 180 {
+            guard forumPostUnreadCounts[postID] == nil, !forumUnreadsRequested.contains(postID),
+                  let post = channelIndex[postID], let state = readStates[postID],
+                  let mark = state.lastAcknowledgedID, state.isUnread(newest: post.lastMessageID)
+            else { continue }
+            wanted.append((postID, mark))
+        }
+        guard !wanted.isEmpty else { return }
+        forumUnreadsRequested.formUnion(wanted.map(\.threadID))
+        Task { await socket.requestForumUnreads(guildID: guildID, channelID: channelID, threads: wanted) }
+    }
+
+    /// `FORUM_UNREADS`, the answer.
+    func applyForumUnreads(_ counts: [ChannelID: Int]) {
+        guard !counts.isEmpty else { return }
+        forumPostUnreadCounts.merge(counts) { _, new in new }
+        threadRevision &+= 1
+    }
+
+    /// A message arriving counts up on a post that has a count, as Discord's
+    /// `MESSAGE_CREATE` handler has it. One with none says "1+" until asked.
+    func countForumPostMessage(_ message: Message) {
+        guard message.authorID != currentUserID, forumPostUnreadCounts[message.channelID] != nil else { return }
+        forumPostUnreadCounts[message.channelID, default: 0] += 1
+        threadRevision &+= 1
+    }
+
+    /// The post's been read: nothing past the mark, and counting from there.
+    func noteForumPostRead(_ channelID: ChannelID) {
+        guard let parentID = channelIndex[channelID]?.parentID, channelIndex[parentID]?.isForumLike == true else { return }
+        forumPostUnreadCounts[channelID] = 0
+        threadRevision &+= 1
     }
 
     /// The shared loader behind the board and the flyout.
     private func loadThreadList(_ channelID: ChannelID) {
         var board = forumBoard(for: channelID)
-        guard board.postIDs.isEmpty, !board.isLoading else {
+        guard board.postIDs.isEmpty, !board.isLoading, !LaunchOptions.current.usesDemoFixtures else {
             forumBoards[channelID] = board
             return
         }
@@ -326,8 +404,12 @@ extension AppModel {
     func setForumQuery(_ query: ForumQuery, in channelID: ChannelID) {
         var board = forumBoard(for: channelID)
         guard board.query != query else { return }
-        let needsFetch = !board.query.matchesFetch(query)
+        let needsFetch = !board.query.matchesFetch(query) && !LaunchOptions.current.usesDemoFixtures
         board.query = query
+        defer {
+            refreshForumOrder(channelID)
+            refreshMenuContext()
+        }
 
         if needsFetch {
             board.postIDs = []
@@ -399,41 +481,218 @@ extension AppModel {
     ///
     /// Gated here as well as where the button is drawn: dimming a control is a
     /// statement and a click is an action — §5.5.
-    func beginForumPost(in channelID: ChannelID) {
+    func beginForumPost(in channelID: ChannelID, title: String? = nil) {
         guard let channel = channelIndex[channelID], channel.isForumLike else { return }
         guard permissionGate.canSend(in: channelID) else { return }
+        if let title { forumPostDrafts[channelID, default: ForumPostDraft()].title = title }
+        // The forum's own template, where the box is still empty.
+        if let template = channel.template, !template.isEmpty, messages(in: channelID)?.draft.isEmpty != false {
+            mutateBox(channelID) { $0.draft = template }
+        }
         composingPostIn = channelID
     }
 
+    /// Whether a post was started here and left: anything beyond the forum's own
+    /// template. See `ForumPostDraft`.
+    func hasForumPostDraft(in channelID: ChannelID) -> Bool {
+        let box = messages(in: channelID)
+        let words = (box?.draft ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let template = (channelIndex[channelID]?.template ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return forumPostDrafts[channelID]?.isEmpty == false
+            || box?.attachments.isEmpty == false
+            || (!words.isEmpty && words != template)
+    }
+
+    /// Leaves the card, and the post where it is: the next New Post comes back to it.
     func cancelForumPost() { composingPostIn = nil }
 
-    /// Sends a new post, and opens it.
-    ///
-    /// **Not optimistic, and deliberately not.** A post is a channel: an
-    /// optimistic one would have an id this client invented, which the sidebar,
-    /// the index and any click on it would then be holding. The sheet closes and
-    /// the board shows the post when the server answers — which is one round
-    /// trip, on an action that already involved typing a title.
-    func submitForumPost(title: String, body: String, tags: Set<ForumTagID>) {
-        guard let channelID = composingPostIn else { return }
-        guard let channel = channelIndex[channelID] else { return }
-        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        // The forum's own rule, enforced before the round trip rather than after
-        // a 400: a forum with `REQUIRE_TAG` refuses a post with none.
-        guard !channel.requiresTag || !tags.isEmpty else { return }
-
+    /// Throws the started post away.
+    func discardForumPost(in channelID: ChannelID) {
+        forumPostDrafts[channelID] = nil
+        mutateBox(channelID) { box in
+            box.draft = ""
+            box.attachments = []
+            box.attachmentRefusal = nil
+        }
         composingPostIn = nil
-        sessionController.createForumPost(
-            in: channelID,
-            name: name,
-            content: body,
-            tags: Array(tags),
-            // The forum's own default, so a post inherits what the channel was
-            // set up with rather than a constant chosen here.
-            autoArchiveMinutes: channel.threadMetadata?.autoArchiveMinutes ?? 4320
-        )
     }
+
+    /// Discord's checks (`ix`), before the round trip: a title, and something to say.
+    /// The button is already off for most of these; this is for ⌘Return, and for a
+    /// card that came up already holding a draft.
+    func forumPostProblems(in channelID: ChannelID) -> ForumPostRefusal? {
+        let draft = forumPostDrafts[channelID] ?? ForumPostDraft()
+        let box = messages(in: channelID)
+        var refusal = ForumPostRefusal()
+        if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            refusal.titleError = "A title is required"
+        }
+        let hasWords = !(box?.draft ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasFiles = !(box?.attachments ?? []).isEmpty || draft.thumbnail != nil
+        if !hasWords, !hasFiles, draft.stickerID == nil {
+            refusal.messageError = "A message is required"
+        }
+        if channelIndex[channelID]?.requiresTag == true, draft.tags.isEmpty {
+            refusal.tagError = "A tag is required to create a post in this channel"
+        }
+        return refusal.isEmpty ? nil : refusal
+    }
+
+    /// Sends the post in a forum's card, and answers with why it wasn't made.
+    ///
+    /// **The card stays up until the server answers**, because a post is a channel:
+    /// there's no optimistic row to hold it, and a card that closed on the press
+    /// took everything written with it when the server said no. Nil means it's made
+    /// and the card has gone.
+    func submitForumPost(in channelID: ChannelID) async -> ForumPostRefusal? {
+        if let problems = forumPostProblems(in: channelID) { return problems }
+        guard let channel = channelIndex[channelID] else {
+            return ForumPostRefusal(generalError: "An error occurred, please try again.")
+        }
+        guard !holdsForSlowmode(channelID) else { return ForumPostRefusal() }
+        let draft = forumPostDrafts[channelID] ?? ForumPostDraft()
+        let box = messages(in: channelID)
+        let content = (box?.draft ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // A thumbnail goes up first, as Discord's does.
+        let files = (draft.thumbnail.map { [$0] } ?? []) + (box?.attachments ?? [])
+        defer { forumPostUploadProgress[channelID] = nil }
+        do {
+            let post: Channel
+            if LaunchOptions.current.usesDemoFixtures {
+                post = try await DemoFixtures.createForumPost(draft, content: content, files: files, in: channel, model: self)
+            } else {
+                post = try await sessionController.createForumPost(
+                    in: channelID,
+                    name: draft.title.trimmingCharacters(in: .whitespacesAndNewlines),
+                    content: content,
+                    tags: Array(draft.tags),
+                    // The forum's own default, so a post inherits what the channel
+                    // was set up with: Discord's `268761`, three days otherwise.
+                    autoArchiveMinutes: channel.defaultAutoArchiveDuration ?? 4320,
+                    stickerIDs: draft.stickerID.map { [$0] } ?? [],
+                    attachments: PendingAttachment.anonymising(files)
+                )
+            }
+            startSlowmode(afterSendIn: channelID)
+            markForumGuidelinesSeen(in: channelID)
+            forumPostDrafts[channelID] = nil
+            mutateBox(channelID) { box in
+                box.draft = ""
+                box.attachments = []
+                box.attachmentRefusal = nil
+            }
+            composingPostIn = nil
+            applyCreatedForumPost(post, in: channelID)
+            return nil
+        } catch {
+            sessionController.traceForumPostFailure(error, in: channelID)
+            return forumPostRefusal(for: error, in: channelID)
+        }
+    }
+
+    /// Discord's `Y` and the form's `catch`: AutoMod and a bad name under their own
+    /// fields, the cap and the rate limit in its words, and a wait set for slowmode.
+    private func forumPostRefusal(for error: any Error, in channelID: ChannelID) -> ForumPostRefusal {
+        switch error {
+        case DiscordREST.Failure.slowmode(let retryAfter):
+            applySlowmodeRefusal(retryAfter: retryAfter, in: channelID)
+            return ForumPostRefusal()
+        case DiscordREST.Failure.api(_, 20016?, _):
+            applySlowmodeRefusal(retryAfter: nil, in: channelID)
+            return ForumPostRefusal()
+        case DiscordREST.Failure.api(_, 200_001?, let message):
+            return ForumPostRefusal(titleError: message ?? ForumPostRefusal.blocked)
+        case DiscordREST.Failure.api(_, 200_000?, let message):
+            return ForumPostRefusal(messageError: message ?? ForumPostRefusal.blocked)
+        case DiscordREST.Failure.api(_, 50035?, _):
+            return ForumPostRefusal(titleError: "A title is required")
+        case DiscordREST.Failure.api(_, 160_006?, _):
+            return ForumPostRefusal(
+                generalError: "This server has reached the maximum number of active posts. Free up space by archiving a post."
+            )
+        case DiscordREST.Failure.api(429, _, _):
+            return ForumPostRefusal(generalError: "You are being rate limited.")
+        case DiscordREST.Failure.api(_, _, let message?) where !message.isEmpty:
+            return ForumPostRefusal(generalError: message)
+        case DemoFixtures.ForumPostError.blockedTitle:
+            return ForumPostRefusal(titleError: ForumPostRefusal.blocked)
+        default:
+            return ForumPostRefusal(generalError: "An error occurred, please try again.")
+        }
+    }
+
+    // MARK: Adding to a post
+
+    /// Whether to offer a post's author to put a picture on the post itself, instead
+    /// of sending it as the post's first reply: Discord's `xz` (`256265`). The author's
+    /// own post, nobody has answered it, and it has no picture yet, which is what the
+    /// board would otherwise show nothing for.
+    func offersAddingMedia(_ files: [PendingAttachment], to channelID: ChannelID) -> Bool {
+        guard files.contains(where: { $0.isImage || $0.isVideo }),
+              let post = channelIndex[channelID],
+              ThreadGate.isForumPost(post, parent: post.parentID.flatMap { channelIndex[$0] }),
+              post.ownerID == currentUserID,
+              (post.threadMessageCount ?? 0) == 0,
+              let opener = message(MessageID(rawValue: channelID.rawValue), in: channelID)
+        else { return false }
+        return !opener.attachments.contains(where: ForumPostCard.isPictureOrVideo)
+    }
+
+    /// "Add to Post". The files go on the opening message and leave the composer; the
+    /// words stay in it, as Discord's do, because nothing has said them yet.
+    func addMediaToPost() async {
+        guard let prompt = forumAddMediaPrompt, !prompt.isUploading else { return }
+        forumAddMediaPrompt?.isUploading = true
+        forumAddMediaPrompt?.failure = nil
+        do {
+            let updated = if LaunchOptions.current.usesDemoFixtures {
+                try await DemoFixtures.addMediaToPost(prompt.files, postID: prompt.postID, model: self)
+            } else {
+                try await sessionController.addMedia(prompt.files, toPost: prompt.postID)
+            }
+            mutateBox(prompt.postID) { box in
+                box.upsert(updated)
+                box.attachments = []
+                box.attachmentRefusal = nil
+            }
+            messageContentRevision &+= 1
+            applyOpenerUpdated(updated)
+            forumAddMediaPrompt = nil
+        } catch {
+            forumAddMediaPrompt?.isUploading = false
+            forumAddMediaPrompt?.failure = SessionController.describe(error)
+        }
+    }
+
+    /// The post as its row would show it with the files on it: what the prompt draws.
+    func forumAddMediaPreview(_ prompt: ForumAddMediaPrompt) -> ForumPostPresentation? {
+        guard let forumID = channelIndex[prompt.postID]?.parentID else { return nil }
+        let board = forumPresentation(for: forumID)
+        guard var row = (board.posts + board.olderPosts).first(where: { $0.id == prompt.postID }) else { return nil }
+        row.media = prompt.files
+            .filter { $0.isImage || $0.isVideo }
+            .prefix(1)
+            .map { ForumPostMedia(url: $0.url, isSpoiler: $0.isSpoiler, isVideo: $0.isVideo) }
+        return row
+    }
+
+    // MARK: Guidelines
+
+    /// Whether a post's card opens with the guidelines showing: the first post in
+    /// a forum, as Discord's `hasSeen` keeps it.
+    func hasSeenForumGuidelines(in channelID: ChannelID) -> Bool {
+        (UserDefaults.standard.array(forKey: Self.seenGuidelinesKey) as? [String])?
+            .contains(String(channelID.rawValue)) ?? false
+    }
+
+    func markForumGuidelinesSeen(in channelID: ChannelID) {
+        var seen = UserDefaults.standard.array(forKey: Self.seenGuidelinesKey) as? [String] ?? []
+        guard !seen.contains(String(channelID.rawValue)) else { return }
+        seen.append(String(channelID.rawValue))
+        UserDefaults.standard.set(seen, forKey: Self.seenGuidelinesKey)
+    }
+
+    private static var seenGuidelinesKey: String { "forum.seenGuidelines" }
 
     /// A post the server just made. Put on the board, and opened.
     func applyCreatedForumPost(_ post: Channel, in channelID: ChannelID) {
@@ -445,6 +704,10 @@ extension AppModel {
         if board.seen.insert(post.id).inserted { board.postIDs.insert(post.id, at: 0) }
         board.totalResults += 1
         forumBoards[channelID] = board
+        // Anything waiting comes in with it, as Discord's `RESORT_THREADS` does:
+        // the reader's own post at the top of an otherwise frozen board isn't what
+        // the board now looks like.
+        refreshForumOrder(channelID)
         if let currentUserID {
             // Opening a post joins it — Discord's own client does, and the
             // author of a post is in it by definition.
@@ -480,6 +743,7 @@ extension AppModel {
         board.hasMore = page.hasMore
         board.totalResults = page.totalResults
         forumBoards[channelID] = board
+        if replacing { refreshForumOrder(channelID) }
 
         applyThreadPeople(users: page.authors, members: page.members, guildID: channelIndex.guildID(of: channelID))
         for membership in page.memberships { threadMemberships[membership.id] = membership }
@@ -507,6 +771,8 @@ extension AppModel {
             guildID: channelIndex.guildID(of: channelID)
         )
         for membership in page.memberships { threadMemberships[membership.id] = membership }
+        refreshForumOrder(channelID)
+        requestForumUnreads(in: channelID)
         threadRevision &+= 1
         sidebarRevision &+= 1
     }
@@ -852,9 +1118,19 @@ extension AppModel {
         sidebarRevision &+= 1
     }
 
-    func applyThreadUpsert(_ thread: Channel, membership: ThreadMember?) {
+    /// - Parameter isNewlyCreated: the gateway's `newly_created`, which is the only
+    ///   thing that says a post didn't exist a moment ago. Somebody else's waits
+    ///   behind the board's "N New Posts", as Discord's `THREAD_CREATE` handler has it,
+    ///   and it starts a count of its own.
+    func applyThreadUpsert(_ thread: Channel, membership: ThreadMember?, isNewlyCreated: Bool = false) {
         channelIndex.upsertThread(thread)
         if let membership { threadMemberships[membership.id] = membership }
+        if isNewlyCreated, let parentID = thread.parentID, channelIndex[parentID]?.isForumLike == true {
+            forumPostUnreadCounts[thread.id] = 0
+            if thread.ownerID != currentUserID, forumBoards[parentID] != nil {
+                forumBoards[parentID]?.waitingPostIDs.insert(thread.id)
+            }
+        }
         permissionGate.invalidate()
         threadRevision &+= 1
         sidebarRevision &+= 1
@@ -871,6 +1147,22 @@ extension AppModel {
         board.firstMessages[channelID] = nil
         board.detailsAnswered.insert(channelID)
         forumBoards[forumID] = board
+        threadRevision &+= 1
+    }
+
+    /// A post's opening message changed. Merged as a transcript merges one, since an
+    /// edit arrives partial: what the board shows of it is otherwise what it said
+    /// when the board opened.
+    func applyOpenerUpdated(_ message: Message) {
+        guard message.id.rawValue == message.channelID.rawValue,
+              let forumID = channelIndex[message.channelID]?.parentID,
+              var merged = forumBoards[forumID]?.firstMessages[message.channelID]
+        else { return }
+        merged.content = message.content
+        merged.editedAt = message.editedAt
+        merged.flags = message.flags
+        if let payload = message.payload { merged.payload = payload }
+        forumBoards[forumID]?.firstMessages[message.channelID] = merged
         threadRevision &+= 1
     }
 
@@ -905,6 +1197,13 @@ extension AppModel {
     ) {
         channelIndex.replaceThreads(threads, inParents: parentIDs, guildID: guildID)
         for membership in memberships { threadMemberships[membership.id] = membership }
+        // The board on screen starts over, as Discord's `THREAD_LIST_SYNC` handler
+        // has it. The others do when they're next opened.
+        if let selected = selectedChannelID, channelIndex[selected]?.isForumLike == true,
+           channelIndex.guildID(of: selected) == guildID
+        {
+            refreshForumOrder(selected)
+        }
         permissionGate.invalidate()
         threadRevision &+= 1
         sidebarRevision &+= 1

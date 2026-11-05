@@ -11,6 +11,22 @@ enum EditorKey: Equatable {
 /// placeholder drawn in the caret's own line, and the keys and focus its owner
 /// asks about reported out.
 final class MarkdownTextView: NSTextView {
+    /// **`-[NSTextView setLayer:]` writes the view's own frame**, from geometry that
+    /// includes any scale an ancestor is animating through at that moment. A field
+    /// inside a card that's growing into place gets its layer mid-grow and comes out
+    /// at (-3, -3.4), and a few points too big, for good: the first line and the left
+    /// of every line cut off (caught in a stack trace, 2026-11-05). A document view
+    /// has no business anywhere but its clip view's origin, so it keeps the frame it
+    /// had.
+    override var layer: CALayer? {
+        get { super.layer }
+        set {
+            let settled = frame
+            super.layer = newValue
+            if frame != settled { frame = settled }
+        }
+    }
+
     var placeholder: NSAttributedString? {
         didSet { refreshPlaceholder(force: true) }
     }
@@ -264,6 +280,24 @@ final class MarkdownEditorContainer: NSScrollView {
         let widthChanged = abs(newSize.width - frame.width) >= 0.5
         super.setFrameSize(newSize)
         if widthChanged { remeasure() }
+        settleScroll()
+    }
+
+    /// **All of it fits, so nothing should be scrolled away.** Words set from outside
+    /// before the field had its size (a forum's template) scrolled to their last line
+    /// in a one-line, narrow field, and the field growing around them left them
+    /// there. Nothing here scrolls sideways at all.
+    ///
+    /// The few points' grace is for a line whose styling has just made it taller: the
+    /// field grows to it a moment later, and there's nothing there to scroll to.
+    func settleScroll() {
+        guard let manager = textView.textLayoutManager else { return }
+        let origin = contentView.bounds.origin
+        let fits = manager.usageBoundsForTextContainer.height <= frame.height + 4
+        let settled = CGPoint(x: 0, y: fits ? 0 : origin.y)
+        guard origin != settled else { return }
+        contentView.scroll(to: settled)
+        reflectScrolledClipView(contentView)
     }
 
     /// Measures the text at the current width and reports the height the
@@ -277,6 +311,10 @@ final class MarkdownEditorContainer: NSScrollView {
         let lower = line * CGFloat(lines.lowerBound)
         let upper = line * CGFloat(lines.upperBound)
         let height = min(max(ceil(content), lower), upper)
+        // A field that holds all of its words has nothing to scroll, and settling one
+        // back to its first line would otherwise flash a bar over them.
+        let overflows = ceil(content) > upper
+        if hasVerticalScroller != overflows { hasVerticalScroller = overflows }
         guard abs(height - fittedHeight) >= 0.5 else { return }
         fittedHeight = height
         onHeightChange?(height)

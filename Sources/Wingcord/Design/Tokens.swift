@@ -548,18 +548,12 @@ nonisolated enum Metrics {
     /// Each thumbnail when one message carries several.
     static let attachmentThumbnail: CGFloat = 170
 
-    /// The picture block on a forum post's gallery card.
-    ///
-    /// Fixed rather than aspect-derived: a grid whose cards are each as tall as
-    /// their own screenshot is a grid with ragged rows, and the picture is a
-    /// hint about the post rather than the post.
-    static let forumCardArtHeight: CGFloat = 150
-    /// The picture on a forum post's row.
+    /// The picture on a forum post's row: Discord's `ef` and `ej`.
     ///
     /// Square, and small enough that the title beside it still gets two lines at
     /// the narrowest the column goes to — the picture is a hint about the post,
     /// not the post.
-    static let forumThumbnail: CGFloat = 64
+    static let forumThumbnail: CGFloat = 72
 
     /// The widest an embed card is drawn. Capped rather than full-width: an
     /// embed is a card *inside* a message, and one that runs the whole column

@@ -39,8 +39,10 @@ struct AttachmentBody: Encodable {
     /// A clip's fields — Discord writes them on the message's entry too
     /// (its `d` in the attachment module: `a.is_clip=!0, a.title=…`).
     var clip: ClipFields?
+    var is_thumbnail: Bool?
 
     init(_ attachment: UploadedAttachment) {
+        is_thumbnail = attachment.isThumbnail ? true : nil
         id = attachment.id
         filename = attachment.filename
         uploaded_filename = attachment.uploadedFilename
@@ -50,7 +52,7 @@ struct AttachmentBody: Encodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, filename, uploaded_filename, description, original_content_type
+        case id, filename, uploaded_filename, description, original_content_type, is_thumbnail
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -60,6 +62,7 @@ struct AttachmentBody: Encodable {
         try container.encode(uploaded_filename, forKey: .uploaded_filename)
         try container.encodeIfPresent(description, forKey: .description)
         try container.encodeIfPresent(original_content_type, forKey: .original_content_type)
+        try container.encodeIfPresent(is_thumbnail, forKey: .is_thumbnail)
         try clip?.encode(to: encoder)
     }
 }

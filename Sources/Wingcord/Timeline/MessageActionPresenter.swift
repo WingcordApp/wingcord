@@ -287,6 +287,17 @@ private struct FakeNitroEmbedDialog: View {
         Color.clear
             .modal(
                 isPresented: Binding(
+                    get: { model.forumAddMediaPrompt != nil },
+                    set: { if !$0 { model.forumAddMediaPrompt = nil } }
+                ),
+                style: .alert
+            ) {
+                if let prompt = model.forumAddMediaPrompt {
+                    ForumAddMediaCard(prompt: prompt)
+                }
+            }
+            .modal(
+                isPresented: Binding(
                     get: { model.fakeNitroEmbedPrompt != nil },
                     set: { if !$0 { model.fakeNitroEmbedPrompt = nil } }
                 ),

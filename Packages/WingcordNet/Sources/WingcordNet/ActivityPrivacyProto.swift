@@ -56,6 +56,17 @@ public enum ActivitySharingScope: UInt64, Hashable, Sendable, CaseIterable {
     /// "Do not share in any servers." Friends still see it.
     case friendsOnly = 3
 
+    /// Whether this holds a new server's activity back by default — Discord's
+    /// `960736`, the initial state of the invite sheet's "Show your activity
+    /// status": held back everywhere, or in a server over 200 members.
+    public func restricts(memberCount: Int?) -> Bool {
+        switch self {
+        case .unset, .everywhere: false
+        case .friendsOnly: true
+        case .smallServersOnly: (memberCount ?? 0) > 200
+        }
+    }
+
     public var title: String {
         switch self {
         case .unset, .everywhere: "Share in all servers"

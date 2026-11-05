@@ -37,6 +37,8 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
     /// What makes it a Discord clip — shared from the clips library, never
     /// set on a file dropped in the composer.
     var clip: ClipUpload?
+    /// A media post's own picture for the board. It goes up first.
+    var isThumbnail = false
 
     init(url: URL, id: UUID = UUID()) {
         self.id = id
@@ -62,6 +64,7 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
         copy.isSpoiler = isSpoiler
         copy.anonymise = anonymise
         copy.clip = clip
+        copy.isThumbnail = isThumbnail
         return copy
     }
 

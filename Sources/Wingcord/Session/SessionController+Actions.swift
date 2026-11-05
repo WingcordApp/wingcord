@@ -23,6 +23,11 @@ extension SessionController {
         adding: Bool,
         pending: PendingReaction
     ) {
+        // Nobody to tell in `--demo`, and the chip has already changed.
+        if LaunchOptions.current.usesDemoFixtures {
+            model.reactionsInFlight.remove(pending)
+            return
+        }
         Task { [weak self] in
             guard let self else { return }
             defer { model.reactionsInFlight.remove(pending) }

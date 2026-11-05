@@ -17,6 +17,25 @@ enum DemoGameArt {
         art(symbol: symbol, top: top, bottom: bottom, file: "\(name)-tile", size: NSSize(width: 128, height: 128), glyph: 72, lift: 0)
     }
 
+    /// A wide picture of the same, standing in for a screenshot or an invite's
+    /// splash: what a post's mosaic and the invite sheet's right side are laid
+    /// out against.
+    struct Scene {
+        var name: String
+        var symbol: String
+        var top: RGB
+        var bottom: RGB
+        var size = CGSize(width: 1200, height: 800)
+    }
+
+    static func picture(_ scene: Scene) -> URL? {
+        art(
+            symbol: scene.symbol, top: scene.top, bottom: scene.bottom, file: scene.name,
+            size: NSSize(width: scene.size.width, height: scene.size.height),
+            glyph: min(scene.size.width, scene.size.height) * 0.42, lift: 0
+        )
+    }
+
     private static func art(
         symbol: String, top: RGB, bottom: RGB, file name: String, size: NSSize, glyph glyphSize: CGFloat, lift: CGFloat
     ) -> URL? {

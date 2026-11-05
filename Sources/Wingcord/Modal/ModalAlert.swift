@@ -115,6 +115,7 @@ struct ModalAlert<Accessory: View>: View {
             symbolName: action.symbolName,
             role: action.role,
             isIrreversible: action.isIrreversible,
+            isWorking: action.isWorking,
             fills: true
         ) {
             action.perform()
@@ -135,6 +136,8 @@ struct ModalAlertAction: Identifiable {
     var closes = true
     /// Whether it can be pressed yet — Save with nothing changed cannot.
     var isEnabled = true
+    /// A write in flight: a spinner where its symbol was.
+    var isWorking = false
     var perform: () -> Void
 
     var id: String { title }

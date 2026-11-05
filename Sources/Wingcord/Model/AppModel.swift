@@ -164,6 +164,12 @@ final class AppModel {
     /// Keyed by the forum rather than held on the selected channel, so paging
     /// back to a board that was already open does not start from an empty list.
     var forumBoards: [ChannelID: ForumBoard] = [:]
+    /// How far a post's files have got, while they go up.
+    var forumPostUploadProgress: [ChannelID: Double] = [:]
+    /// Posts started and not yet sent, by forum: what New Post comes back to.
+    var forumPostDrafts: [ChannelID: ForumPostDraft] = [:]
+    /// The Post Guidelines popover on a forum's toolbar row.
+    var areForumGuidelinesShown = false
     /// Post ids gathered from rows that have just appeared, waiting to go out
     /// as one `post-data` call. Keyed by the forum they belong to.
     ///
@@ -776,6 +782,9 @@ final class AppModel {
     /// A Fake Nitro send or edit waiting on "Hold on!" — see
     /// `needsFakeNitroEmbedPrompt`.
     var fakeNitroEmbedPrompt: FakeNitroEmbedPrompt?
+    /// "Add media to the original post?", asked of a post's author before the first
+    /// reply to it, if that reply is a picture. See `offersAddingMedia`.
+    var forumAddMediaPrompt: ForumAddMediaPrompt?
     /// The plugin's refusal of an animated Fake Nitro sticker where files may
     /// not be attached.
     var fakeNitroStickerRefused = false
@@ -1154,6 +1163,18 @@ final class AppModel {
     /// A role's icon where `--demo` has no real one on the CDN to point at. Empty
     /// outside it. See `DemoFixtures.populateRoster`.
     var demoRoleIcons: [RoleID: URL] = [:]
+    /// A post's replies since the reader last read it, where `--demo` has no
+    /// read state to count from. Empty outside it.
+    /// Messages past the reader's mark, per post: Discord's
+    /// `ForumPostUnreadCountStore`. Missing is "nobody's said", and a post with
+    /// unread messages then says "1+".
+    @ObservationIgnored var forumPostUnreadCounts: [ChannelID: Int] = [:]
+    /// Posts already asked about on this connection.
+    @ObservationIgnored var forumUnreadsRequested: Set<ChannelID> = []
+    /// See `demoTranscript(for:)`. Empty outside `--demo`.
+    @ObservationIgnored var demoTranscripts: [ChannelID: MessageBox] = [:]
+    /// An invite's art where `--demo` has nothing on the CDN. Empty outside it.
+    @ObservationIgnored var demoInviteArt: [String: DemoInviteArt] = [:]
     var memberVerifications: [GuildID: MemberVerification] = [:]
     var gameServers: [GuildID: [GameServer]] = [:]
     /// Connection instructions, by SKU rather than by instance: two servers on
@@ -1180,6 +1201,8 @@ final class AppModel {
 
     /// The Add a Server sheet — nil when it is not up.
     var joinServerSheet: JoinServerSheetState?
+    /// The sheet an invite link opens. See `AppModel+InviteSheet`.
+    var inviteSheet: InviteSheetState?
     /// The onboarding gate, for the one server that is showing one.
     ///
     /// **One at a time, by construction.** It takes the detail column, and a

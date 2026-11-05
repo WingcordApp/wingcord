@@ -3,10 +3,9 @@ import WingcordCore
 
 // MARK: - A forum, as a board of posts
 //
-// **The reading surface, with one glass bar over it.** A board is content the
-// reader is reading, not a page about the server — so the ground is opaque and
-// the only floating thing is the bar carrying the filter controls, exactly as
-// the transcript's only floating thing is the composer.
+// **The reading surface, with nothing over it but the toolbar row**, which carries
+// every control this page has (`ForumToolbar`). A board is content the reader is
+// reading, not a page about the server.
 //
 // The cards are `.ultraThinMaterial` structure rather than glass, and that is
 // not a stylistic choice: §4 forbids `.interactive()` glass on a row in a
@@ -19,37 +18,61 @@ struct ForumPane: View {
     var open: (ChannelID) -> Void
     /// A right-click on a post: its own menu, `ThreadOptionsMenu`.
     var openMenu: (ChannelID, CGRect) -> Void
-    var setQuery: (ForumQuery) -> Void
     var loadMore: () -> Void
     var reveal: ([ChannelID]) -> Void
     var newPost: () -> Void
-    /// **A binding rather than a setter closure**, and the difference is not
-    /// style: `Binding(get:set:)` built over a stored non-`Sendable` closure is
-    /// converted to `@isolated(any) @Sendable` by `TextField`, which the release
-    /// build warns about as a possible data race. Handed down from the container
-    /// — which is where the store lives anyway — there is nothing to convert.
-    @Binding var searchText: String
+    var newPostTitled: (String) -> Void
     var clearSearch: () -> Void
+    /// A click on a row's reaction.
+    var react: (ChannelID, ForumPostReaction) -> Void
+    /// "N New Posts": what's waiting comes in, and the order is made fresh.
+    var showNewPosts: () -> Void
 
     /// The board's width, for the gallery's column count. Moves on a resize,
     /// never on a scroll.
     @State private var boardWidth: CGFloat = 0
+    @State private var scrollPosition = ScrollPosition(edge: .top)
+    /// How far down the header reaches. Read from the safe area outside the part
+    /// that runs under it, as a transcript's is.
+    @State private var chromeHeight: CGFloat = 0
+    @Environment(\.motion) private var motion
 
-    var body: some View { board }
+    var body: some View {
+        board
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { chromeHeight = $0 }
+            // A board stays where it was left only within one forum.
+            .onChange(of: presentation.channelID) { scrollPosition.scrollTo(edge: .top) }
+            .overlay(alignment: .top) {
+                // **The animation is the pill's alone.** On the board it would take in
+                // the rows the pill's press brings, and a bulk insert under an
+                // animation is what `defaultScrollAnchor` below is there for.
+                ZStack {
+                    if presentation.newPostCount > 0 {
+                        ForumNewPostsPill(count: presentation.newPostCount, action: showWaitingPosts)
+                            .padding(.top, Spacing.base)
+                            .transition(.materialize(from: .top, blurring: false))
+                    }
+                }
+                .animation(motion.standard, value: presentation.newPostCount > 0)
+            }
+    }
+
+    private func showWaitingPosts() {
+        showNewPosts()
+        withAnimation(motion.standard) { scrollPosition.scrollTo(edge: .top) }
+    }
 
     private var board: some View {
         ScrollView {
             LazyVStack(spacing: Spacing.snug) {
-                if let guidelines = presentation.guidelines {
-                    ForumGuidelines(text: guidelines)
-                }
-
                 if presentation.isSearching {
                     ForumSearchSummary(
                         isSearching: presentation.isLoading,
                         count: presentation.posts.count,
                         phrase: presentation.searchText.trimmingCharacters(in: .whitespacesAndNewlines),
-                        clear: clearSearch
+                        canPost: presentation.canPost,
+                        clear: clearSearch,
+                        newPostTitled: newPostTitled
                     )
                 }
 
@@ -67,6 +90,7 @@ struct ForumPane: View {
             .padding(.horizontal, Spacing.margin)
             .padding(.bottom, Spacing.group)
         }
+        .scrollPosition($scrollPosition)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { boardWidth = $0 }
         .scrollBounceBehavior(.always)
         // **The board opens at its newest post, and stays there.**
@@ -79,29 +103,15 @@ struct ForumPane: View {
         // keep whatever offset it had. A page arriving is not a gesture and
         // owes no animation; the anchor says where the list belongs.
         .defaultScrollAnchor(.top)
-        .softScrollEdgesVertical()
-        // **No `ignoresSafeArea` here, and its absence is the fix for a real
-        // bug.** With it, the scroll view extended under the titlebar and the
-        // first posts were hidden behind the bar — the board looked like it had
-        // opened halfway down the list. Worse, the height the bar was padded by
-        // was measured on *this* view, which ignored the inset and therefore
-        // reported zero: §2's rule, "a reader that ignores an inset has already
-        // been handed the region the inset describes". `safeAreaBar` composes
-        // with the window's own safe area on its own; nothing here has to
-        // measure anything.
-        //
-        // `safeAreaBar`, not `safeAreaInset`: the filter row registers as a bar,
-        // which is what the scroll edge effect keys off. Without it the cards
-        // slide under the chrome sharp and unreadable.
-        .floatingTopBar {
-            ForumFilterBar(
-                presentation: presentation,
-                setQuery: setQuery,
-                newPost: newPost,
-                searchText: $searchText,
-                clearSearch: clearSearch
-            )
-        }
+        // **Under the header and paying for it as a margin, with the rows dissolving
+        // on the way**, as a transcript's do. The tags on the toolbar row are no glass
+        // of their own, so a row passing sharp behind them is two lines of text on
+        // top of each other. There's no toolbar for a system edge effect to key off.
+        // The margin is what stops the first post starting behind the header.
+        .contentMargins(.top, chromeHeight + ForumTopFade.settle, for: .scrollContent)
+        .contentMargins(.top, chromeHeight, for: .scrollIndicators)
+        .mask { ForumTopFade(chromeHeight: chromeHeight) }
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     /// **Two layouts, two containers.** A gallery is not a list with the
@@ -118,7 +128,13 @@ struct ForumPane: View {
 
     private func rows(_ posts: [ForumPostPresentation]) -> some View {
         ForEach(posts) { post in
-            ForumPostRow(post: post, open: { open(post.id) }, openMenu: { openMenu(post.id, $0) })
+            ForumPostRow(
+                post: post,
+                showsThumbnail: boardWidth == 0 || boardWidth >= ForumPostRow.thumbnailBoardWidth,
+                open: { open(post.id) },
+                openMenu: { openMenu(post.id, $0) },
+                react: { react(post.id, $0) }
+            )
                 // **The batch is driven from the row appearing**, which is the
                 // only signal that says which posts are about to be drawn. The
                 // store filters out anything already asked for, so a list
@@ -138,8 +154,14 @@ struct ForumPane: View {
             spacing: ForumGallery.gap
         ) {
             ForEach(posts) { post in
-                ForumPostCard(post: post, open: { open(post.id) }, openMenu: { openMenu(post.id, $0) })
-                    .onAppear { reveal([post.id]) }
+                ForumGalleryCard(
+                    post: post,
+                    artRatio: presentation.isMedia ? 9.0 / 16 : 2.0 / 3,
+                    open: { open(post.id) },
+                    openMenu: { openMenu(post.id, $0) },
+                    react: { react(post.id, $0) }
+                )
+                .onAppear { reveal([post.id]) }
             }
         }
     }
@@ -170,6 +192,38 @@ struct ForumPane: View {
     }
 }
 
+/// The mask that dissolves the board under the header.
+///
+/// **Not `TranscriptTopFade`**, whose ramp reaches well past the header: a transcript
+/// has a welcome at its head to fade, and a board's first post would open half gone.
+/// This one is whole just below the row, and gone by the middle of its controls.
+private struct ForumTopFade: View {
+    var chromeHeight: CGFloat
+
+    /// How far below the header the rows are whole, and so where the first one opens.
+    static let settle: CGFloat = 6
+    /// How far the ramp runs above that.
+    private static let ramp: CGFloat = 24
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: max(0, chromeHeight + Self.settle - Self.ramp))
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .white.opacity(0.25), location: 0.42),
+                    .init(color: .white, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: Self.ramp)
+            Color.white
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 // MARK: - One post
 
 /// A post as a card.
@@ -178,15 +232,24 @@ struct ForumPane: View {
 /// recreated on every parent evaluation and would make the comparison always
 /// false, which is the failure mode that makes an `EquatableView` look like it
 /// does nothing. §2.
-private struct ForumPostRow: View, Equatable {
+struct ForumPostRow: View, Equatable {
+    /// How wide the board has to be for a row to keep its picture. Beside a post
+    /// in a small window it's a couple of hundred points, and a row holding its
+    /// counts and a picture was wider than that: it spilled out of both sides.
+    static let thumbnailBoardWidth: CGFloat = 360
+
     var post: ForumPostPresentation
+    var showsThumbnail = true
     var open: () -> Void
     var openMenu: (CGRect) -> Void
+    var react: (ForumPostReaction) -> Void = { _ in }
 
     @State private var isHovering = false
     @Environment(\.motion) private var motion
 
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.post == rhs.post }
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.post == rhs.post && lhs.showsThumbnail == rhs.showsThumbnail
+    }
 
     var body: some View {
         Button(action: open) {
@@ -198,31 +261,34 @@ private struct ForumPostRow: View, Equatable {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityLabel))
         .accessibilityAddTraits(.isButton)
+        .forumReactionAction(post.reaction, react: react)
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: Spacing.base) {
-            if post.isPinned || !post.tags.isEmpty {
-                ForumPostTagRow(post: post)
-            }
+        // The picture beside all of it, as Discord's is: under the words it would
+        // leave a gap at every row whose title is one line long.
+        HStack(alignment: .center, spacing: Spacing.snug) {
+            VStack(alignment: .leading, spacing: Spacing.base) {
+                if post.isPinned || !post.tags.isEmpty {
+                    ForumPostTagRow(post: post)
+                }
 
-            HStack(alignment: .top, spacing: Spacing.snug) {
                 VStack(alignment: .leading, spacing: Spacing.tight) {
                     title
                     if !post.preview.characters.isEmpty {
                         previewLine
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
 
-                if let url = post.thumbnailURL {
-                    RemoteImage(url: url, side: Metrics.forumThumbnail) { Color.clear }
-                        .frame(width: Metrics.forumThumbnail, height: Metrics.forumThumbnail)
-                        .clipShape(.rect(cornerRadius: Radius.row))
-                }
+                metadata
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            metadata
+            if showsThumbnail, let media = post.media.first {
+                ForumMediaTile(media: media, side: Metrics.forumThumbnail, marks: .small)
+                    .frame(width: Metrics.forumThumbnail, height: Metrics.forumThumbnail)
+                    .clipShape(.rect(cornerRadius: Radius.row))
+            }
         }
         .padding(Spacing.snug)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -243,8 +309,8 @@ private struct ForumPostRow: View, Equatable {
     /// row's now, as Discord's is.
     private var title: some View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
-            Text(post.title)
-                .font(.system(.headline, weight: .semibold))
+            Text(post.titleText)
+                .font(.system(.headline, weight: post.isUnread ? .semibold : .regular))
                 .foregroundStyle(Ink.primary)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
@@ -269,18 +335,19 @@ private struct ForumPostRow: View, Equatable {
         HStack(spacing: Spacing.base) {
             AvatarView(url: post.avatarURL, monogram: post.monogram, side: Metrics.avatarRow)
 
-            Label {
-                Text(post.messageCount, format: .number)
-            } icon: {
-                Image(systemName: "bubble.left.fill")
+            if let reaction = post.reaction {
+                ForumReactionChip(reaction: reaction, toggle: { react(reaction) })
             }
-            .font(.system(.caption, weight: .medium))
-            .foregroundStyle(Ink.tertiary)
-            .labelStyle(.titleAndIcon)
 
+            ForumMessageCount(count: post.messageCount, unreadWords: post.unreadWords)
+
+            // The first thing to go when there's no room: the counts are what's
+            // being scanned for.
             Text(RelativeTime.compact(post.lastActivity))
                 .font(.system(.caption))
-                .foregroundStyle(Ink.quaternary)
+                .foregroundStyle(Ink.secondary)
+                .lineLimit(1)
+                .layoutPriority(-1)
 
             Spacer(minLength: 0)
 
@@ -304,7 +371,7 @@ private struct ForumPostRow: View, Equatable {
     private func stateGlyph(_ symbol: String, label: String) -> some View {
         Image(symbol: symbol)
             .font(.system(.caption2))
-            .foregroundStyle(Ink.quaternary)
+            .foregroundStyle(Ink.secondary)
             .help(label)
             .accessibilityHidden(true)
     }
@@ -321,8 +388,259 @@ private struct ForumPostRow: View, Equatable {
         }
         if !post.authorName.isEmpty { parts.append("by \(post.authorName)") }
         parts.append("\(post.messageCount) messages")
+        if let unread = post.unreadWords { parts.append("\(unread) new") }
+        if let count = post.reaction?.count { parts.append(count == 1 ? "1 reaction" : "\(count) reactions") }
         if post.isArchived { parts.append("archived") }
         return parts.joined(separator: ", ")
+    }
+}
+
+// MARK: - What a row and a card share
+
+/// The count of a post's messages, and Discord's "(N New)" after it, in the accent's
+/// semibold (`ey`). Unread differs in weight and colour, never by paling what's read.
+private struct ForumMessageCount: View {
+    var count: Int
+    var unreadWords: String?
+
+    var body: some View {
+        HStack(spacing: Spacing.tight) {
+            Label {
+                Text(count, format: .number)
+            } icon: {
+                Image(systemName: "bubble.left.fill")
+            }
+            .font(.system(.caption, weight: .medium))
+            .foregroundStyle(Ink.secondary)
+            .labelStyle(.titleAndIcon)
+            if let unreadWords {
+                Text("(\(unreadWords) New)")
+                    .font(.system(.caption, weight: .semibold))
+                    .foregroundStyle(Palette.accent)
+                    .lineLimit(1)
+            }
+        }
+        .fixedSize()
+    }
+}
+
+/// The reaction a post's row offers: Discord's `eC` and `eS`. A button of its own
+/// inside the row, whose click takes it rather than opening the post.
+private struct ForumReactionChip: View {
+    var reaction: ForumPostReaction
+    var toggle: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.motion) private var motion
+
+    private var shape: RoundedRectangle { .rect(cornerRadius: TimelineMetrics.reactionChipRadius, style: .continuous) }
+
+    private var burst: SuperReactionPalette.Style? {
+        reaction.palette.map { colorScheme == .dark ? $0.dark : $0.light }
+    }
+
+    private var ink: Color {
+        if let burst { return Color(hex: burst.accent) }
+        return reaction.isMine ? Palette.accent : InkColor.secondary
+    }
+
+    private var fill: Color {
+        if let burst { return Color(hex: burst.background).opacity(burst.opacity) }
+        return reaction.isMine ? Palette.accent.opacity(0.18) : Palette.hoverFill
+    }
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: Spacing.tight) {
+                ExpressionGlyph(emoji: reaction.emoji, side: 14)
+                if let count = reaction.count {
+                    Text(count, format: .number)
+                        .font(.system(.caption, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(ink)
+                        .contentTransition(.numericText())
+                }
+            }
+            .padding(.horizontal, 6)
+            .frame(minWidth: TimelineMetrics.reactionChipHeight)
+            .frame(height: TimelineMetrics.reactionChipHeight)
+            .background(fill, in: shape)
+            .overlay {
+                if reaction.isMine { shape.strokeBorder(ink.opacity(0.7), lineWidth: 1) }
+            }
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .disabled(reaction.isReadOnly)
+        .fixedSize()
+        .animation(motion.standard, value: reaction.count)
+    }
+}
+
+extension View {
+    /// What the chip does, for somebody who can't reach it: the row is one element.
+    /// The same view whether there's a reaction or not, so a post gaining its first
+    /// doesn't become a new row.
+    fileprivate func forumReactionAction(
+        _ reaction: ForumPostReaction?,
+        react: @escaping (ForumPostReaction) -> Void
+    ) -> some View {
+        accessibilityActions {
+            if let reaction, !reaction.isReadOnly {
+                Button(reaction.isMine ? "Remove your reaction" : "React") { react(reaction) }
+            }
+        }
+    }
+}
+
+/// What's written over a post's picture.
+///
+/// **A plain fill, not clear glass**, because these are in a scrolling list: glass
+/// floats, and a board has a dozen of these moving at once (§4).
+private enum ForumMediaInk {
+    static let fill = Color.black.opacity(0.5)
+}
+
+/// One picture on a board. The whole of the space it's given, whatever the picture's
+/// shape, covered if it's a spoiler, and marked if it's a video or a GIF.
+private struct ForumMediaTile: View {
+    enum Marks { case small, regular }
+
+    var media: ForumPostMedia
+    /// The largest side it'll be drawn at, for the decode.
+    var side: CGFloat
+    var marks: Marks = .regular
+
+    /// A spoiler is decoded small: nothing fine is going to be seen of it, and the
+    /// blur over it costs less on fewer pixels.
+    private var decodeSide: CGFloat { media.isSpoiler ? min(side, 48) : side }
+
+    var body: some View {
+        Color.clear
+            .overlay {
+                RemoteImage(url: media.url, side: decodeSide) { Palette.surfaceRaised }
+                    .scaledToFill()
+                    .blur(radius: media.isSpoiler ? (marks == .small ? 8 : 18) : 0, opaque: media.isSpoiler)
+                    .overlay {
+                        if media.isSpoiler { Color.black.opacity(0.28) }
+                    }
+            }
+            .clipped()
+            .overlay {
+                if media.isSpoiler {
+                    mark("eye.slash.fill", label: "Spoiler")
+                } else if media.isVideo {
+                    mark("play.fill", label: "Video")
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if media.isAnimated, !media.isSpoiler {
+                    Text("GIF")
+                        .font(.system(.caption2, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .frame(height: 20)
+                        .background(ForumMediaInk.fill, in: .capsule)
+                        .padding(Spacing.tight)
+                        .accessibilityLabel(Text("GIF"))
+                }
+            }
+    }
+
+    private func mark(_ symbol: String, label: String) -> some View {
+        let circle: CGFloat = marks == .small ? 28 : 40
+        return Image(systemName: symbol)
+            .font(.system(size: circle * 0.42, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: circle, height: circle)
+            .background(ForumMediaInk.fill, in: .circle)
+            .accessibilityLabel(Text(label))
+    }
+}
+
+/// A post's pictures in the gallery: Discord's `lL`. One fills the block, two share
+/// it, three are one tall and two stacked, four are two by two, and any more say how
+/// many on the last.
+private struct ForumMediaMosaic: View {
+    var media: [ForumPostMedia]
+
+    private static let gap: CGFloat = 4
+
+    private var shown: [ForumPostMedia] { Array(media.prefix(WingcordCore.ForumPostCard.mosaicLimit)) }
+    private var hidden: Int { max(0, media.count - shown.count) }
+
+    var body: some View {
+        switch shown.count {
+        case 1:
+            tile(0, side: ForumGallery.maximumWidth)
+        case 2:
+            HStack(spacing: Self.gap) {
+                tile(0)
+                tile(1)
+            }
+        case 3:
+            HStack(spacing: Self.gap) {
+                tile(0)
+                VStack(spacing: Self.gap) {
+                    tile(1)
+                    tile(2)
+                }
+            }
+        default:
+            VStack(spacing: Self.gap) {
+                HStack(spacing: Self.gap) {
+                    tile(0)
+                    tile(1)
+                }
+                HStack(spacing: Self.gap) {
+                    tile(2)
+                    tile(3)
+                }
+            }
+        }
+    }
+
+    private func tile(_ index: Int, side: CGFloat = ForumGallery.maximumWidth / 2) -> some View {
+        ForumMediaTile(media: shown[index], side: side)
+            .overlay(alignment: .bottomTrailing) {
+                if index == shown.count - 1, hidden > 0 {
+                    Text("+\(hidden)")
+                        .font(.system(.subheadline, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, Spacing.base)
+                        .frame(height: 26)
+                        .background(ForumMediaInk.fill, in: .capsule)
+                        .padding(Spacing.tight)
+                        .accessibilityLabel(Text("\(hidden) more"))
+                }
+            }
+    }
+}
+
+/// "N New Posts": Discord's `sU`, over the top of the list rather than in its head,
+/// so it can be seen from anywhere in it.
+private struct ForumNewPostsPill: View {
+    var count: Int
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.tight) {
+                Image(systemName: "arrow.up")
+                    .font(.system(.footnote, weight: .bold))
+                Text(count == 1 ? "1 New Post" : "\(count) New Posts")
+                    .font(.system(.subheadline, weight: .semibold))
+                    .contentTransition(.numericText())
+            }
+            // Solid, because what's under this glass is anybody's picture.
+            .foregroundStyle(InkColor.solid)
+            .padding(.horizontal, Spacing.margin)
+            .frame(height: 36)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .fixedSize()
     }
 }
 
@@ -335,15 +653,19 @@ private struct ForumPostRow: View, Equatable {
 /// card's width and the tags sit over its foot where they cost no vertical space.
 /// A post with no picture is not a broken card — the opening line fills the same
 /// block, so the grid stays even.
-private struct ForumPostCard: View, Equatable {
+private struct ForumGalleryCard: View, Equatable {
     var post: ForumPostPresentation
+    /// The picture block's height to its width: Discord's, ⅔, and 9:16 in a media
+    /// channel, so a grid's rows stay level whatever anyone posted.
+    var artRatio: CGFloat
     var open: () -> Void
     var openMenu: (CGRect) -> Void
+    var react: (ForumPostReaction) -> Void
 
     @State private var isHovering = false
     @Environment(\.motion) private var motion
 
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.post == rhs.post }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.post == rhs.post && lhs.artRatio == rhs.artRatio }
 
     var body: some View {
         Button(action: open) {
@@ -368,6 +690,7 @@ private struct ForumPostCard: View, Equatable {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityLabel))
         .accessibilityAddTraits(.isButton)
+        .forumReactionAction(post.reaction, react: react)
     }
 
     private var card: RoundedRectangle { .rect(cornerRadius: Radius.glass) }
@@ -381,8 +704,8 @@ private struct ForumPostCard: View, Equatable {
             Text(post.authorName)
                 .foregroundStyle(post.authorColorValue.map(Color.init(hex:)) ?? InkColor.secondary)
                 .lineLimit(1)
-            Text("Posted \(RelativeTime.compact(post.postedAt)) ago")
-                .foregroundStyle(Ink.quaternary)
+            Text(postedWords)
+                .foregroundStyle(Ink.secondary)
                 .lineLimit(1)
             if post.isNew {
                 Spacer(minLength: Spacing.tight)
@@ -392,9 +715,14 @@ private struct ForumPostCard: View, Equatable {
         .font(.system(.caption, weight: .medium))
     }
 
+    private var postedWords: String {
+        let age = RelativeTime.compact(post.postedAt)
+        return age == "now" ? "Posted just now" : "Posted \(age) ago"
+    }
+
     private var title: some View {
-        Text(post.title)
-            .font(.system(.subheadline, weight: .semibold))
+        Text(post.titleText)
+            .font(.system(.subheadline, weight: post.isUnread ? .semibold : .regular))
             .foregroundStyle(Ink.primary)
             .lineLimit(2)
             .multilineTextAlignment(.leading)
@@ -402,47 +730,42 @@ private struct ForumPostCard: View, Equatable {
     }
 
     private var artwork: some View {
-        ZStack(alignment: .bottomLeading) {
-            if let url = post.thumbnailURL {
-                RemoteImage(url: url, side: Metrics.forumCardArtHeight * 2) { Color.clear }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: Metrics.forumCardArtHeight)
-                    // `.fill`, so a wide screenshot and a tall one both fill the
-                    // block and the grid's rows stay level.
-                    .clipped()
-                    .background(Palette.surfaceRaised)
-            } else {
-                // The opening line takes the picture's place rather than the
-                // card collapsing — a grid of cards at two different heights
-                // reads as a rendering fault.
-                Text(post.preview)
-                    .font(.system(.caption))
-                    .lineLimit(4)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .frame(height: Metrics.forumCardArtHeight, alignment: .topLeading)
-                    .padding(Spacing.base)
-                    .background(Palette.surfaceRaised)
+        // `Color.clear` and a ratio decide the block, whatever's in it: a picture
+        // can't stretch the card, and the words can't shrink it.
+        Color.clear
+            .aspectRatio(1 / artRatio, contentMode: .fit)
+            .overlay {
+                if post.media.isEmpty {
+                    // The opening line takes the picture's place rather than the
+                    // card collapsing — a grid of cards at two different heights
+                    // reads as a rendering fault.
+                    Text(post.openingWords)
+                        .font(.system(.subheadline))
+                        .foregroundStyle(Ink.secondary)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .padding(Spacing.snug)
+                        .background(Palette.surfaceRaised)
+                } else {
+                    ForumMediaMosaic(media: post.media)
+                }
             }
-
-            if post.isPinned || !post.tags.isEmpty {
-                ForumPostTagRow(post: post)
-                    .padding(Spacing.base)
+            .overlay(alignment: .bottomLeading) {
+                if post.isPinned || !post.tags.isEmpty {
+                    ForumPostTagRow(post: post, isOverMedia: !post.media.isEmpty)
+                        .padding(Spacing.base)
+                }
             }
-        }
-        .clipShape(.rect(cornerRadius: Radius.row))
+            .clipShape(.rect(cornerRadius: Radius.row))
     }
 
     private var footer: some View {
         HStack(spacing: Spacing.base) {
-            Label {
-                Text(post.messageCount, format: .number)
-            } icon: {
-                Image(systemName: "bubble.left.fill")
+            if let reaction = post.reaction {
+                ForumReactionChip(reaction: reaction, toggle: { react(reaction) })
             }
-            .font(.system(.caption, weight: .medium))
-            .foregroundStyle(Ink.tertiary)
-            .labelStyle(.titleAndIcon)
+
+            ForumMessageCount(count: post.messageCount, unreadWords: post.unreadWords)
 
             Spacer(minLength: 0)
 
@@ -465,7 +788,7 @@ private struct ForumPostCard: View, Equatable {
     private func stateGlyph(_ symbol: String) -> some View {
         Image(symbol: symbol)
             .font(.system(.caption2))
-            .foregroundStyle(Ink.quaternary)
+            .foregroundStyle(Ink.secondary)
             .accessibilityHidden(true)
     }
 
@@ -474,6 +797,8 @@ private struct ForumPostCard: View, Equatable {
         if !post.tags.isEmpty { parts.append(post.tags.map(\.name).joined(separator: ", ")) }
         if !post.authorName.isEmpty { parts.append("by \(post.authorName)") }
         parts.append("\(post.messageCount) messages")
+        if let unread = post.unreadWords { parts.append("\(unread) new") }
+        if let count = post.reaction?.count { parts.append(count == 1 ? "1 reaction" : "\(count) reactions") }
         if post.isArchived { parts.append("archived") }
         return parts.joined(separator: ", ")
     }
@@ -489,6 +814,8 @@ private struct ForumPostCard: View, Equatable {
 /// names the rest on hover.
 private struct ForumPostTagRow: View {
     var post: ForumPostPresentation
+    /// Over a picture, which the row's own pale chips disappear on.
+    var isOverMedia = false
 
     private static let shown = 3
 
@@ -506,16 +833,18 @@ private struct ForumPostTagRow: View {
                     .accessibilityLabel(Text("Pinned"))
             }
             ForEach(post.tags.prefix(Self.shown)) { tag in
-                ForumTagChip(tag: tag, isOn: post.filteredTagIDs.contains(tag.id), isCompact: true)
+                ForumTagChip(
+                    tag: tag, isOn: post.filteredTagIDs.contains(tag.id), isCompact: true, isOverMedia: isOverMedia
+                )
             }
             if post.tags.count > Self.shown {
                 let rest = post.tags.dropFirst(Self.shown)
                 Text("+\(rest.count)")
                     .font(.system(.caption2, weight: .semibold))
-                    .foregroundStyle(Ink.secondary)
+                    .foregroundStyle(isOverMedia ? AnyShapeStyle(.white) : AnyShapeStyle(Ink.secondary))
                     .padding(.horizontal, Spacing.base)
                     .padding(.vertical, 3)
-                    .background(Palette.hoverFill, in: .capsule)
+                    .background(isOverMedia ? ForumMediaInk.fill : Palette.hoverFill, in: .capsule)
                     .help(rest.map(\.name).joined(separator: ", "))
             }
         }
@@ -561,7 +890,11 @@ private struct ForumSearchSummary: View {
     var isSearching: Bool
     var count: Int
     var phrase: String
+    var canPost: Bool
     var clear: () -> Void
+    /// Discord's one box was both the search and the title of a new post. Here the
+    /// two are apart, so a search that found nothing offers the other half.
+    var newPostTitled: (String) -> Void
 
     var body: some View {
         HStack(spacing: Spacing.base) {
@@ -574,6 +907,13 @@ private struct ForumSearchSummary: View {
                     .buttonStyle(.plain)
                     .font(.system(.caption, weight: .semibold))
                     .foregroundStyle(Palette.accent)
+            }
+            if !isSearching, count == 0, canPost {
+                Button("New post titled \u{201C}\(phrase)\u{201D}") { newPostTitled(phrase) }
+                    .buttonStyle(.plain)
+                    .font(.system(.caption, weight: .semibold))
+                    .foregroundStyle(Palette.accent)
+                    .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
@@ -591,6 +931,17 @@ struct ForumTagChip: View {
     var tag: ForumTag
     var isOn: Bool
     var isCompact = false
+    var isOverMedia = false
+
+    private var ink: AnyShapeStyle {
+        if isOverMedia { return AnyShapeStyle(.white) }
+        return isOn ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary)
+    }
+
+    private var fill: Color {
+        if isOverMedia { return isOn ? Palette.accent : .black.opacity(0.5) }
+        return isOn ? Palette.accent.opacity(0.18) : Palette.hoverFill
+    }
 
     var body: some View {
         HStack(spacing: Spacing.tight) {
@@ -601,375 +952,14 @@ struct ForumTagChip: View {
                 .font(.system(isCompact ? .caption2 : .caption, weight: .medium))
                 .lineLimit(1)
         }
-        .foregroundStyle(isOn ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary))
+        .foregroundStyle(ink)
         .padding(.horizontal, Spacing.base)
         .padding(.vertical, isCompact ? 3 : Spacing.tight)
-        .background(
-            isOn ? Palette.accent.opacity(0.18) : Palette.hoverFill,
-            in: .capsule
-        )
-    }
-}
-
-// MARK: - The bar
-
-private struct ForumFilterBar: View {
-    var presentation: ForumPresentation
-    var setQuery: (ForumQuery) -> Void
-    var newPost: () -> Void
-    @Binding var searchText: String
-    var clearSearch: () -> Void
-
-    @State private var isSortOpen = false
-    @State private var isTagListOpen = false
-
-    /// How many tags stand in the bar before the rest go behind "All".
-    ///
-    /// **Five, and a scroller is the wrong answer.** A horizontal scroll view
-    /// inside a bar steals the trackpad gesture from the list it floats over,
-    /// and a forum with twelve tags put every one of them in the bar — which is
-    /// what a reader reported. Discord shows five and a chip; so does this.
-    private static let inlineTagLimit = 5
-
-    var body: some View {
-        VStack(spacing: Spacing.base) {
-            HStack(spacing: Spacing.base) {
-                ForumSearchField(text: $searchText, clear: clearSearch)
-                // **Only where the reader may actually post.** Absent rather
-                // than disabled: a greyed New Post in a read-only forum is an
-                // invitation that can only be refused — §5.5.
-                if presentation.canPost {
-                    newPostButton
-                }
-            }
-
-            HStack(spacing: Spacing.base) {
-                sortAndView
-                if !presentation.availableTags.isEmpty {
-                    Divider().frame(height: 16)
-                    tagFilters
-                }
-                Spacer(minLength: 0)
-            }
-        }
-        .padding(.horizontal, Spacing.margin)
-        .padding(.vertical, Spacing.base)
-    }
-
-    /// The tags, and the chip that holds the rest.
-    private var tagFilters: some View {
-        let inline = presentation.availableTags.prefix(Self.inlineTagLimit)
-        let overflows = presentation.availableTags.count > Self.inlineTagLimit
-        return HStack(spacing: Spacing.base) {
-            ForEach(inline) { tag in
-                tagButton(tag)
-            }
-            if overflows {
-                allTagsButton
-            }
-        }
-    }
-
-    private func tagButton(_ tag: ForumTag) -> some View {
-        let isOn = presentation.query.tags.contains(tag.id)
-        return Button {
-            var query = presentation.query
-            // A chip toggles rather than replaces: filtering by two tags is the
-            // whole reason `tag_setting` exists.
-            if isOn { query.tags.remove(tag.id) } else { query.tags.insert(tag.id) }
-            setQuery(query)
-        } label: {
-            ForumTagChip(tag: tag, isOn: isOn)
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
-    }
-
-    private var allTagsButton: some View {
-        Button {
-            isTagListOpen = true
-        } label: {
-            HStack(spacing: Spacing.tight) {
-                Text("All")
-                // The count of tags the reader has lit, including any that are
-                // behind this chip rather than in the bar — which is the whole
-                // reason it carries a number.
-                if !presentation.query.tags.isEmpty {
-                    Text(presentation.query.tags.count, format: .number)
-                        .font(.system(.caption2, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(minWidth: 15)
-                        .padding(.vertical, 1)
-                        .background(Palette.accent, in: .capsule)
-                }
-                Image(symbol: isTagListOpen ? "chevron.up" : "chevron.down")
-                    .font(.system(.caption2, weight: .semibold))
-            }
-            .font(.system(.caption, weight: .medium))
-            .foregroundStyle(Ink.secondary)
-            .padding(.horizontal, Spacing.snug)
-            .frame(height: Metrics.compactControl)
-            .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
-        .interactiveChrome()
-        .popover(isPresented: $isTagListOpen, arrowEdge: .bottom) {
-            ForumTagList(
-                tags: presentation.availableTags,
-                selected: presentation.query.tags,
-                toggle: { id in
-                    var query = presentation.query
-                    if query.tags.contains(id) { query.tags.remove(id) } else { query.tags.insert(id) }
-                    setQuery(query)
-                },
-                clear: {
-                    var query = presentation.query
-                    query.tags = []
-                    setQuery(query)
-                }
-            )
-            .presentationBackground(.clear)
-        }
-        .accessibilityLabel(Text("All tags"))
-    }
-
-    private var newPostButton: some View {
-        Button(action: newPost) {
-            HStack(spacing: Spacing.tight) {
-                Image(systemName: "square.and.pencil")
-                Text("New Post")
-            }
-            .font(.system(.caption, weight: .semibold))
-            .padding(.horizontal, Spacing.snug)
-            .frame(height: Metrics.compactControl)
-            .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.white)
-        // The one emphasised control on this surface. A bar where three things
-        // are tinted has no emphasis at all — §4.
-        .emphasisChrome(Palette.accent)
-        .accessibilityLabel(Text("New post"))
-    }
-
-    private var sortAndView: some View {
-        Button {
-            isSortOpen = true
-        } label: {
-            HStack(spacing: Spacing.tight) {
-                Image(systemName: "arrow.up.arrow.down")
-                Text("Sort & View")
-                Image(systemName: "chevron.down")
-                    .font(.system(.caption2, weight: .semibold))
-            }
-            .font(.system(.caption, weight: .medium))
-            .foregroundStyle(Ink.secondary)
-            .padding(.horizontal, Spacing.snug)
-            .frame(height: Metrics.compactControl)
-            .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
-        .interactiveChrome()
-        .popover(isPresented: $isSortOpen, arrowEdge: .bottom) {
-            ForumSortMenu(query: presentation.query, setQuery: setQuery)
-                // Two materials are never stacked: the popover's own background
-                // is cleared so the content's glass is the only one. §4.
-                .presentationBackground(.clear)
-        }
-        .accessibilityLabel(Text("Sort and view options"))
-    }
-
-}
-
-/// The full tag set, behind the "All" chip.
-private struct ForumTagList: View {
-    var tags: [ForumTag]
-    var selected: Set<ForumTagID>
-    var toggle: (ForumTagID) -> Void
-    var clear: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.snug) {
-            HStack(spacing: Spacing.base) {
-                Text("Select Tags")
-                    .font(.system(.subheadline, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
-                Text(selected.count, format: .number)
-                    .font(.system(.caption2, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(minWidth: 16)
-                    .padding(.vertical, 2)
-                    .background(
-                        selected.isEmpty ? AnyShapeStyle(Palette.edgeStrong)
-                            : AnyShapeStyle(Palette.accent),
-                        in: .capsule
-                    )
-            }
-
-            FlowLayout(spacing: Spacing.base) {
-                ForEach(tags) { tag in
-                    Button { toggle(tag.id) } label: {
-                        ForumTagChip(tag: tag, isOn: selected.contains(tag.id))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(
-                        selected.contains(tag.id) ? [.isButton, .isSelected] : .isButton
-                    )
-                }
-            }
-
-            Divider()
-            Button("Clear all", action: clear)
-                .buttonStyle(.plain)
-                .font(.system(.caption, weight: .medium))
-                .foregroundStyle(selected.isEmpty ? AnyShapeStyle(Ink.quaternary) : AnyShapeStyle(Palette.accent))
-                .disabled(selected.isEmpty)
-        }
-        .padding(Spacing.margin)
-        .frame(width: 300)
-        // No material of its own: the popover's glass is the body — §4.9.
-    }
-}
-
-/// The board's own search field.
-///
-/// **A request, not a filter** — the same route the Threads flyout uses, and
-/// captured on a forum too: `forums search.har` sends
-/// `?name=test&tag_setting=match_some` at a forum channel. So it searches the
-/// whole forum, not the pages loaded.
-private struct ForumSearchField: View {
-    @Binding var text: String
-    var clear: () -> Void
-
-    var body: some View {
-        HStack(spacing: Spacing.base) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(.caption, weight: .medium))
-                .foregroundStyle(Ink.tertiary)
-            TextField("Search posts", text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(.subheadline))
-            if !text.isEmpty {
-                Button(action: clear) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(.caption))
-                        .foregroundStyle(Ink.tertiary)
-                        .contentShape(.circle)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("Clear the search"))
-            }
-        }
-        .padding(.horizontal, Spacing.snug)
-        .frame(height: Metrics.control + Spacing.tight)
-        .frame(maxWidth: .infinity)
-        .background(Palette.surfaceRaised, in: .capsule)
-        // A hairline, so the field has an edge on a dark ground.
-        .overlay { Capsule().strokeBorder(Palette.edge) }
-    }
-}
-
-// MARK: - Sort & View
-
-private struct ForumSortMenu: View {
-    var query: ForumQuery
-    var setQuery: (ForumQuery) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.margin) {
-            section("Sort by") {
-                ForEach(ForumSortOrder.allCases, id: \.self) { order in
-                    choice(order.title, isOn: query.sortOrder == order) {
-                        var next = query
-                        next.sortOrder = order
-                        setQuery(next)
-                    }
-                }
-            }
-            section("View as") {
-                ForEach(ForumLayout.allCases, id: \.self) { layout in
-                    choice(layout.title, isOn: query.layout == layout) {
-                        var next = query
-                        next.layout = layout
-                        setQuery(next)
-                    }
-                }
-            }
-            section("Tag Matching") {
-                ForEach(TagMatching.allCases, id: \.self) { matching in
-                    choice(matching.title, isOn: query.tagMatching == matching) {
-                        var next = query
-                        next.tagMatching = matching
-                        setQuery(next)
-                    }
-                }
-            }
-
-            Divider()
-            Button("Reset to default") {
-                // The layout survives a reset, because it is the one part of the
-                // query that is about how the reader wants to look at the board
-                // rather than what they asked it for.
-                setQuery(ForumQuery(layout: query.layout))
-            }
-            .buttonStyle(.plain)
-            .font(.system(.caption, weight: .medium))
-            .foregroundStyle(Ink.secondary)
-        }
-        .padding(Spacing.margin)
-        .frame(width: 220)
-        // No material of its own: the popover's glass is the body — §4.9.
-    }
-
-    private func section(
-        _ title: String,
-        @ViewBuilder _ rows: () -> some View
-    ) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.base) {
-            Text(title)
-                .font(.system(.caption2, weight: .semibold))
-                .foregroundStyle(Ink.quaternary)
-                .textCase(.uppercase)
-            rows()
-        }
-    }
-
-    private func choice(
-        _ title: String,
-        isOn: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: Spacing.base) {
-                Text(title)
-                    .font(.system(.subheadline))
-                    .foregroundStyle(Ink.primary)
-                Spacer(minLength: Spacing.base)
-                Image(symbol: isOn ? "largecircle.fill.circle" : "circle")
-                    .font(.system(.subheadline))
-                    .foregroundStyle(isOn ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.quaternary))
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+        .background(fill, in: .capsule)
     }
 }
 
 // MARK: - The small states
-
-private struct ForumGuidelines: View {
-    var text: String
-
-    var body: some View {
-        Text(text)
-            .font(.system(.subheadline))
-            .foregroundStyle(Ink.tertiary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(Spacing.snug)
-            .background(Palette.groupedFill, in: .rect(cornerRadius: Radius.glass))
-    }
-}
 
 private struct ForumRetryRow: View {
     var retry: () -> Void
@@ -1045,6 +1035,48 @@ enum ForumGallery {
     }
 }
 
+/// "Add media to the original post?": Discord's `R` in `538899`, its words and its
+/// three ways out, with the post's row as it'd look. Return adds it to the post.
+struct ForumAddMediaCard: View {
+    var prompt: ForumAddMediaPrompt
+
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ModalAlert(
+            title: "Add media to the original post?",
+            message: Text("This will add a thumbnail to your post in the list view."),
+            actions: [
+                ModalAlertAction(title: "Cancel", symbolName: nil, role: .cancel, isEnabled: !prompt.isUploading) {},
+                ModalAlertAction(title: "Don't Add", symbolName: nil, role: .secondary, isEnabled: !prompt.isUploading) {
+                    prompt.sendAnyway()
+                },
+                ModalAlertAction(
+                    title: "Add to Post", symbolName: nil, role: .act, closes: false, isWorking: prompt.isUploading
+                ) {
+                    Task { await model.addMediaToPost() }
+                },
+            ]
+        ) {
+            VStack(spacing: Spacing.base) {
+                if let row = model.forumAddMediaPreview(prompt) {
+                    ForumPostRow(post: row, open: {}, openMenu: { _ in })
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+                if let failure = prompt.failure {
+                    Text(failure)
+                        .font(.system(.subheadline))
+                        .foregroundStyle(Palette.destructive)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .modalDismissDisabled(prompt.isUploading)
+    }
+}
+
 // MARK: - Container
 
 /// Reads the store and hands the board its snapshot.
@@ -1055,22 +1087,47 @@ struct ForumContainer: View {
     var channelID: ChannelID
 
     @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
+    @State private var isDropTargeted = false
 
     var body: some View {
         ForumPane(
             presentation: model.forumPresentation(for: channelID),
             open: { model.openThread($0) },
             openMenu: { model.openThreadMenu(for: $0, anchor: $1) },
-            setQuery: { model.setForumQuery($0, in: channelID) },
             loadMore: { model.loadMoreForumPosts(in: channelID) },
             reveal: { model.requestForumPostDetails($0, in: channelID) },
             newPost: { model.beginForumPost(in: channelID) },
-            searchText: Binding(
-                get: { model.threadSearchText },
-                set: { model.setThreadSearch($0, in: channelID) }
-            ),
-            clearSearch: { model.clearThreadSearch() }
+            newPostTitled: { model.beginForumPost(in: channelID, title: $0) },
+            clearSearch: { model.clearThreadSearch() },
+            react: { postID, reaction in
+                model.toggleReaction(
+                    reaction.emoji,
+                    kind: reaction.kind,
+                    location: .inlineButton,
+                    on: MessageID(rawValue: postID.rawValue),
+                    in: postID
+                )
+            },
+            showNewPosts: { model.refreshForumOrder(channelID) }
         )
+        // **The whole board takes a drop**, and it opens New Post with the files in
+        // it, where Discord's takes one only once its form is open. Written
+        // unconditionally, with the permission in the predicate, as a conversation's
+        // is: a board that refuses files lights nothing and accepts nothing.
+        .dropDestination(for: URL.self) { urls, _ in
+            guard model.canAttachFiles(in: channelID), model.permissionGate.canSend(in: channelID) else { return false }
+            model.stageAttachments(urls, in: channelID)
+            model.beginForumPost(in: channelID)
+            return true
+        } isTargeted: { targeted in
+            let allowed = targeted && model.canAttachFiles(in: channelID) && model.permissionGate.canSend(in: channelID)
+            if allowed != isDropTargeted { isDropTargeted = allowed }
+        }
+        .overlay {
+            if isDropTargeted { DropHalo() }
+        }
+        .animation(motion.standard, value: isDropTargeted)
         .modal(
             isPresented: Binding(
                 get: { model.composingPostIn == channelID },

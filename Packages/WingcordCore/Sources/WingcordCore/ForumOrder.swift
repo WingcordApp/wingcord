@@ -24,6 +24,35 @@ public enum ForumOrder {
             .map(\.id)
     }
 
+    /// The live posts as the board is holding them.
+    ///
+    /// **A board doesn't reorder itself under somebody reading it.** Discord's store
+    /// sorts at a refresh and then keeps that order (`y`, `b`, `D`): a post answered
+    /// a moment ago stays where the reader last saw it, and somebody else's new post
+    /// waits behind "N New Posts" until they ask for it. A post gone since drops out,
+    /// and one that's turned up any other way, such as being reopened, is shown.
+    ///
+    /// - Parameters:
+    ///   - held: the order at the last refresh. Empty is no refresh yet.
+    ///   - waiting: other people's new posts, not shown until the next refresh.
+    public static func heldPosts(
+        _ posts: [Channel],
+        query: ForumQuery,
+        held: [ChannelID],
+        waiting: Set<ChannelID>
+    ) -> [ChannelID] {
+        let fresh = livePosts(posts, query: query)
+        let showing = Set(fresh)
+        let kept = held.filter(showing.contains)
+        let keptIDs = Set(kept)
+        let arrived = fresh.filter { !keptIDs.contains($0) && !waiting.contains($0) }
+        let merged = arrived + kept
+        // Pinned first in any order: a post pinned since the refresh is at the top
+        // straight away, as Discord's `THREAD_UPDATE` handler has it.
+        let pinned = Set(posts.lazy.filter(\.isPinnedPost).map(\.id))
+        return merged.filter(pinned.contains) + merged.filter { !pinned.contains($0) }
+    }
+
     /// Discord's tag filter: any chosen tag, or every one of them. A post with
     /// no tags matches no filter.
     public static func matches(_ post: Channel, query: ForumQuery) -> Bool {

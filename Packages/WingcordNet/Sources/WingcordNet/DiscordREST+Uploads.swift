@@ -99,6 +99,8 @@ public struct UploadedAttachment: Sendable {
     /// The clip half, written again on the message's attachment entry as
     /// Discord's own does.
     public var clip: ClipUpload?
+    /// A media post's own picture for the board: Discord's `is_thumbnail`.
+    public var isThumbnail: Bool
 
     public init(
         id: String,
@@ -106,8 +108,10 @@ public struct UploadedAttachment: Sendable {
         uploadedFilename: String,
         altText: String? = nil,
         originalContentType: String? = nil,
-        clip: ClipUpload? = nil
+        clip: ClipUpload? = nil,
+        isThumbnail: Bool = false
     ) {
+        self.isThumbnail = isThumbnail
         self.id = id
         self.filename = filename
         self.uploadedFilename = uploadedFilename

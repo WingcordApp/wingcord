@@ -217,7 +217,7 @@ struct ConversationPane: View {
 ///
 /// It is inert: `allowsHitTesting(false)`, because a view that appears under a
 /// drag and takes hits is a view that can cancel the drag it is advertising.
-private struct DropHalo: View {
+struct DropHalo: View {
     var body: some View {
         ZStack {
             Palette.accent.opacity(0.10)

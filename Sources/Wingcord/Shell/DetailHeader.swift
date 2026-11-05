@@ -13,16 +13,29 @@ struct DetailHeader: View {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
 
+    /// What a forum's row is laid out against. Only a resize or another channel
+    /// moves any of them, and each is read from the layout that already happened.
+    @State private var rowWidth: CGFloat = 0
+    @State private var titleWidth: CGFloat = 0
+    @State private var toolsWidth: CGFloat = 0
+    /// A forum's search is open, which takes its tags off the row.
+    @State private var isForumSearchOpen = false
+
     var body: some View {
         let chrome = model.channelChrome
         let primary = model.workspacePresentation.primary
         if !model.pageDrawsHeaderRow {
             HeaderBarLayout {
-                leading.layoutValue(key: HeaderSlotKey.self, value: .leading)
-                HeaderTitleCapsule().layoutValue(key: HeaderSlotKey.self, value: .center)
+                leading(primary: primary).layoutValue(key: HeaderSlotKey.self, value: .leading)
+                HeaderTitleCapsule()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { titleWidth = $0 }
+                    .layoutValue(key: HeaderSlotKey.self, value: .center)
                 trailing(chrome: chrome, primary: primary)
                     .layoutValue(key: HeaderSlotKey.self, value: .trailing)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
+            // A forum's row has a segmented strip on it, and they all take its height.
+            .environment(\.headerControlSide, primary.isForum ? SearchField.height : ShellMetrics.headerControl)
             .padding(.leading, layout.detailHeaderLeadingClearance + Spacing.snug)
             .padding(.trailing, Spacing.snug)
             .frame(height: ShellMetrics.headerHeight)
@@ -38,7 +51,7 @@ struct DetailHeader: View {
     // MARK: Leading
 
     @ViewBuilder
-    private var leading: some View {
+    private func leading(primary: WorkspacePresentation.Primary) -> some View {
         HStack(spacing: Spacing.base) {
             if !layout.isSidebarShown {
                 HeaderCircleButton(systemImage: "sidebar.leading", label: "Show Sidebar") {
@@ -46,8 +59,28 @@ struct DetailHeader: View {
                 }
                 CreateMenu()
             }
+            if case .forum(let channelID) = primary {
+                ForumToolbarFilters(
+                    channelID: channelID,
+                    visibleTags: forumFit(channelID).visibleTags,
+                    isSearching: isForumSearchOpen || !model.threadSearchText.isEmpty
+                )
+            }
         }
         .transition(.materialize(from: .leading, blurring: false))
+    }
+
+    /// How a forum's row divides up, from what's been measured.
+    private func forumFit(_ channelID: ChannelID) -> ForumRowFit.Answer {
+        ForumRowFit.answer(
+            rowWidth: rowWidth,
+            titleWidth: titleWidth,
+            // The sidebar's toggle and the create menu, while it's away.
+            fixedLeading: layout.isSidebarShown ? 0 : SearchField.height + 56 + 2 * Spacing.base,
+            toolsWidth: toolsWidth,
+            tagWidths: (model.channelIndex[channelID]?.availableTags ?? []).map(ForumTagSegment.width(of:)),
+            canPost: model.permissionGate.canSend(in: channelID)
+        )
     }
 
     // MARK: Trailing
@@ -56,14 +89,22 @@ struct DetailHeader: View {
     private func trailing(chrome: ChannelChrome, primary: WorkspacePresentation.Primary) -> some View {
         GlassEffectContainer(spacing: Spacing.base) {
             HStack(spacing: Spacing.base) {
+                if case .forum(let channelID) = primary, model.permissionGate.canSend(in: channelID) {
+                    ForumNewPostButton(channelID: channelID, isCompact: forumFit(channelID).isNewPostCompact)
+                }
                 if chrome.canStartCall || chrome.canShowVoiceChat {
                     HeaderControlGroup { callControls(chrome) }
                 }
                 if hasChannelTools(chrome) || !primary.isServerPage {
-                    HeaderControlGroup { channelTools(chrome, isServerPage: primary.isServerPage) }
+                    HeaderControlGroup { channelTools(chrome, primary: primary) }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { toolsWidth = $0 }
                 }
+                // On a forum the circle searches its posts, and hands over to the
+                // message search once that's what's been asked for.
+                if case .forum(let channelID) = primary, model.messageSearch == nil {
+                    ForumToolbarSearch(channelID: channelID, isOpen: $isForumSearchOpen)
                 // Message search has nothing to search on Discover's pages.
-                if !primary.isServerPage && !primary.isCall && !primary.isHomePage && primary != .discovery {
+                } else if !primary.isServerPage && !primary.isCall && !primary.isHomePage && primary != .discovery {
                     HeaderSearch()
                 }
             }
@@ -99,7 +140,23 @@ struct DetailHeader: View {
     }
 
     @ViewBuilder
-    private func channelTools(_ chrome: ChannelChrome, isServerPage: Bool) -> some View {
+    private func channelTools(_ chrome: ChannelChrome, primary: WorkspacePresentation.Primary) -> some View {
+        let isServerPage = primary.isServerPage
+        if case .forum(let channelID) = primary, model.channelIndex[channelID]?.topic?.isEmpty == false {
+            HeaderGroupButton(
+                systemImage: "text.book.closed",
+                label: "Post Guidelines",
+                isActive: model.areForumGuidelinesShown
+            ) {
+                model.areForumGuidelinesShown.toggle()
+            }
+            .popover(isPresented: Binding(
+                get: { model.areForumGuidelinesShown },
+                set: { if !$0, model.areForumGuidelinesShown { model.areForumGuidelinesShown = false } }
+            ), arrowEdge: .bottom) {
+                ForumGuidelinesPopover(channelID: channelID)
+            }
+        }
         if chrome.canShowThreads {
             HeaderGroupButton(systemImage: "number.square", label: "Threads", isActive: chrome.areThreadsShown) {
                 guard let channelID = model.selectedChannelID else { return }
@@ -119,14 +176,7 @@ struct DetailHeader: View {
             }
         }
         if let threadID = chrome.threadID {
-            ThreadMoreButton(threadID: threadID, place: .page) {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: ShellMetrics.headerGlyph, weight: .medium))
-                    .foregroundStyle(InkColor.solid)
-                    .frame(width: ShellMetrics.headerControl - 4, height: ShellMetrics.headerControl - 6)
-                    .contentShape(.capsule)
-            }
-            .help("More")
+            ThreadMoreGroupButton(threadID: threadID)
         }
         if chrome.canShowPins {
             HeaderGroupButton(systemImage: "pin", label: "Pinned Messages", isActive: chrome.arePinsShown) {
@@ -144,7 +194,7 @@ struct DetailHeader: View {
         }
         if chrome.canShowSummaries {
             HeaderGroupButton(
-                systemImage: chrome.areSummariesShown ? "scroll.fill" : "scroll",
+                systemImage: "scroll",
                 label: chrome.areSummariesShown ? "Hide Summaries" : "Show Summaries",
                 isActive: chrome.areSummariesShown
             ) {
@@ -164,7 +214,7 @@ struct DetailHeader: View {
         }
         if chrome.canShowMemberList {
             HeaderGroupButton(
-                systemImage: "person.2.fill",
+                systemImage: "person.2",
                 label: chrome.isMemberListShown ? "Hide Members" : "Show Members",
                 isActive: chrome.isMemberListShown
             ) {
@@ -304,6 +354,7 @@ struct HeaderBarLayout: Layout {
 struct HeaderTitleCapsule: View {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
+    @Environment(\.headerControlSide) private var rowSide
 
     private var title: HeaderTitle { model.headerTitle }
     private var chrome: ChannelChrome { model.channelChrome }
@@ -319,7 +370,7 @@ struct HeaderTitleCapsule: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
-            .frame(height: ShellMetrics.headerControl)
+            .frame(height: rowSide)
             .contentShape(.capsule)
             .glassEffect(.regular.interactive(), in: .capsule)
             .animation(motion.glassMorph, value: title.name)

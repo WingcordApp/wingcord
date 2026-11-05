@@ -65,7 +65,19 @@ struct Composer: View {
     /// click had left it, so the first thing typed after changing channel went
     /// nowhere. A value rather than a `channelID`, because this view reaches for
     /// nothing observable and the settings preview has no channel at all.
-    var focusKey: AnyHashable = 0
+    var focusKey: AnyHashable? = 0
+    /// Whether Return sends. A forum post's message is written in lines and sent
+    /// with its own button: Discord's `disableEnterToSubmit`.
+    var returnSubmits = true
+    /// How tall the field rests, in lines, and how far it grows before it scrolls.
+    var minimumLines = 1
+    var maximumLines = Metrics.composerMaxLines
+    /// The placeholder, where it isn't "Message #channel".
+    var placeholderOverride: String?
+    /// Whether the field has its own send control.
+    var showsSendControl = true
+    /// Whether this bar sits in a card, which brings its own margins.
+    var isInCard = false
     var canSend: Bool
     /// The message being answered, as the reply bar draws it.
     var reply: ComposerReply?
@@ -338,8 +350,8 @@ struct Composer: View {
                 PermissionNotice()
             }
         }
-        .padding(.horizontal, Spacing.margin)
-        .padding(.bottom, Spacing.snug)
+        .padding(.horizontal, isInCard ? 0 : Spacing.margin)
+        .padding(.bottom, isInCard ? 0 : Spacing.snug)
         .animation(motion.panel, value: reply?.name)
         .animation(motion.panel, value: isEditing)
         .animation(motion.panel, value: scheduledAt)
@@ -405,7 +417,9 @@ struct Composer: View {
                         expressionControls
                     }
                 } send: {
-                    ComposerSendButton(shape: shape, isArmed: canCommit, action: pressedReturn)
+                    if showsSendControl {
+                        ComposerSendButton(shape: shape, isArmed: canCommit, action: pressedReturn)
+                    }
                 }
                 .animation(motion.glassMorph, value: shape)
             } else {
@@ -418,7 +432,9 @@ struct Composer: View {
                 } trailing: {
                     silentTypingButton
                     emojiControl
-                    MessagesSendButton(isArmed: canCommit, action: pressedReturn)
+                    if showsSendControl {
+                        MessagesSendButton(isArmed: canCommit, action: pressedReturn)
+                    }
                 }
             }
         }
@@ -429,7 +445,8 @@ struct Composer: View {
         // And so does opening a conversation. `.task(id:)` rather than
         // `.onChange`, so the first channel of a session is focused too — a
         // change handler has nothing to compare against on the way in.
-        .task(id: focusKey) { isFocused = true }
+        // Nil asks for nothing yet: a card whose title goes first.
+        .task(id: focusKey) { if focusKey != nil { isFocused = true } }
     }
 
     /// The words: the command being filled in, if any, and the editor.
@@ -452,8 +469,8 @@ struct Composer: View {
                 // whose placeholder is invisible reads as broken. See
                 // `InkColor.solid`.
                 ink: .composerSolid,
-                lines: 1...Metrics.composerMaxLines,
-                returnSubmits: true,
+                lines: minimumLines...max(minimumLines, maximumLines),
+                returnSubmits: returnSubmits,
                 // Whatever is open owns these keys, and hands them straight
                 // back when nothing is. Handing one back is what lets Return
                 // still send and the arrows still move the caret the rest of
@@ -504,6 +521,7 @@ struct Composer: View {
     }
 
     private var placeholder: String {
+        if let placeholderOverride { return placeholderOverride }
         if let option = pendingCommand?.focusedOption {
             return option.summary.isEmpty ? option.name : option.summary
         }
@@ -646,7 +664,7 @@ struct Composer: View {
                 isTimeUnpicked = true
                 return .handled
             }
-            guard pendingCommand != nil else { return .ignored }
+            guard pendingCommand != nil, returnSubmits else { return .ignored }
             pressedReturn()
             return .handled
         }

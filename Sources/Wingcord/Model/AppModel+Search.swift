@@ -45,6 +45,15 @@ extension AppModel {
         sessionController.cancelSearch()
     }
 
+    /// Runs words as a message search, from a surface that was searching something
+    /// else: a forum's field, which searches posts.
+    func searchMessages(for words: String) {
+        guard let scope = searchScope else { return }
+        if messageSearch?.scope != scope { messageSearch = MessageSearchState(scope: scope) }
+        searchText = words
+        submitSearch()
+    }
+
     /// Closes the panel when the reader leaves what it was searching.
     ///
     /// **The scope, not the channel** — and that distinction is the whole of it.

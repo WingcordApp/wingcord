@@ -97,17 +97,24 @@ extension SessionController {
     /// the app's own join sheet, the window brought forward; or Discord's
     /// "Invalid invite id".
     private func openInviteFromBrowser(_ code: String) async throws(LocalRPC.CommandError) -> RPCValue {
-        let preview: InvitePreview
+        let lookup: InviteLookup
         do {
-            preview = try await rest.resolveInvite(code)
+            lookup = try await rest.inviteCard(code)
         } catch {
             throw LocalRPC.CommandError(.invalidInvite, "Invalid invite id: \(code)")
         }
+        guard case .resolved(let card) = lookup else {
+            throw LocalRPC.CommandError(.invalidInvite, "Invalid invite id: \(code)")
+        }
         NSApp.activate()
-        model.joinServerSheet = JoinServerSheetState(input: code, lookup: .found(preview))
+        model.inviteLookups[code] = lookup
+        model.route(lookup, key: code)
         return .object([
-            "code": .string(preview.code),
-            "guild": .object(["id": .string(String(preview.guildID.rawValue)), "name": .string(preview.name)]),
+            "code": .string(card.code),
+            "guild": .object([
+                "id": .string(card.guildID.map { String($0.rawValue) } ?? ""),
+                "name": .string(card.name),
+            ]),
         ])
     }
 

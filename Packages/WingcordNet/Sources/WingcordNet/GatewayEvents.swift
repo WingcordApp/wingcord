@@ -89,6 +89,8 @@ struct GatewayFrame: Decodable, Sendable {
         /// Somebody else joined or left a thread. Carries the new member count,
         /// which is the only reason this client listens to it.
         case threadMembersUpdate(ThreadMembersUpdateDTO)
+        /// The answer to `GatewaySocket.requestForumUnreads`.
+        case forumUnreads(ForumUnreadsDTO)
         case presenceUpdate(PresenceDTO)
         case typingStart(TypingPayload)
         case guildMembersChunk(MembersChunkPayload)
@@ -259,6 +261,7 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .threadMemberUpdate(try decode(ThreadMemberUpdateDTO.self))
         case "THREAD_MEMBERS_UPDATE":
             payload = .threadMembersUpdate(try decode(ThreadMembersUpdateDTO.self))
+        case "FORUM_UNREADS": payload = .forumUnreads(try decode(ForumUnreadsDTO.self))
         case "PRESENCE_UPDATE": payload = .presenceUpdate(try decode(PresenceDTO.self))
         case "TYPING_START": payload = .typingStart(try decode(TypingPayload.self))
         case "GUILD_MEMBERS_CHUNK":

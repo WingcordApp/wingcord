@@ -133,7 +133,17 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
             coordinator.chipRevision = chipRevision
             needsStyle = true
         }
-        if needsStyle { coordinator.restyle() }
+        if needsStyle {
+            coordinator.restyle()
+            // **Bold lines are taller**, and words set from outside (a forum's
+            // template) were measured before they were styled, cutting off the
+            // first line. On the next turn: a representable never reports state
+            // from inside an update.
+            DispatchQueue.main.async { [weak container] in
+                container?.remeasure()
+                container?.settleScroll()
+            }
+        }
         coordinator.updatePlaceholder()
 
         // Focus, asked for from outside — the composer taking the caret when a

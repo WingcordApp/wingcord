@@ -208,9 +208,6 @@ struct MiniProfileCard: View {
         // Read once: the shadow and the frame's staples take the same value.
         let frameShadow = frameShadowOpacity
         VStack(alignment: .leading, spacing: 0) {
-            // Above the banner, which is where Discord puts it — the first
-            // thing on the card rather than a mark inside it.
-            if profile.isProfilePrivate { PrivateProfileBanner() }
             banner
             identity
             // Discord's `ep` (`931481`), straight under who it's from: on the
@@ -365,6 +362,14 @@ struct MiniProfileCard: View {
         // competing with the only ones that mean anything here. A quiet circle
         // in the corner is a different object: it names no action until it is
         // opened, so it cannot compete with the identity beside it.
+        .overlay(alignment: .topLeading) {
+            if profile.isProfilePrivate {
+                PrivateProfilePill()
+                    // Outside the ground's environment, as the ⋯ across from it is.
+                    .environment(\.colorScheme, ground.wantsDarkInk ? .light : .dark)
+                    .padding(Spacing.base)
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if !profile.isSelf, model.offersProfileMenu(for: profile.userID) {
                 UserMenuButton(isOpen: $isMenuOpen)

@@ -105,35 +105,52 @@ extension SessionController {
         }
     }
 
-    /// Opens a post in a forum.
-    ///
-    /// A refusal is surfaced on the board rather than swallowed: the sheet has
-    /// already closed, so a silent failure is a post the reader believes they
-    /// wrote.
+    /// Sends a post: its files first, against the forum, then the post with them
+    /// in it, as Discord's `659617` does. Throws what the server said, so the card
+    /// that's still up can say it.
     func createForumPost(
         in channelID: ChannelID,
         name: String,
         content: String,
         tags: [ForumTagID],
-        autoArchiveMinutes: Int
-    ) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let post = try await rest.createForumPost(
-                    in: channelID,
-                    name: name,
-                    content: content,
-                    tags: tags,
-                    autoArchiveMinutes: autoArchiveMinutes,
-                    nonce: Self.nonce()
-                )
-                model.applyCreatedForumPost(post, in: channelID)
-            } catch {
-                Self.trace("forum post in \(channelID) failed: \(Self.describe(error))")
-                model.applyForumPageFailure(in: channelID)
-            }
+        autoArchiveMinutes: Int,
+        stickerIDs: [UInt64],
+        attachments: [PendingAttachment]
+    ) async throws -> Channel {
+        let uploaded = try await upload(attachments, in: channelID) { [weak self] fraction in
+            self?.model.forumPostUploadProgress[channelID] = fraction
         }
+        return try await rest.createForumPost(
+            in: channelID,
+            name: name,
+            content: content,
+            tags: tags,
+            autoArchiveMinutes: autoArchiveMinutes,
+            stickerIDs: stickerIDs,
+            attachments: uploaded
+        )
+    }
+
+    /// Puts files on a post's opening message: Discord's `G` in `538899`. The files
+    /// first, then the post reopened if it's archived, then the message: a refusal at
+    /// any step leaves the post as it was.
+    func addMedia(_ files: [PendingAttachment], toPost postID: ChannelID) async throws -> Message {
+        let uploaded = try await upload(PendingAttachment.anonymising(files), in: postID) { _ in }
+        if model.channelIndex[postID]?.threadMetadata?.isArchived == true {
+            let reopened = try await rest.updateThread(postID, ThreadEdit(archived: false))
+            model.applyThreadUpsert(reopened, membership: nil)
+        }
+        let openerID = MessageID(rawValue: postID.rawValue)
+        return try await rest.addAttachments(
+            uploaded,
+            keeping: model.message(openerID, in: postID)?.attachments ?? [],
+            to: openerID,
+            in: postID
+        )
+    }
+
+    func traceForumPostFailure(_ error: any Error, in channelID: ChannelID) {
+        Self.trace("forum post in \(channelID) failed: \(Self.describe(error))")
     }
 
     // MARK: Membership

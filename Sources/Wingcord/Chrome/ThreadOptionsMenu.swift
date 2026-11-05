@@ -295,6 +295,28 @@ struct ThreadMoreButton<Glyph: View>: View {
     }
 }
 
+/// The same "More", as a region of the toolbar's group: a thread open as the page.
+///
+/// **A `HeaderGroupButton`, like everything else in the group.** A bare `Button` here
+/// kept the system's bezel, a grey box inside the capsule (Alex, 2026-11-05).
+struct ThreadMoreGroupButton: View {
+    var threadID: ChannelID
+
+    @Environment(AppModel.self) private var model
+    @State private var isShown = false
+
+    var body: some View {
+        HeaderGroupButton(systemImage: "ellipsis", label: "More", isActive: isShown) {
+            isShown.toggle()
+        }
+        .popover(isPresented: $isShown, arrowEdge: .bottom) {
+            ThreadOptionsMenu(threadID: threadID, place: .page, close: { isShown = false })
+                .environment(model)
+                .presentationBackground(.clear)
+        }
+    }
+}
+
 // MARK: - Presenting
 
 /// The right-click menu, hung off the row's rect, and what any of the three
