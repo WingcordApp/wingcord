@@ -1895,9 +1895,9 @@ final class TimelineCoordinator: NSObject {
         }
     }
 
-    /// The first and last messages that can be read: below the chrome over the
-    /// transcript's top — the toolbar and the summaries bar — and above the
-    /// composer. What Discord's anchors are, in this transcript's terms.
+    /// The first and last messages that can be read: below the toolbar over the
+    /// transcript's top, and above the composer. What Discord's anchors are, in
+    /// this transcript's terms.
     private func readableMessageRange() -> (top: MessageID, bottom: MessageID)? {
         guard let scrollView, let canvas, !canvas.rows.isEmpty else { return nil }
         let viewport = scrollView.contentView.bounds

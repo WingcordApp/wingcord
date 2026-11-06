@@ -6,12 +6,13 @@ struct TimelineContainer: View {
     var channelID: ChannelID
     var topInset: CGFloat = 0
     var bottomInset: CGFloat = 0
-    /// Whether this transcript carries the channel's summaries bar.
+    /// Whether this is the transcript the toolbar's summaries follow — the pill
+    /// names the stretch it shows, the steps move it — and the one that carries
+    /// the new-messages pill.
     ///
-    /// **The main conversation's alone.** The toolbar's Hide / Show Summaries
-    /// is about the channel the window is showing, and a thread panel, a voice
-    /// channel's chat or the overlay's small window would each be a second bar
-    /// answering to a toggle that is not above it.
+    /// **The main conversation's alone.** The toolbar is about the channel the
+    /// window is showing, not a thread panel, a voice channel's chat or the
+    /// overlay's small window.
     var hostsSummaries = false
 
     @Environment(AppModel.self) private var model
@@ -26,17 +27,16 @@ struct TimelineContainer: View {
 
     var body: some View {
         let summaries = hostsSummaries ? model.summaries(in: channelID) : []
-        // **No bar for a channel with no summaries** — a pill that can only say
+        // **Nothing for a channel with no summaries** — a pill that can only say
         // there is nothing is chrome spent on nothing. The list first, so a
-        // transcript that hosts no bar never reads the switch and never
+        // transcript that hosts none never reads the switch and never
         // re-evaluates when it moves.
-        let showsSummaryBar = !summaries.isEmpty && settings.showsSummaryBar
-        // The main conversation's alone, as the summaries bar is: Discord shows
+        let showsSummaries = !summaries.isEmpty && settings.showsSummaryBar
+        // The main conversation's alone, as the summaries are: Discord shows
         // it over the channel, not over a thread panel or a small window.
         let banner = hostsSummaries ? model.newMessagesBanner(in: channelID) : nil
-        // Everything below the bar starts where it ends: the rows, which is
-        // what extends AppKit's scroll edge under the pills, and the minimap.
-        let chromeBottom = topInset + (showsSummaryBar ? SummaryBar.reservedHeight : 0)
+        // The summaries are on the toolbar row now, so nothing takes a band of the rows.
+        let chromeBottom = topInset
         TimelineView(
             channelID: channelID,
             rows: model.timelineRows(for: channelID),
@@ -78,7 +78,7 @@ struct TimelineContainer: View {
             scroll: scroll,
             topics: model.conversationTopics[channelID]?.topics ?? [],
             // Only while the bar is up: its place is the one thing tracked.
-            summaries: showsSummaryBar ? summaries : [],
+            summaries: showsSummaries ? summaries : [],
             // Narrow for the jump's reason.
             selectedSummary: model.selectedSummary.flatMap { $0.channelID == channelID ? $0 : nil },
             // Read here for the reason the accents are, and it is the one input
@@ -140,19 +140,11 @@ struct TimelineContainer: View {
                 .padding(.bottom, bottomInset)
                 .ignoresSafeArea(.container, edges: .bottom)
         }
-        // **Under the toolbar, inside AppKit's scroll edge** — the pills sit in
-        // the band the rows' top inset has just grown by, so what passes
-        // beneath them is softened the way it is under the toolbar itself.
-        // Measured from the transcript's own top, as the inset is, whatever the
-        // pane does with its safe area — the jump control's reason.
+        // **Under the toolbar, over the rows' top.** Measured from the
+        // transcript's own top, as the inset is, whatever the pane does with
+        // its safe area — the jump control's reason.
         .overlay(alignment: .top) {
             ZStack {
-                if showsSummaryBar {
-                    SummaryBar(channelID: channelID, summaries: summaries, scroll: scroll)
-                        .transition(.materialize(from: .top, blurring: false))
-                }
-                // **In the middle of the same band**, which the summaries bar
-                // leaves free: its pill leads and its arrows trail.
                 if let banner {
                     NewMessagesPill(
                         banner: banner,
@@ -165,15 +157,17 @@ struct TimelineContainer: View {
                     .onHover(perform: scroll.pointer(overChrome:))
                     .onDisappear { scroll.pointer(overChrome: false) }
                     .frame(maxWidth: 420)
-                    .frame(height: SummaryBar.reservedHeight)
+                    .frame(height: NewMessagesPill.bandHeight)
                     .transition(.materialize(from: .top, blurring: false))
                 }
             }
             .padding(.top, topInset)
             .ignoresSafeArea(.container, edges: .top)
-            .animation(motion.panel, value: showsSummaryBar)
             .animation(motion.panel, value: banner == nil)
         }
+        // The toolbar's summaries read where the main transcript is: see `AppModel.summaryScroll`.
+        .onAppear { if hostsSummaries { model.summaryScroll = scroll } }
+        .onDisappear { if model.summaryScroll === scroll { model.summaryScroll = nil } }
         // Over everything else on the transcript, the minimap included: it is
         // the one modal layer here.
         .overlay {

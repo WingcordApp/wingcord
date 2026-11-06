@@ -592,6 +592,9 @@ final class AppModel {
     /// reader's own card opens beside it, from a click there or from User ›
     /// Set Status…. Ignored: nothing is drawn from it.
     @ObservationIgnored var ownCardAnchor: CGRect = .zero
+    /// The main transcript's place among its channel's summaries, for the toolbar's pill and
+    /// steps, which sit outside it. Observed: a new transcript is a new place to read.
+    var summaryScroll: TranscriptScrollState?
     /// The accounts on this Mac, most recent first. Kept here because reading the ledger
     /// asks the Keychain what it holds, and a menu's body runs far too often for that.
     var storedAccounts: [StoredAccount] = []

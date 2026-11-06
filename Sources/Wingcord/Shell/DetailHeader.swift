@@ -20,6 +20,17 @@ struct DetailHeader: View {
     @State private var toolsWidth: CGFloat = 0
     /// A forum's search is open, which takes its tags off the row.
     @State private var isForumSearchOpen = false
+    @State private var settings = AppSettings.shared
+
+    /// The channel's summaries, when the toolbar shows them: the main transcript's channel,
+    /// with some, and the switch on.
+    private var shownSummaries: (channelID: ChannelID, summaries: [ChannelSummary], scroll: TranscriptScrollState)? {
+        guard settings.showsSummaryBar, model.channelChrome.canShowSummaries,
+              let scroll = model.summaryScroll, let channelID = model.selectedChannelID
+        else { return nil }
+        let summaries = model.summaries(in: channelID)
+        return summaries.isEmpty ? nil : (channelID, summaries, scroll)
+    }
 
     var body: some View {
         let chrome = model.channelChrome
@@ -66,7 +77,12 @@ struct DetailHeader: View {
                     isSearching: isForumSearchOpen || !model.threadSearchText.isEmpty
                 )
             }
+            if let shown = shownSummaries {
+                SummaryToolbarPill(channelID: shown.channelID, summaries: shown.summaries, scroll: shown.scroll)
+                    .transition(.materialize(from: .leading, blurring: false))
+            }
         }
+        .animation(motion.panel, value: shownSummaries?.channelID)
         .transition(.materialize(from: .leading, blurring: false))
     }
 
@@ -89,6 +105,10 @@ struct DetailHeader: View {
     private func trailing(chrome: ChannelChrome, primary: WorkspacePresentation.Primary) -> some View {
         GlassEffectContainer(spacing: Spacing.base) {
             HStack(spacing: Spacing.base) {
+                if let shown = shownSummaries {
+                    SummaryToolbarSteps(channelID: shown.channelID, summaries: shown.summaries, scroll: shown.scroll)
+                        .transition(.materialize(from: .trailing, blurring: false))
+                }
                 if case .forum(let channelID) = primary, model.permissionGate.canSend(in: channelID) {
                     ForumNewPostButton(channelID: channelID, isCompact: forumFit(channelID).isNewPostCompact)
                 }
@@ -265,7 +285,8 @@ nonisolated struct HeaderSlotKey: LayoutValueKey {
 
 /// Leading, centre, trailing: the centre slot is centred in the whole row while
 /// it fits there, and slides between its neighbours when it does not — so a
-/// title never sits on top of a control.
+/// title never sits on top of a control. A row too narrow for all three takes
+/// from the leading slot first, then from the title.
 struct HeaderBarLayout: Layout {
     var spacing: CGFloat = Spacing.base
     /// How tall the row is, for a bar that may grow past it. Nil is what it's given.
@@ -310,8 +331,9 @@ struct HeaderBarLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let midY = bounds.minY + (rowHeight ?? bounds.height) / 2
-        let leading = place(.leading, in: subviews)?.sizeThatFits(.unspecified) ?? .zero
+        let wraps = centerWraps(in: bounds.width, subviews: subviews)
         let trailing = place(.trailing, in: subviews)?.sizeThatFits(.unspecified) ?? .zero
+        let leading = leadingSize(in: bounds.width, trailing: trailing.width, wraps: wraps, subviews: subviews)
         place(.leading, in: subviews)?.place(
             at: CGPoint(x: bounds.minX, y: midY),
             anchor: .leading,
@@ -323,7 +345,7 @@ struct HeaderBarLayout: Layout {
             proposal: ProposedViewSize(trailing)
         )
         guard let center = place(.center, in: subviews) else { return }
-        if centerWraps(in: bounds.width, subviews: subviews), let rowHeight {
+        if wraps, let rowHeight {
             let size = center.sizeThatFits(.unspecified)
             center.place(
                 at: CGPoint(x: bounds.midX, y: bounds.minY + rowHeight + size.height / 2),
@@ -344,6 +366,43 @@ struct HeaderBarLayout: Layout {
             proposal: ProposedViewSize(width: width, height: ideal.height)
         )
     }
+
+    /// The leading slot's size: its own, unless the row can't hold it beside the
+    /// title and the trailing slot.
+    ///
+    /// **The leading slot gives way before the title does.** A summary's pill can cut
+    /// its title short and then drop it (`SummaryToolbarPill`), and only once it can
+    /// give no more does the title truncate (`HuggingWidth`). The sidebar's controls
+    /// and a forum's filters are fixed, so they never shrink.
+    private func leadingSize(in width: CGFloat, trailing: CGFloat, wraps: Bool, subviews: Subviews) -> CGSize {
+        guard let leading = place(.leading, in: subviews) else { return .zero }
+        let ideal = leading.sizeThatFits(.unspecified)
+        guard !wraps, ideal.width > 0, let center = place(.center, in: subviews) else { return ideal }
+        let title = center.sizeThatFits(.unspecified).width
+        guard title > 0 else { return ideal }
+        let room = width - title - spacing - (trailing > 0 ? trailing + spacing : 0)
+        guard room < ideal.width else { return ideal }
+        let least = leading.sizeThatFits(ProposedViewSize(width: 0, height: ideal.height)).width
+        return CGSize(width: max(least, room), height: ideal.height)
+    }
+}
+
+/// Gives its one view the width it wants, and less when there's less.
+///
+/// **What the title capsule hugs its label with, where it had `.fixedSize()`.** A
+/// `Menu` stretches to whatever it's offered, so it was fixed at its own size, and a
+/// row too narrow for it put the title under the trailing controls. This hugs the same
+/// way and still gives way: the label's lines truncate.
+struct HuggingWidth: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let view = subviews.first else { return .zero }
+        let ideal = view.sizeThatFits(.unspecified)
+        return CGSize(width: min(ideal.width, proposal.width ?? ideal.width), height: ideal.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
 }
 
 // MARK: - The title
@@ -361,15 +420,16 @@ struct HeaderTitleCapsule: View {
 
     var body: some View {
         if !title.isEmpty {
-            Menu {
-                ChannelTitleMenu(chrome: chrome, model: model)
-            } label: {
-                label
+            HuggingWidth {
+                Menu {
+                    ChannelTitleMenu(chrome: chrome, model: model)
+                } label: {
+                    label
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
             .frame(height: rowSide)
             .contentShape(.capsule)
             .glassEffect(.regular.interactive(), in: .capsule)
@@ -398,6 +458,10 @@ struct HeaderTitleCapsule: View {
         }
         .padding(.leading, title.symbolName == nil ? 6 : 12)
         .padding(.trailing, 14)
+        // The whole capsule opens the menu, its padding too: a plain button answers
+        // only where its label draws.
+        .frame(height: rowSide)
+        .contentShape(.capsule)
     }
 
     @ViewBuilder

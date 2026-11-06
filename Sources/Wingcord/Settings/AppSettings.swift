@@ -963,8 +963,8 @@ final class AppSettings {
         didSet { defaults.set(showsNameplateInNowBar, forKey: Key.nowBarNameplate) }
     }
 
-    /// Whether a channel's summaries bar is shown — the toolbar's Hide / Show
-    /// Summaries.
+    /// Whether a channel's summaries are shown on the toolbar's row — its Hide /
+    /// Show Summaries. The name is older than their move up from a bar of their own.
     ///
     /// **One switch for every channel, kept on this Mac**, as Discord keeps
     /// it: its summary store persists `shouldShowTopicsBar` locally (module
