@@ -156,9 +156,9 @@ private struct SettingsPaneAction {
     init?(section: SettingsSection) {
         switch section {
         case .account:
-            title = "Sign Out"
+            title = "Log Out"
             symbolName = "rectangle.portrait.and.arrow.right"
-            perform = { model, _ in model.signOut() }
+            perform = { model, _ in model.requestLogOut() }
         case .diagnostics:
             title = "Reveal Logs"
             symbolName = "folder"

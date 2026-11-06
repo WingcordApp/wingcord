@@ -320,6 +320,7 @@ private struct FakeNitroEmbedDialog: View {
             // A voice message's bad news. Asked from here for the reason the rest are:
             // the composer is a value with nowhere to hang a card.
             .modifier(VoiceNoteNotices(model: model))
+            .modifier(AccountSwitchCards(model: model))
             // The plugin's other "Hold on!", for an animated sticker.
             .modal(
                 isPresented: Binding(

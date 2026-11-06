@@ -5,6 +5,16 @@ import Testing
 import WingcordNet
 import WingcordVoice
 
+/// Waits on the thing itself, for as long as a loaded machine needs. A wait with a short
+/// budget is a test that fails when the suite's busy, and says nothing about the code.
+@MainActor
+private func waitUntil(_ condition: () -> Bool) async {
+    let deadline = ContinuousClock.now + .seconds(30)
+    while !condition(), ContinuousClock.now < deadline {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+}
+
 /// A capture that delivers what the test tells it to, when it tells it to.
 @MainActor
 private final class ScriptedCapture: VoiceNoteCapture {
@@ -42,19 +52,9 @@ struct VoiceNoteRecorderTests {
         return recorder
     }
 
-    /// Lets the recorder's own task run until the capture has been started.
-    private func untilStarted(_ capture: ScriptedCapture) async {
-        for _ in 0..<500 where capture.deliver == nil {
-            try? await Task.sleep(for: .milliseconds(2))
-        }
-        // The turn after: the recorder takes the answer and moves the flow.
-        try? await Task.sleep(for: .milliseconds(10))
-    }
-
-    private func settled(_ condition: () -> Bool) async {
-        for _ in 0..<500 where !condition() {
-            try? await Task.sleep(for: .milliseconds(2))
-        }
+    /// Lets the recorder's own task run until the capture's up and the flow has moved.
+    private func untilStarted(_ recorder: VoiceNoteRecorder) async {
+        await waitUntil { recorder.flow.isRecording }
     }
 
     @Test func itRecordsAndStopsIntoReview() async throws {
@@ -63,7 +63,7 @@ struct VoiceNoteRecorderTests {
         recorder.start(in: here)
         // Nothing moves until the microphone's listening.
         #expect(recorder.flow.phase == .idle)
-        await untilStarted(capture)
+        await untilStarted(recorder)
         #expect(recorder.flow.phase == .recording(here))
         capture.speak(frames: 100)
         #expect(recorder.elapsedSeconds == 2)
@@ -79,7 +79,7 @@ struct VoiceNoteRecorderTests {
         #expect(!held.waveform.isEmpty)
         #expect(held.values.count == 100)
         #expect(recorder.stoppedAt != nil)
-        await settled { capture.didStop }
+        await waitUntil { capture.didStop }
         #expect(capture.didStop)
         recorder.discard()
     }
@@ -89,7 +89,7 @@ struct VoiceNoteRecorderTests {
         let capture = ScriptedCapture()
         let recorder = recorder(capture)
         recorder.start(in: here)
-        await untilStarted(capture)
+        await untilStarted(recorder)
         capture.speak(frames: 10)
 
         recorder.stop()
@@ -111,7 +111,7 @@ struct VoiceNoteRecorderTests {
         recorder.start(in: here)
         recorder.start(in: here)
         recorder.start(in: there)
-        await untilStarted(capture)
+        await untilStarted(recorder)
         #expect(starts == 1)
         #expect(recorder.flow.phase == .recording(here))
         recorder.discard()
@@ -128,7 +128,7 @@ struct VoiceNoteRecorderTests {
         #expect(recorder.flow.phase == .idle)
         // And a press in the next channel still works.
         recorder.start(in: there)
-        await untilStarted(capture)
+        await untilStarted(recorder)
         #expect(recorder.flow.phase == .recording(there))
         recorder.discard()
     }
@@ -137,7 +137,7 @@ struct VoiceNoteRecorderTests {
         let capture = ScriptedCapture()
         let recorder = recorder(capture)
         recorder.start(in: here)
-        await untilStarted(capture)
+        await untilStarted(recorder)
         capture.speak(frames: 100)
         recorder.stop()
         let file = try #require(recorder.held).file.url
@@ -153,7 +153,7 @@ struct VoiceNoteRecorderTests {
         let capture = ScriptedCapture()
         let recorder = recorder(capture, access: false)
         recorder.start(in: here)
-        await settled { recorder.notice != nil }
+        await waitUntil { recorder.notice != nil }
         #expect(recorder.notice == .microphoneRefused)
         #expect(recorder.flow.phase == .idle)
         #expect(capture.deliver == nil)
@@ -164,7 +164,7 @@ struct VoiceNoteRecorderTests {
         capture.failure = .refused
         let recorder = recorder(capture)
         recorder.start(in: here)
-        await settled { recorder.notice != nil }
+        await waitUntil { recorder.notice != nil }
         #expect(recorder.notice == .microphoneSilent)
         #expect(recorder.flow.phase == .idle)
     }
@@ -174,7 +174,7 @@ struct VoiceNoteRecorderTests {
         let capture = ScriptedCapture()
         let recorder = recorder(capture)
         recorder.start(in: here)
-        await untilStarted(capture)
+        await untilStarted(recorder)
         capture.speak(frames: 100)
 
         recorder.left(there)
@@ -190,7 +190,7 @@ struct VoiceNoteRecorderTests {
         let capture = ScriptedCapture()
         let recorder = recorder(capture)
         recorder.start(in: here)
-        await untilStarted(capture)
+        await untilStarted(recorder)
         capture.speak(frames: 100)
         recorder.stop()
 
@@ -206,7 +206,7 @@ struct VoiceNoteRecorderTests {
         let capture = ScriptedCapture()
         let recorder = recorder(capture)
         recorder.start(in: here)
-        await untilStarted(capture)
+        await untilStarted(recorder)
         capture.speak(frames: 100)
         recorder.callChanged()
         #expect(recorder.flow.phase == .review(here))
@@ -217,7 +217,7 @@ struct VoiceNoteRecorderTests {
         let capture = ScriptedCapture()
         let recorder = recorder(capture)
         recorder.start(in: here)
-        await untilStarted(capture)
+        await untilStarted(recorder)
         capture.speak(frames: 100)
         #expect(recorder.takeForSending() == nil)
         recorder.stop()
@@ -235,10 +235,8 @@ struct VoiceNoteRecorderTests {
         let capture = ScriptedCapture()
         let recorder = recorder(capture)
         recorder.start(in: here)
-        await untilStarted(capture)
-        for _ in 0..<60 where recorder.notice == nil {
-            try? await Task.sleep(for: .milliseconds(100))
-        }
+        await untilStarted(recorder)
+        await waitUntil { recorder.notice != nil }
         #expect(recorder.notice == .microphoneSilent)
         #expect(recorder.flow.phase == .idle)
     }
@@ -260,10 +258,7 @@ struct VoiceNoteSendingTests {
 
     private func hold(_ model: AppModel, in channelID: ChannelID, _ capture: ScriptedCapture) async {
         model.startVoiceNote(in: channelID)
-        for _ in 0..<500 where capture.deliver == nil {
-            try? await Task.sleep(for: .milliseconds(2))
-        }
-        try? await Task.sleep(for: .milliseconds(10))
+        await waitUntil { model.voiceRecorder.flow.isRecording }
         capture.speak(frames: 150)
         model.voiceRecorder.stop()
     }
@@ -499,9 +494,7 @@ struct VoiceNotePlayerTests {
         let nowhere = try #require(URL(string: "http://127.0.0.1:9/nothing.ogg"))
         player.play(first, source: nowhere, duration: 2)
         #expect(player.isLoading)
-        for _ in 0..<200 where player.isLoading {
-            try? await Task.sleep(for: .milliseconds(25))
-        }
+        await waitUntil { !player.isLoading }
         #expect(!player.isLoading)
         #expect(player.failed.contains(first))
         #expect(player.current == nil)
@@ -525,9 +518,7 @@ struct VoiceNotePlayerTests {
         player.play(id, source: source, duration: 1)
         #expect(player.isLoading)
         #expect(!player.isPlaying)
-        for _ in 0..<200 where player.isLoading {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        await waitUntil { !player.isLoading }
 
         #expect(!player.isLoading)
         #expect(player.isPlaying)

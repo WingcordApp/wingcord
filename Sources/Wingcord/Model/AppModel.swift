@@ -592,6 +592,20 @@ final class AppModel {
     /// reader's own card opens beside it, from a click there or from User ›
     /// Set Status…. Ignored: nothing is drawn from it.
     @ObservationIgnored var ownCardAnchor: CGRect = .zero
+    /// The accounts on this Mac, most recent first. Kept here because reading the ledger
+    /// asks the Keychain what it holds, and a menu's body runs far too often for that.
+    var storedAccounts: [StoredAccount] = []
+    /// A switch under way, which the window's veil covers.
+    var accountSwitch: AccountSwitch?
+    @ObservationIgnored var accountSwitchSerial: UInt64 = 0
+    /// The account being asked about, whose row turns its tick into a spinner.
+    var checkingAccountID: String?
+    /// Something a switch would end, asked about first. See `AccountSwitchPrompt`.
+    var accountSwitchPrompt: AccountSwitchPrompt?
+    /// The web sign-in, over the app, for another account.
+    var isAddingAccount = false
+    /// An account about to be logged out of, asked about first.
+    var logOutPrompt: StoredAccount?
     /// Add App, raised from an app's profile and presented over it — see
     /// `AppModel.addApplication(from:)`.
     var profileApplicationInstall: ApplicationInstallRequest?

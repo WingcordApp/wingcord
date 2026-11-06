@@ -98,18 +98,18 @@ struct SettingsStorageTests {
     func conversationIsRemembered() {
         let defaults = suite("conversation")
         let settings = AppSettings(defaults: defaults)
-        #expect(settings.lastChannelID == nil)
+        #expect(settings.lastPlace(forAccount: "a")?.channelID == nil)
 
-        settings.rememberConversation(guildID: 7, channelID: 42)
-        #expect(settings.lastGuildID == 7)
-        #expect(settings.lastChannelID == 42)
+        settings.rememberConversation(guildID: 7, channelID: 42, account: "a")
+        #expect(settings.lastPlace(forAccount: "a")?.guildID == 7)
+        #expect(settings.lastPlace(forAccount: "a")?.channelID == 42)
 
         // A direct message has no guild, and nil has to round-trip as nil rather
         // than as zero — a channel restored under guild zero opens nothing.
-        settings.rememberConversation(guildID: nil, channelID: 99)
+        settings.rememberConversation(guildID: nil, channelID: 99, account: "a")
         let reloaded = AppSettings(defaults: defaults)
-        #expect(reloaded.lastGuildID == nil)
-        #expect(reloaded.lastChannelID == 99)
+        #expect(reloaded.lastPlace(forAccount: "a")?.guildID == nil)
+        #expect(reloaded.lastPlace(forAccount: "a")?.channelID == 99)
     }
 
     @Test("Launch destinations are stored by name, so reordering the enum is safe")

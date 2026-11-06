@@ -24,6 +24,35 @@ extension FocusedValues {
 }
 
 /// User › Online, Idle, Do Not Disturb, Invisible — one checked choice.
+/// User › Switch Accounts: the now bar's flyout, as a command.
+struct AccountsMenu: View {
+    var model: AppModel
+
+    var body: some View {
+        Menu("Switch Accounts") {
+            ForEach(model.storedAccounts) { account in
+                let isCurrent = account.id == model.currentUserID?.description
+                Toggle(
+                    account.isSessionExpired
+                        ? "\(account.preferredName) (session expired)"
+                        : account.preferredName,
+                    isOn: Binding(
+                        get: { isCurrent },
+                        set: { _ in model.requestAccountSwitch(to: account) }
+                    )
+                )
+                .disabled(isCurrent)
+            }
+            Divider()
+            if AccountList(model.storedAccounts).canAdd {
+                Button("Add an Account…") { model.presentAddAccount() }
+            }
+            Button("Manage Accounts…") { SettingsWindow.open(.account) }
+        }
+        .disabled(model.currentUserID == nil)
+    }
+}
+
 struct UserStatusPicker: View {
     var model: AppModel
 

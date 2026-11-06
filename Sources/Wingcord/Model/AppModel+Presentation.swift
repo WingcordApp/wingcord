@@ -1207,7 +1207,7 @@ extension AppModel {
         let guildID = channelIndex.guildID(of: channelID)
         if let guildID { lastChannelByGuild[guildID] = channelID }
         AppSettings.shared.rememberConversation(
-            guildID: guildID?.rawValue, channelID: channelID.rawValue
+            guildID: guildID?.rawValue, channelID: channelID.rawValue, account: currentUserID?.description
         )
         // **A no-op inside a server, and the close at Home.** A guild search is
         // scoped to the guild, so clicking a result and landing in another

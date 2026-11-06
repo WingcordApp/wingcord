@@ -617,17 +617,33 @@ final class AppSettings {
     /// `restoreNavigation()`. Two scalars rather than a codable pair: they are
     /// snowflakes, they are written on a navigation, and a JSON round trip per
     /// click to store sixteen bytes would be the expensive way to do it.
-    private(set) var lastGuildID: UInt64?
-    private(set) var lastChannelID: UInt64?
+    private var legacyLastPlace: LastPlace?
+    private var lastPlaces: [String: LastPlace] = [:]
+
+    /// Where an account was. Written by nothing else, and nothing else may read it.
+    struct LastPlace: Codable, Equatable {
+        var guildID: UInt64?
+        var channelID: UInt64?
+    }
+
+    /// Where this account was when it last had the window.
+    ///
+    /// **Per account, or one opens in another's channel.** The single pair from before
+    /// there could be two is what the first account after the update gets, and nobody
+    /// after it: from then on, an account that's never been opened has nowhere to be.
+    func lastPlace(forAccount accountID: String?) -> LastPlace? {
+        if let accountID, let place = lastPlaces[accountID] { return place }
+        return lastPlaces.isEmpty ? legacyLastPlace : nil
+    }
 
     /// Records where the reader is. Cheap enough to call on every navigation:
     /// it writes only when the pair actually moved.
-    func rememberConversation(guildID: UInt64?, channelID: UInt64?) {
-        guard guildID != lastGuildID || channelID != lastChannelID else { return }
-        lastGuildID = guildID
-        lastChannelID = channelID
-        defaults.set(guildID.map(NSNumber.init(value:)), forKey: Key.lastGuild)
-        defaults.set(channelID.map(NSNumber.init(value:)), forKey: Key.lastChannel)
+    func rememberConversation(guildID: UInt64?, channelID: UInt64?, account: String?) {
+        guard let account else { return }
+        let place = LastPlace(guildID: guildID, channelID: channelID)
+        guard lastPlaces[account] != place else { return }
+        lastPlaces[account] = place
+        defaults.set(try? JSONEncoder().encode(lastPlaces), forKey: Key.lastPlaces)
     }
 
     // MARK: Notifications
@@ -1701,8 +1717,13 @@ final class AppSettings {
         playsCallSounds = defaults.object(forKey: Key.callSounds) as? Bool ?? true
         mutesMedia = defaults.object(forKey: Key.mutesMedia) as? Bool ?? false
         loopsVideo = defaults.object(forKey: Key.loopsVideo) as? Bool ?? false
-        lastGuildID = (defaults.object(forKey: Key.lastGuild) as? NSNumber)?.uint64Value
-        lastChannelID = (defaults.object(forKey: Key.lastChannel) as? NSNumber)?.uint64Value
+        // The pair from before accounts each had their own, read and never written.
+        let legacyChannel = (defaults.object(forKey: Key.lastChannel) as? NSNumber)?.uint64Value
+        legacyLastPlace = legacyChannel.map {
+            LastPlace(guildID: (defaults.object(forKey: Key.lastGuild) as? NSNumber)?.uint64Value, channelID: $0)
+        }
+        lastPlaces = defaults.data(forKey: Key.lastPlaces)
+            .flatMap { try? JSONDecoder().decode([String: LastPlace].self, from: $0) } ?? [:]
         showsUnreadCounts = defaults.object(forKey: Key.showsUnreadCounts) as? Bool ?? true
         postsNotifications = defaults.object(forKey: Key.postsNotifications) as? Bool ?? true
         playsNotificationSound = defaults.object(forKey: Key.notificationSound) as? Bool ?? true
@@ -1822,6 +1843,7 @@ final class AppSettings {
         static let launchDestination = "startup.launchDestination"
         static let lastGuild = "startup.lastGuildID"
         static let lastChannel = "startup.lastChannelID"
+        static let lastPlaces = "startup.lastPlaces"
         static let showsUnreadCounts = "notifications.showsUnreadCounts"
         static let postsNotifications = "notifications.posts"
         static let notificationSound = "notifications.sound"

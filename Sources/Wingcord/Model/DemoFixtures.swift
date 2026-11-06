@@ -133,17 +133,29 @@ enum DemoFixtures {
     }
 
     static func populate(_ model: AppModel) {
+        populate(model, rotation: 0)
+    }
+
+    /// The same fixtures seen as another of the demo's accounts: a switch's landing.
+    static func populate(_ model: AppModel, asAccount accountID: String) {
+        populate(model, rotation: demoAccountRotation(of: accountID))
+    }
+
+    /// - Parameter rotation: how far round the list of names the reader is. The rest of
+    ///   the fixtures are written in terms of their place in it, so the world stays the
+    ///   same shape with somebody else at the middle of it.
+    private static func populate(_ model: AppModel, rotation: Int) {
         model.connectionState = .ready
         model.selfStatus = .online
         model.accountStanding = AccountStanding(state: .allGood)
 
         var users: [UserID: User] = [:]
         var userIDs: [UserID] = []
-        for (offset, name) in names.enumerated() {
+        for (offset, name) in (names[rotation...] + names[..<rotation]).enumerated() {
             // Real snowflake magnitudes, not 1…27. The default-avatar index is
             // `(id >> 22) % 6`, so small ids all resolve to the same picture and
             // a roster of fixtures looks wrong in a way real accounts never do.
-            let id = UserID(rawValue: 900_000_000_000_000_000 + UInt64(offset) * 4_194_304)
+            let id = UserID(rawValue: demoID(rotation: rotation, offset: offset))
             userIDs.append(id)
             users[id] = User(
                 id: id,
@@ -787,6 +799,10 @@ enum DemoFixtures {
         populateRoster(model, guildID: firstGuild, me: me)
         populateForumsAndInvites(model, guildID: firstGuild, me: me, people: userIDs)
         DemoVoiceNotes.populate(model, guildID: firstGuild, me: me, people: userIDs)
+        if LaunchOptions.current.usesDemoFixtures {
+            if AccountLedger.accounts().isEmpty { seedAccounts() }
+            model.reloadAccounts()
+        }
         // **Nitro, as its own badges say** ("Nitro · Gold"), so every part of
         // the profile editor can be tried. `--demo-free` shows the account
         // without it — the locks, the notes, a server profile that is only a
@@ -2455,6 +2471,47 @@ enum DemoFixtures {
         RoleSpec(name: "Server Booster", color: 0xF47FFF, hoisted: true),
         RoleSpec(name: "Bots", color: 0x5865F2, hoisted: true),
     ]
+
+    // MARK: The accounts
+
+    private static func demoID(rotation: Int, offset: Int) -> UInt64 {
+        // 1,001 so a default picture, `(id >> 22) % 6`, differs from one account to the next.
+        900_000_000_000_000_000 + UInt64(rotation) * 1_001 * 4_194_304 + UInt64(offset) * 4_194_304
+    }
+
+    /// One of the demo's accounts: `names[rotation]`, at the middle of the fixtures.
+    private static func demoAccount(rotation: Int) -> StoredAccount {
+        let name = names[rotation]
+        return StoredAccount(
+            id: String(demoID(rotation: rotation, offset: 0)),
+            username: name.lowercased().replacing(" ", with: ""),
+            displayName: name
+        )
+    }
+
+    private static func demoAccountRotation(of accountID: String) -> Int {
+        names.indices.first { demoAccount(rotation: $0).id == accountID } ?? 0
+    }
+
+    /// Who the demo starts with: the reader, somebody else, and one whose session has
+    /// died, which only turns out when it's pressed, as a real one would.
+    static func seedAccounts() {
+        AccountLedger.seedDemo([0, 9, 17].map(demoAccount(rotation:)))
+    }
+
+    static func hasDeadSession(_ account: StoredAccount) -> Bool {
+        account.id == demoAccount(rotation: 17).id
+    }
+
+    /// Add an Account, with nothing to sign in to: the next of the names not in the list.
+    static func addAccount() -> StoredAccount? {
+        let present = Set(AccountLedger.accounts().map(\.id))
+        guard present.count < AccountList.limit,
+              let next = [16, 7, 13].map(demoAccount(rotation:)).first(where: { !present.contains($0.id) })
+        else { return nil }
+        AccountLedger.add(next)
+        return next
+    }
 
     private static let names = [
         "alex", "Blåhaj", "Hellomarlo", "Bram", "iamnumber7", "MarvelMallow",

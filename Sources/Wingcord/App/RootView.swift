@@ -15,11 +15,13 @@ struct RootView: View {
         WindowShell()
             .opacity(model.showsWorkspace ? 1 : 0)
             .overlay {
-                if !model.showsWorkspace {
+                // Under a switch's veil there's nothing to sign in to.
+                if !model.showsWorkspace, model.accountSwitch == nil {
                     SignInView()
                         .transition(.opacity)
                 }
             }
+            .modifier(AccountSwitchVeilHost())
             .overlay(alignment: .top) {
                 ConnectionBanner(state: model.connectionState)
             }
@@ -110,15 +112,13 @@ extension AppModel {
         }
     }
 
-    /// Signs in automatically when exactly one account is stored.
-    ///
-    /// With several, the picker is shown rather than one being chosen — an app
-    /// that silently picks an account is one that opens the wrong one.
+    /// Opens the account used last, as Discord does. The picker's for when that one's
+    /// session has died: see `AccountList.accountToResume`.
     func resumeStoredSessionIfAvailable() async {
         guard case .signedOut = connectionState else { return }
-        let accounts = AccountLedger.accounts()
-        DiagnosticLog.trace("app", "stored accounts: \(accounts.count)")
-        guard accounts.count == 1, let account = accounts.first else { return }
+        reloadAccounts()
+        DiagnosticLog.trace("app", "stored accounts: \(storedAccounts.count)")
+        guard let account = AccountList(storedAccounts).accountToResume else { return }
         resumeSession(for: account)
     }
 }

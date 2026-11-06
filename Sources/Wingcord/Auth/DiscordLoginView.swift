@@ -141,7 +141,8 @@ struct DiscordLoginView: View {
 struct SignInView: View {
     @Environment(AppModel.self) private var model
     @State private var isPresentingWebLogin = false
-    @State private var accounts: [StoredAccount] = []
+
+    private var accounts: [StoredAccount] { model.storedAccounts }
 
     var body: some View {
         VStack(spacing: Spacing.group) {
@@ -163,10 +164,20 @@ struct SignInView: View {
                     ForEach(accounts) { account in
                         AccountRow(
                             account: account,
-                            resume: { model.resumeSession(for: account) },
+                            resume: {
+                                if account.isSessionExpired {
+                                    if LaunchOptions.current.usesDemoFixtures {
+                                        model.presentAddAccount()
+                                    } else {
+                                        isPresentingWebLogin = true
+                                    }
+                                } else {
+                                    model.resumeSession(for: account)
+                                }
+                            },
                             forget: {
                                 AccountLedger.remove(account.id)
-                                accounts = AccountLedger.accounts()
+                                model.reloadAccounts()
                             }
                         )
                     }
@@ -175,7 +186,12 @@ struct SignInView: View {
             }
 
             Button("Sign in with Discord", systemImage: "arrow.right.circle.fill") {
-                isPresentingWebLogin = true
+                // `--demo` has no sign-in to show, and a real token has no place in it.
+                if LaunchOptions.current.usesDemoFixtures {
+                    model.presentAddAccount()
+                } else {
+                    isPresentingWebLogin = true
+                }
             }
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.capsule)
@@ -192,7 +208,7 @@ struct SignInView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .readingSurface()
-        .task { accounts = AccountLedger.accounts() }
+        .task { model.reloadAccounts() }
         .modal(isPresented: $isPresentingWebLogin, style: .panel) {
             DiscordLoginView { token in
                 isPresentingWebLogin = false
@@ -240,19 +256,17 @@ private struct AccountRow: View {
             Button(action: resume) {
                 HStack(spacing: Spacing.snug) {
                     AvatarView(
-                        url: account.avatarHash.flatMap {
-                            URL(string: "\(CDN.host)/avatars/\(account.id)/\($0).webp?size=64")
-                        },
-                        monogram: account.preferredName.first.map(String.init)?.uppercased() ?? "?",
+                        url: account.avatarURL(side: 32),
+                        monogram: account.monogram,
                         side: 32
                     )
                     VStack(alignment: .leading, spacing: 0) {
                         Text(account.preferredName)
                             .font(.system(.subheadline, weight: .semibold))
                             .foregroundStyle(Ink.primary)
-                        Text(account.username)
+                        Text(account.isSessionExpired ? "Session expired. Log in again." : account.username)
                             .font(.system(.caption))
-                            .foregroundStyle(Ink.secondary)
+                            .foregroundStyle(account.isSessionExpired ? Palette.destructive : Ink.secondary)
                     }
                     Spacer(minLength: Spacing.base)
                 }

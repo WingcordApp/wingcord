@@ -22,6 +22,11 @@ extension AppModel {
         sessionController.signOut()
     }
 
+    /// Logs out of the account for good. See `SessionController.logOut`.
+    func logOut() {
+        sessionController.logOut()
+    }
+
     /// Called when a channel becomes the destination: loads its newest page and
     /// subscribes to its roster.
     ///

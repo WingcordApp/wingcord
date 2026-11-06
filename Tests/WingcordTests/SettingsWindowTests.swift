@@ -64,7 +64,7 @@ struct SettingsWindowTests {
         withRememberedSection(.account) {
             let window = mount(SettingsView().resolvesMotion().environment(AppModel()))
             defer { window.close() }
-            #expect(toolbarLabels(of: window) == ["Back", "Forward", "Sign Out"])
+            #expect(toolbarLabels(of: window) == ["Back", "Forward", "Log Out"])
         }
         withRememberedSection(.general) {
             let window = mount(SettingsView().resolvesMotion().environment(AppModel()))

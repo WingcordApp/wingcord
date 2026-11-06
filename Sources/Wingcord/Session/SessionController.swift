@@ -369,6 +369,7 @@ final class SessionController {
                     displayName: user.displayName,
                     avatarHash: user.avatarHash
                 ))
+                model.reloadAccounts()
                 adoptEntitlements(of: account)
                 connect(token: token)
             } catch DiscordREST.Failure.unauthorized {
@@ -382,6 +383,11 @@ final class SessionController {
 
     /// Reconnects with a token already in the Keychain.
     func resumeSession(for account: StoredAccount) {
+        // `--demo` has no Keychain to read and no server to ask: it's a switch.
+        if LaunchOptions.current.usesDemoFixtures {
+            switchAccount(to: account)
+            return
+        }
         // Already coming up for this account, or for another one. Either way a
         // second connection is never what was wanted.
         guard startingAccountID == nil else {
@@ -412,6 +418,7 @@ final class SessionController {
             } catch TokenStore.ReadFailure.missing {
                 Self.trace("no token in keychain")
                 AccountLedger.remove(account.id)
+                model.reloadAccounts()
                 model.connectionState = .failed("No stored credential for that account.")
                 startingAccountID = nil
                 return
@@ -432,13 +439,18 @@ final class SessionController {
             do {
                 let account = try await rest.currentUser()
                 Self.trace("validated as \(account.user.username)")
+                // Chosen from the picker: it's the one the next launch opens.
+                AccountLedger.used(account.user.id.description)
+                model.reloadAccounts()
                 adoptEntitlements(of: account)
                 connect(token: token)
             } catch DiscordREST.Failure.unauthorized {
                 Self.trace("401 — token rejected")
-                // A 401 on a stored account drops just that account and leaves
-                // every other one alone.
-                AccountLedger.remove(account.id)
+                // A 401 on a stored account marks just that account and leaves
+                // every other one alone. Listed, so it's clear which one wants
+                // signing in again.
+                AccountLedger.expire(account.id)
+                model.reloadAccounts()
                 model.connectionState = .failed("That account's session expired. Sign in again.")
             } catch {
                 Self.trace("validation failed: \(Self.describe(error))")
@@ -446,6 +458,193 @@ final class SessionController {
             }
             startingAccountID = nil
         }
+    }
+
+    // MARK: Switching
+
+    /// Moves to another stored account: **checked first, and let go of after.**
+    ///
+    /// Discord tears down and apologises if the new account turns out to be dead. Asking
+    /// first, with a client of its own, means a dead token or no network leaves the reader
+    /// exactly where they were, with their channel open and their session up. The shared
+    /// client's token isn't touched until the answer's in, so nothing the live session
+    /// sends in the meantime goes out as somebody else.
+    func switchAccount(to account: StoredAccount) {
+        guard startingAccountID == nil, model.accountSwitch == nil,
+              model.currentUserID?.description != account.id
+        else { return }
+        startingAccountID = account.id
+        model.checkingAccountID = account.id
+        Task { [weak self] in
+            guard let self else { return }
+            // Only its own marks. Signing out while this was asking clears them, and by the
+            // time it gets here another press may have set them for somebody else.
+            defer {
+                if self.startingAccountID == account.id { self.startingAccountID = nil }
+                if self.model.checkingAccountID == account.id { self.model.checkingAccountID = nil }
+            }
+            if LaunchOptions.current.usesDemoFixtures {
+                await self.switchInDemo(to: account)
+                return
+            }
+            let token: String
+            do {
+                // Off the main thread, for `resumeSession`'s reason: it can raise a prompt.
+                token = try await Task.detached(priority: .userInitiated) {
+                    try TokenStore.token(forAccount: account.id)
+                }.value
+            } catch TokenStore.ReadFailure.missing {
+                AccountLedger.remove(account.id)
+                self.model.reloadAccounts()
+                self.model.reportAccountProblem("There's no saved sign-in for \(account.preferredName).")
+                return
+            } catch {
+                self.model.reportAccountProblem("Couldn't read the saved sign-in for \(account.preferredName).")
+                return
+            }
+            let probe = DiscordREST(metadata: self.metadata)
+            await probe.setToken(token)
+            let current: CurrentAccount
+            do {
+                current = try await probe.currentUser()
+            } catch DiscordREST.Failure.unauthorized {
+                self.accountSessionExpired(account)
+                return
+            } catch {
+                self.model.reportAccountProblem(
+                    "Couldn't reach Discord to switch to \(account.preferredName). Nothing changed."
+                )
+                return
+            }
+            // A token answering as somebody else is no longer this account's: Discord's
+            // `MULTI_ACCOUNT_VALIDATE_TOKEN_USER_MISMATCH`.
+            guard current.user.id.description == account.id else {
+                self.accountSessionExpired(account)
+                return
+            }
+            // Logged out, or the live session died, while that was being asked: `clearAccount`
+            // took the mark, and nobody's waiting on this switch any more.
+            guard self.startingAccountID == account.id else { return }
+            await self.moveToValidated(account, token: token, current: current)
+        }
+    }
+
+    private func rememberAccount(_ user: User) {
+        AccountLedger.refresh(StoredAccount(
+            id: user.id.description,
+            username: user.handle,
+            displayName: user.displayName,
+            avatarHash: user.avatarHash
+        ))
+        model.reloadAccounts()
+    }
+
+    /// Marked on its row, and said out loud, since the row may be on a list that's closed
+    /// by now: a card asking about a call takes the flyout with it.
+    private func accountSessionExpired(_ account: StoredAccount) {
+        AccountLedger.expire(account.id)
+        model.reloadAccounts()
+        model.reportAccountProblem("\(account.preferredName)'s session has expired. Log in again to use it.")
+    }
+
+    /// The veil's up before anything's let go of, so nothing being cleared is ever seen.
+    private func moveToValidated(_ account: StoredAccount, token: String, current: CurrentAccount) async {
+        let user = current.user
+        let fresh = StoredAccount(
+            id: account.id, username: user.handle, displayName: user.displayName, avatarHash: user.avatarHash
+        )
+        AccountLedger.refresh(fresh)
+        AccountLedger.used(account.id)
+        let serial = beginVeil(over: fresh)
+        try? await Task.sleep(for: .seconds(AccountSwitch.veilIn))
+        clearAccount()
+        model.reloadAccounts()
+        startingAccountID = account.id
+        model.connectionState = .connecting
+        await rest.setToken(token)
+        adoptEntitlements(of: current)
+        connect(token: token)
+        watchSwitch(serial)
+    }
+
+    private func beginVeil(over account: StoredAccount) -> UInt64 {
+        model.accountSwitchSerial &+= 1
+        let serial = model.accountSwitchSerial
+        model.profileRequest = nil
+        model.accountSwitch = AccountSwitch(target: account, serial: serial)
+        return serial
+    }
+
+    /// Nothing leaves a veil up for ever: a gateway that never answers ends at the sign-in
+    /// screen, which says so and lists the accounts.
+    private func watchSwitch(_ serial: UInt64) {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(AccountSwitch.timeout))
+            guard let self, self.model.accountSwitch?.serial == serial else { return }
+            self.model.accountSwitch = nil
+            self.signOut()
+            self.model.connectionState = .failed("Discord didn't answer. Try that account again.")
+        }
+    }
+
+    /// A signed-in reader adding another: **the current session stays up until the new
+    /// token's proved good**, then it's an ordinary switch, with its questions.
+    func addAccount(token: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            let probe = DiscordREST(metadata: self.metadata)
+            await probe.setToken(token)
+            do {
+                let user = try await probe.currentUser().user
+                try TokenStore.store(token, forAccount: user.id.description)
+                let stored = StoredAccount(
+                    id: user.id.description,
+                    username: user.handle,
+                    displayName: user.displayName,
+                    avatarHash: user.avatarHash
+                )
+                let isCurrent = self.model.currentUserID == user.id
+                if isCurrent {
+                    AccountLedger.refresh(stored)
+                } else {
+                    AccountLedger.add(stored)
+                }
+                self.model.reloadAccounts()
+                if !isCurrent { self.model.requestAccountSwitch(to: stored) }
+            } catch {
+                self.model.reportAccountProblem("That sign-in didn't work. \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// Really logs out: the token and the list entry both go, which is what's left for
+    /// "Log Out" to mean now that a switch is how to leave an account and keep it.
+    func logOut() {
+        if let accountID = model.currentUserID?.description {
+            AccountLedger.remove(accountID)
+        }
+        signOut()
+        model.reloadAccounts()
+    }
+
+    /// `--demo`: the same steps at the same pace, and the fixtures seen as somebody else.
+    private func switchInDemo(to account: StoredAccount) async {
+        try? await Task.sleep(for: .milliseconds(450))
+        if DemoFixtures.hasDeadSession(account) {
+            accountSessionExpired(account)
+            return
+        }
+        AccountLedger.used(account.id)
+        _ = beginVeil(over: account)
+        try? await Task.sleep(for: .seconds(AccountSwitch.veilIn))
+        clearAccount()
+        model.reloadAccounts()
+        model.connectionState = .connecting
+        model.demoTranscripts = [:]
+        try? await Task.sleep(for: .milliseconds(600))
+        DemoFixtures.populate(model, asAccount: account.id)
+        model.reloadAccounts()
+        _ = openLastPlace()
     }
 
     /// What the account just validated is entitled to, **replacing** whatever
@@ -506,7 +705,21 @@ final class SessionController {
     /// presences against invisible ids, cached rosters, folders, and every badge
     /// derived from them.
     func signOut() {
+        clearAccount()
+        Task { await rest.setToken(nil) }
+    }
+
+    /// Everything but the shared client's token.
+    ///
+    /// **Apart from `signOut` because a switch sets the next token straight after**, and
+    /// a task clearing it would land on the far side of that, leaving the new session
+    /// asking as nobody.
+    private func clearAccount() {
         Task { await AttachmentLinks.shared.forget() }
+        // A note's the account's: nobody else should find it in their composer, let
+        // alone send it.
+        model.voicePlayer.stop()
+        model.voiceRecorder.discard()
         stopLocalRPC()
         startingAccountID = nil
         teardownConnection()
@@ -621,7 +834,6 @@ final class SessionController {
         model.permissionGate.invalidate()
         model.connectionState = .signedOut
         ImageStore.shared.purge()
-        Task { await rest.setToken(nil) }
     }
 
     private func teardownConnection() {
@@ -687,9 +899,10 @@ final class SessionController {
             model.connectionState = willRetry ? .reconnecting : .failed(reason)
         case .authenticationFailed:
             if let userID = model.currentUserID {
-                AccountLedger.remove(userID.description)
+                AccountLedger.expire(userID.description)
             }
             signOut()
+            model.reloadAccounts()
             model.connectionState = .failed("The session expired. Sign in again.")
         }
     }
@@ -788,6 +1001,8 @@ final class SessionController {
             soundboards: snapshot.soundboardsByGuild
         )
         model.currentUserID = snapshot.currentUser.id
+        // Who the account is now, for a switcher that can't ask.
+        rememberAccount(snapshot.currentUser)
         model.ownTypingIndicatorStyle = snapshot.typingIndicatorStyle
         model.experiments = snapshot.experiments
         // A voice invite's look can follow a server experiment.
@@ -958,6 +1173,18 @@ final class SessionController {
         model.sidebarRevision &+= 1
     }
 
+    /// Back where this account was, if that's still there and still readable.
+    private func openLastPlace() -> Bool {
+        guard let place = AppSettings.shared.lastPlace(forAccount: model.currentUserID?.description),
+              let channelRaw = place.channelID
+        else { return false }
+        let channelID = ChannelID(rawValue: channelRaw)
+        guard model.canOpen(channelID) else { return false }
+        model.selectedGuildID = place.guildID.map(GuildID.init(rawValue:))
+        model.selectChannel(channelID)
+        return true
+    }
+
     private func restoreNavigation() {
         guard model.selectedChannelID == nil else { return }
 
@@ -971,14 +1198,7 @@ final class SessionController {
         // Both conditions matter: a channel can be deleted between launches, and
         // a role can be taken away — and either one, unchecked, opens the window
         // on a conversation that renders as an error.
-        if let channelRaw = settings.lastChannelID {
-            let channelID = ChannelID(rawValue: channelRaw)
-            if model.canOpen(channelID) {
-                model.selectedGuildID = settings.lastGuildID.map(GuildID.init(rawValue:))
-                model.selectChannel(channelID)
-                return
-            }
-        }
+        if openLastPlace() { return }
 
         // The first guild in rail order with a channel the reader can actually
         // open. Not simply the first guild: landing on a server whose every
@@ -1374,6 +1594,7 @@ final class SessionController {
 
         case .currentUserUpdated(let user, let premiumType, let ageVerificationStatus, let verification):
             model.users[user.id] = user.merged(over: model.users[user.id])
+            rememberAccount(user)
             model.entitlements = model.entitlements.updated(
                 premiumType: premiumType,
                 ageVerificationStatus: ageVerificationStatus

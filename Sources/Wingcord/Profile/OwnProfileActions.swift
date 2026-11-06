@@ -31,8 +31,15 @@ struct OwnProfileActions {
     var editProfile: () -> Void
     var setStatus: (PresenceStatus) -> Void
     var setCustomStatus: (CustomStatus?) -> Void
-    var signOut: () -> Void
+    var logOut: () -> Void
     var copyUserID: () -> Void
+    /// The accounts on this Mac, and which is being asked about.
+    var accounts: [StoredAccount] = []
+    var checkingAccountID: String?
+    var switchAccount: (StoredAccount) -> Void = { _ in }
+    var addAccount: () -> Void = {}
+    var manageAccounts: () -> Void = {}
+    var logOutOfAccount: (StoredAccount) -> Void = { _ in }
     /// The block's first page: the custom-status editor when User › Set
     /// Status… opened the card.
     var startsOn: OwnProfileSurface = .root
@@ -66,14 +73,26 @@ extension AppModel {
             editProfile: { [weak self] in self?.editOwnProfile() },
             setStatus: { [weak self] in self?.updateSelfStatus($0) },
             setCustomStatus: { [weak self] in self?.updateSelfCustomStatus($0) },
-            signOut: { [weak self] in
+            logOut: { [weak self] in
                 dismiss()
-                self?.signOut()
+                self?.requestLogOut()
             },
             copyUserID: {
                 AppModel.copy(userID.description)
                 dismiss()
             },
+            accounts: storedAccounts,
+            checkingAccountID: checkingAccountID,
+            switchAccount: { [weak self] in self?.requestAccountSwitch(to: $0) },
+            addAccount: { [weak self] in
+                dismiss()
+                self?.presentAddAccount()
+            },
+            manageAccounts: {
+                dismiss()
+                SettingsWindow.open(.account)
+            },
+            logOutOfAccount: { [weak self] in self?.requestLogOut(of: $0) },
             startsOn: startsOn
         )
     }
@@ -86,11 +105,16 @@ extension AppModel {
 /// **One surface that swaps its contents**, exactly as every other menu in this
 /// app does: the status list and the custom-status editor replace this block
 /// rather than opening a popover on a popover.
+///
+/// **The accounts are the exception, and a flyout beside the card.** Status belongs to
+/// the card you're looking at, while an account's the thing the whole card would become,
+/// so its list stands apart from it.
 struct OwnProfileActionBlock: View {
     var actions: OwnProfileActions
     @Binding var surface: OwnProfileSurface
 
     @Environment(\.motion) private var motion
+    @State private var isShowingAccounts = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -131,15 +155,21 @@ struct OwnProfileActionBlock: View {
             accessory: .disclosure
         ) { surface = .status }
         OwnProfileDivider()
-        // **Log Out where Discord has Switch Accounts.** This client stores one
-        // credential and has no account list to switch between, and a row that
-        // opened onto an empty list is the inert control `INVARIANTS.md` §5.5
-        // forbids. Switching comes back with a token store to switch through.
+        // Drawn with one account too: it's how a second gets added.
+        OwnProfileRow(
+            title: "Switch Accounts",
+            symbolName: "arrow.left.arrow.right",
+            accessory: .faces(actions.accounts.filter { $0.id != actions.userID.description })
+        ) { isShowingAccounts.toggle() }
+        .popover(isPresented: $isShowingAccounts, arrowEdge: .trailing) {
+            AccountSwitcherFlyout(actions: actions)
+        }
+        OwnProfileDivider()
         OwnProfileRow(
             title: "Log Out",
             symbolName: "rectangle.portrait.and.arrow.right",
             isDestructive: true,
-            act: actions.signOut
+            act: actions.logOut
         )
         if actions.developerMode {
             OwnProfileDivider()
@@ -354,6 +384,8 @@ private struct OwnProfileRow: View {
         case none
         case disclosure
         case tick(Bool)
+        /// The other accounts' faces, then the way in.
+        case faces([StoredAccount])
     }
 
     @Environment(\.motion) private var motion
@@ -414,6 +446,13 @@ private struct OwnProfileRow: View {
     private var accessoryView: some View {
         switch accessory {
         case .none: EmptyView()
+        case .faces(let accounts):
+            HStack(spacing: Spacing.tight) {
+                AccountFaces(accounts: accounts)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(InkColor.tertiary)
+            }
         case .disclosure:
             Image(systemName: "chevron.right")
                 .font(.system(size: 9, weight: .semibold))

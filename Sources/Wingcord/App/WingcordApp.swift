@@ -433,6 +433,8 @@ struct WingcordCommands: Commands {
             }
             .disabled(model.menuContext.guildID == nil || !isWorkspace)
             Divider()
+            AccountsMenu(model: model)
+            Divider()
             // Vencord's CustomRPC toolbox item: the Rich Presence builder's
             // card last on, or the first (DESIGN-NOTES §11).
             Toggle("Show Custom RPC", isOn: Binding(

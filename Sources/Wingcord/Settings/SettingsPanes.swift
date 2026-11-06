@@ -905,7 +905,6 @@ private struct NotificationsPane: View {
 
 private struct AccountPane: View {
     @Environment(AppModel.self) private var model
-    @State private var accounts: [StoredAccount] = []
 
     var body: some View {
         // In a stack of its own, so the fetch below is ONE task: a modifier on
@@ -941,6 +940,31 @@ private struct AccountPane: View {
             }
         }
 
+        // Where the now bar's Manage Accounts lands, so it's up here rather than a scroll away.
+        SettingsGroup("Accounts on this Mac") {
+            SettingsCard {
+                let accounts = model.storedAccounts
+                ForEach(accounts.indices, id: \.self) { index in
+                    if index > 0 { CardDivider() }
+                    AccountSettingsRow(
+                        account: accounts[index],
+                        isCurrent: accounts[index].id == model.currentUserID?.description
+                    )
+                }
+                if AccountList(accounts).canAdd {
+                    if !accounts.isEmpty { CardDivider() }
+                    SettingsActionRow("Add an Account", actionTitle: "Add") {
+                        model.presentAddAccount()
+                    }
+                }
+            }
+            SettingsFootnote(
+                "Kept in your Keychain, on this Mac only.",
+                symbolName: "key.fill"
+            )
+        }
+        .task { model.reloadAccounts() }
+
         SettingsGroup("Security") {
             AccountSecurityCard(details: model.accountDetails)
         }
@@ -959,30 +983,42 @@ private struct AccountPane: View {
         }
         .task { model.sessionController.loadAccountStanding() }
 
-        SettingsGroup("Other accounts on this Mac") {
-            SettingsCard {
-                let others = accounts.filter { $0.id != model.currentUserID?.description }
-                if others.isEmpty {
-                    SettingsValueRow(title: "Stored accounts", value: "None")
-                } else {
-                    ForEach(others.indices, id: \.self) { index in
-                        let account = others[index]
-                        if index > 0 { CardDivider() }
-                        SettingsActionRow(
-                            account.preferredName,
-                            actionTitle: "Switch"
-                        ) {
-                            model.resumeSession(for: account)
-                        }
-                    }
+    }
+}
+
+/// One account in Settings: its picture and name, and what can be done about it.
+private struct AccountSettingsRow: View {
+    @Environment(AppModel.self) private var model
+
+    var account: StoredAccount
+    var isCurrent: Bool
+
+    var body: some View {
+        HStack(spacing: Spacing.snug) {
+            AvatarView(url: account.avatarURL(side: 32), monogram: account.monogram, side: 32)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(account.preferredName)
+                    .font(.system(.body, weight: .medium))
+                Text(subtitle)
+                    .font(.system(.caption))
+                    .foregroundStyle(account.isSessionExpired ? AnyShapeStyle(Palette.destructive) : AnyShapeStyle(Ink.secondary))
+            }
+            Spacer(minLength: Spacing.base)
+            if !isCurrent {
+                Button(account.isSessionExpired ? "Log In" : "Switch") {
+                    model.requestAccountSwitch(to: account)
                 }
             }
-            SettingsFootnote(
-                "Kept in your Keychain, on this Mac only.",
-                symbolName: "key.fill"
-            )
+            Button("Log Out", role: .destructive) {
+                model.requestLogOut(of: account)
+            }
         }
-        .task { accounts = AccountLedger.accounts() }
+        .padding(.vertical, Spacing.tight)
+    }
+
+    private var subtitle: String {
+        if account.isSessionExpired { return "Session expired. Log in again." }
+        return isCurrent ? "@\(account.username), using now" : "@\(account.username)"
     }
 }
 
