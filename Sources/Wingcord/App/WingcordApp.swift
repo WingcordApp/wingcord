@@ -68,8 +68,10 @@ struct WingcordApp: App {
         _ = ThemeStore.shared
         VoiceNoteRecorder.clearLeftovers()
         let model = AppModel()
-        if LaunchOptions.current.usesDemoFixtures {
+        if LaunchOptions.current.usesDemoFixtures, !LaunchOptions.current.startsSignedOut {
             DemoFixtures.populate(model)
+        } else if LaunchOptions.current.usesDemoFixtures, LaunchOptions.current.hasSavedAccounts {
+            DemoFixtures.seedExpiredAccounts()
         }
         if LaunchOptions.current.pretendsAGameIsRunning {
             DemoFixtures.populateDetectedGame(model)
@@ -654,6 +656,15 @@ nonisolated struct LaunchOptions: Sendable {
     /// Reduce Motion for this one run, so its paths can be looked at without flipping the
     /// system's setting under everything else on the Mac: `--reduce-motion`.
     var forcesReducedMotion = false
+    /// The first-launch welcome, whether it's been seen or not: `--welcome`. Implies
+    /// `--signed-out` in the demo.
+    var forcesWelcome = false
+    /// `--demo` at the sign-in screen rather than signed in: `--signed-out`. Its
+    /// sign-in is scripted (`DemoSignInService`) and lands in the usual fixtures.
+    var startsSignedOut = false
+    /// `--demo --signed-out` with the demo's accounts already saved, so "Choose an
+    /// account" comes first: `--saved-accounts`.
+    var hasSavedAccounts = false
 
     static let current: LaunchOptions = {
         let arguments = Set(ProcessInfo.processInfo.arguments)
@@ -667,7 +678,11 @@ nonisolated struct LaunchOptions: Sendable {
                 || Bundle.main.bundleIdentifier == "dev.wingcord.Wingcord.demo",
             pretendsAGameIsRunning: arguments.contains("--overlay"),
             usesSyntheticMicrophone: arguments.contains("--synthetic-microphone"),
-            forcesReducedMotion: arguments.contains("--reduce-motion")
+            forcesReducedMotion: arguments.contains("--reduce-motion"),
+            forcesWelcome: arguments.contains("--welcome"),
+            startsSignedOut: arguments.contains("--signed-out") || arguments.contains("--welcome")
+                || arguments.contains("--saved-accounts"),
+            hasSavedAccounts: arguments.contains("--saved-accounts")
         )
     }()
 }

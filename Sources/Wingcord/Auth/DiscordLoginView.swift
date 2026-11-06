@@ -3,20 +3,18 @@ import SwiftUI
 import WebKit
 import WingcordCore
 
-/// Discord's own sign-in page, hosted.
+/// Discord's own sign-in page, hosted: **the way out, no longer the way in.**
 ///
-/// **Discord's page rather than a hand-built form, and that is the safer choice
-/// on both counts.** A native email-and-password form would have to reimplement
-/// captcha, two-factor, backup codes, passkeys, the "new login location" email
-/// challenge and every future change to any of them — and every one of those is
-/// a place to get it subtly wrong. More importantly, it would mean this app
-/// handling the password itself. Here it never sees one: the credentials go from
-/// the web view straight to Discord over TLS, and what comes back out is a
-/// session token.
+/// Wingcord signs in with its own screen now (`SignInScreen`,
+/// docs/LOGIN-ONBOARDING.md D1), sending the password to Discord over TLS as
+/// Discord's own client does and keeping only the token. This page stays
+/// behind "Having trouble?" for whatever that screen can't do yet — Discord
+/// changing a step under it, or a check it hasn't met.
 ///
-/// The token is read once, stored in the Keychain, and the web view's data is
-/// discarded — the login session is a means to a credential, not something worth
-/// keeping.
+/// It never sees a password either: the credentials go from the web view to
+/// Discord, and what comes back out is a session token. The token is read once
+/// and the web view's data is discarded — the login session is a means to a
+/// credential, not something worth keeping.
 struct DiscordLoginView: View {
     var onToken: (String) -> Void
 
@@ -133,164 +131,5 @@ struct DiscordLoginView: View {
         } catch {
             return nil
         }
-    }
-}
-
-/// The sign-in surface: the account picker when there are stored accounts, and
-/// the web sign-in when there are not.
-struct SignInView: View {
-    @Environment(AppModel.self) private var model
-    @State private var isPresentingWebLogin = false
-
-    private var accounts: [StoredAccount] { model.storedAccounts }
-
-    var body: some View {
-        VStack(spacing: Spacing.group) {
-            VStack(spacing: Spacing.base) {
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .font(.system(size: 44, weight: .light))
-                    .foregroundStyle(Palette.accent)
-                Text("Wingcord")
-                    .font(.system(.largeTitle, weight: .bold))
-                    .foregroundStyle(Ink.primary)
-                Text(subtitle)
-                    .font(.system(.subheadline))
-                    .foregroundStyle(Ink.secondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            if !accounts.isEmpty {
-                VStack(spacing: Spacing.base) {
-                    ForEach(accounts) { account in
-                        AccountRow(
-                            account: account,
-                            resume: {
-                                if account.isSessionExpired {
-                                    if LaunchOptions.current.usesDemoFixtures {
-                                        model.presentAddAccount()
-                                    } else {
-                                        isPresentingWebLogin = true
-                                    }
-                                } else {
-                                    model.resumeSession(for: account)
-                                }
-                            },
-                            forget: {
-                                AccountLedger.remove(account.id)
-                                model.reloadAccounts()
-                            }
-                        )
-                    }
-                }
-                .frame(maxWidth: 320)
-            }
-
-            Button("Sign in with Discord", systemImage: "arrow.right.circle.fill") {
-                // `--demo` has no sign-in to show, and a real token has no place in it.
-                if LaunchOptions.current.usesDemoFixtures {
-                    model.presentAddAccount()
-                } else {
-                    isPresentingWebLogin = true
-                }
-            }
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.capsule)
-            .tint(Palette.accent)
-            .controlSize(.extraLarge)
-
-            if case .failed(let reason) = model.connectionState {
-                Text(reason)
-                    .font(.system(.caption))
-                    .foregroundStyle(Palette.destructive)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 360)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .readingSurface()
-        .task { model.reloadAccounts() }
-        .modal(isPresented: $isPresentingWebLogin, style: .panel) {
-            DiscordLoginView { token in
-                isPresentingWebLogin = false
-                model.beginSession(token: token)
-            }
-            .frame(width: 560, height: 720)
-            .overlay(alignment: .topTrailing) {
-                ModalCloseButton { isPresentingWebLogin = false }
-                    .padding(Spacing.margin)
-            }
-        }
-    }
-
-    private var subtitle: String {
-        switch model.connectionState {
-        case .connecting: "Connecting…"
-        case .reconnecting: "Reconnecting…"
-        default: accounts.isEmpty
-            ? "Sign in to your Discord account to continue."
-            : "Pick an account, or sign in to another."
-        }
-    }
-}
-
-/// One stored account.
-///
-/// **A real `Button`, not a row with `.onTapGesture`.** A tap gesture looks
-/// identical and is not the same control: it takes no keyboard focus, reports
-/// nothing to VoiceOver, gives no press feedback, and cannot be activated by
-/// Return or by an automation click. This is the first control anyone touches in
-/// the app, so it has to be the real thing.
-///
-/// The Forget button sits OUTSIDE the account button rather than inside it — a
-/// button nested in a button is one hit region the outer one swallows.
-private struct AccountRow: View {
-    var account: StoredAccount
-    var resume: () -> Void
-    var forget: () -> Void
-
-    @Environment(\.motion) private var motion
-    @State private var isHovering = false
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Button(action: resume) {
-                HStack(spacing: Spacing.snug) {
-                    AvatarView(
-                        url: account.avatarURL(side: 32),
-                        monogram: account.monogram,
-                        side: 32
-                    )
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(account.preferredName)
-                            .font(.system(.subheadline, weight: .semibold))
-                            .foregroundStyle(Ink.primary)
-                        Text(account.isSessionExpired ? "Session expired. Log in again." : account.username)
-                            .font(.system(.caption))
-                            .foregroundStyle(account.isSessionExpired ? Palette.destructive : Ink.secondary)
-                    }
-                    Spacer(minLength: Spacing.base)
-                }
-                .padding(Spacing.snug)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Continue as \(account.preferredName)"))
-
-            Button("Forget", systemImage: "xmark", action: forget)
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .foregroundStyle(Ink.tertiary)
-                .padding(.trailing, Spacing.snug)
-                .accessibilityLabel(Text("Forget \(account.preferredName)"))
-        }
-        .background {
-            RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
-                .fill(isHovering ? Palette.selectionFill : Palette.surfaceRaised)
-        }
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-        .animation(motion.hover, value: isHovering)
     }
 }

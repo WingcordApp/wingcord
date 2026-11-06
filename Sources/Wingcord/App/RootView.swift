@@ -14,11 +14,25 @@ struct RootView: View {
     var body: some View {
         WindowShell()
             .opacity(model.showsWorkspace ? 1 : 0)
+            // Invisible isn't absent: until it's shown, VoiceOver shouldn't find
+            // a workspace under the sign-in screen.
+            .accessibilityHidden(!model.showsWorkspace)
             .overlay {
-                // Under a switch's veil there's nothing to sign in to.
-                if !model.showsWorkspace, model.accountSwitch == nil {
-                    SignInView()
-                        .transition(.opacity)
+                // Under a switch's veil there's nothing to sign in to. A sign-in's
+                // veil keeps the sign-in screen's backdrop under it, so the ember
+                // runs on until the app arrives (docs/LOGIN-ONBOARDING.md D11).
+                if !model.showsWorkspace, model.accountSwitch.map({ $0.kind == .signingIn }) ?? true {
+                    Group {
+                        // A saved account coming back up at launch: nothing to
+                        // sign in to, and no welcome to play under it. Not under a
+                        // sign-in's veil, which connects too and keeps the ember.
+                        if case .connecting = model.connectionState, model.accountSwitch == nil {
+                            SignInConnectingView()
+                        } else {
+                            SignInScreen()
+                        }
+                    }
+                    .transition(.opacity)
                 }
             }
             .modifier(AccountSwitchVeilHost())

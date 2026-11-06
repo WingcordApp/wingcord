@@ -6,6 +6,13 @@ import WingcordCore
 struct AccountSwitch: Equatable {
     var target: StoredAccount
     var serial: UInt64
+    /// What the veil says: a switch, or a sign-in landing (docs/LOGIN-ONBOARDING.md D11).
+    var kind: Kind = .switching
+
+    enum Kind: Equatable {
+        case switching
+        case signingIn
+    }
 
     /// How long the veil takes to cover the window, before anything's let go of.
     static let veilIn: TimeInterval = 0.24
@@ -94,15 +101,9 @@ extension AppModel {
         sessionController.switchAccount(to: account)
     }
 
-    /// Add an Account: the web sign-in, over the app. `--demo` has no sign-in and no
-    /// Keychain, so it adds somebody it made up.
+    /// Add an Account: Wingcord's own login, in a card over the app. `--demo` shows the
+    /// same card with its scripted sign-in, which adds somebody it made up.
     func presentAddAccount() {
-        if LaunchOptions.current.usesDemoFixtures {
-            guard let added = DemoFixtures.addAccount() else { return }
-            reloadAccounts()
-            requestAccountSwitch(to: added)
-            return
-        }
         isAddingAccount = true
         showWorkspaceForCard()
     }

@@ -124,3 +124,16 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+## MetalForge
+
+The sign-in screen's ember wallpaper and its particle logo are adapted from
+MetalForge shaders (the "Wallpaper" gradient and "metallogo"), used under the
+project owner's MetalForge subscription:
+
+- `Sources/Wingcord/Welcome/Shaders/SignInBackdrop.metal` — `wallpaperGradient`'s
+  arithmetic, unchanged, split into a half-size field pass and a full-size
+  vignette and grain pass; `metallogoVertex` and `metallogoFragment`, with an
+  offset, an opacity and an exit added.
+- `Sources/Wingcord/Welcome/EmberRenderer.swift` and `ParticleLockup.swift` —
+  the renderer and the mask sampling, ported from iOS to macOS and reshaped to
+  gather into Wingcord's wings and wordmark.

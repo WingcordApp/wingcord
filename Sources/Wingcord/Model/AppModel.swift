@@ -607,6 +607,12 @@ final class AppModel {
     var accountSwitchPrompt: AccountSwitchPrompt?
     /// The web sign-in, over the app, for another account.
     var isAddingAccount = false
+    /// Whoever can put a human check on screen, for every client that might be
+    /// answered with one — the session's and each sign-in's own. On the model
+    /// rather than the window root's state, because a card drawn by the modal
+    /// host is outside that root's environment: Add an Account's sign-in never
+    /// got a solver, and its first captcha failed unseen.
+    @ObservationIgnored let captchaSolver = CaptchaSolver()
     /// An account about to be logged out of, asked about first.
     var logOutPrompt: StoredAccount?
     /// Add App, raised from an app's profile and presented over it — see

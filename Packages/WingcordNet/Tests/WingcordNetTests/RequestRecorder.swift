@@ -36,6 +36,16 @@ final class RequestRecorder: URLProtocol, @unchecked Sendable {
         return (rest, token)
     }
 
+    /// A client that is nobody, as the sign-in routes are: no token, and its
+    /// requests filed under a fingerprint of its own instead.
+    static func anonymousClient(status: Int = 200, body: String = "{}") async -> (DiscordREST, String) {
+        let fingerprint = "fp-\(UUID().uuidString)"
+        lock.withLock { answers[fingerprint] = (status, Data(body.utf8)) }
+        let rest = DiscordREST(protocolClasses: [RequestRecorder.self])
+        await rest.setFingerprint(fingerprint)
+        return (rest, fingerprint)
+    }
+
     static func requests(for token: String) -> [Captured] {
         lock.withLock { captured[token] ?? [] }
     }
@@ -44,7 +54,9 @@ final class RequestRecorder: URLProtocol, @unchecked Sendable {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        let token = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        let token = request.value(forHTTPHeaderField: "Authorization")
+            ?? request.value(forHTTPHeaderField: "X-Fingerprint")
+            ?? ""
         let url = request.url
         let components = url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
         var query: [String: String] = [:]

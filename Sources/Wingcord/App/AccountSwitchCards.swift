@@ -58,15 +58,8 @@ struct AccountSwitchCards: ViewModifier {
                 ),
                 style: .panel
             ) {
-                DiscordLoginView { token in
-                    model.isAddingAccount = false
-                    model.sessionController.addAccount(token: token)
-                }
-                .frame(width: 560, height: 720)
-                .overlay(alignment: .topTrailing) {
-                    ModalCloseButton { model.isAddingAccount = false }
-                        .padding(Spacing.margin)
-                }
+                // Wingcord's own login, in a card (docs/LOGIN-ONBOARDING.md D12).
+                AddAccountCard { model.isAddingAccount = false }
             }
     }
 }

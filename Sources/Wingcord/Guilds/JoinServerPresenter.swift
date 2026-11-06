@@ -13,8 +13,8 @@ import WingcordCore
 /// to the window rather than to the flow that first needed it.
 struct JoinServerPresenter: ViewModifier {
     @Environment(AppModel.self) private var model
-    /// Owned by this modifier, which lives as long as the window.
-    @State private var solver = CaptchaSolver()
+    /// The model's: the sign-in screens install the same one.
+    private var solver: CaptchaSolver { model.captchaSolver }
 
     func body(content: Content) -> some View {
         @Bindable var model = model

@@ -53,6 +53,10 @@ public struct CaptchaChallenge: Sendable, Hashable {
     public var rqdata: String?
     /// Echoed back as `X-Captcha-Rqtoken`.
     public var rqtoken: String?
+    /// `should_serve_invisible`: Discord asking for hCaptcha's invisible widget,
+    /// executed at once, rather than the checkbox — its own captcha modal
+    /// switches on exactly this (`645320`: `size: serveInvisible ? "invisible"`).
+    public var serveInvisible: Bool = false
 
     /// Whether this build can put the challenge on screen at all.
     public var isSolvable: Bool {
@@ -103,6 +107,7 @@ struct CaptchaChallengeDTO: Decodable, Sendable {
     var captcha_session_id: String?
     var captcha_rqdata: String?
     var captcha_rqtoken: String?
+    var should_serve_invisible: Bool?
 
     /// Nil unless this really is a challenge.
     ///
@@ -116,7 +121,8 @@ struct CaptchaChallengeDTO: Decodable, Sendable {
             sitekey: sitekey,
             sessionID: captcha_session_id,
             rqdata: captcha_rqdata,
-            rqtoken: captcha_rqtoken
+            rqtoken: captcha_rqtoken,
+            serveInvisible: should_serve_invisible ?? false
         )
     }
 }

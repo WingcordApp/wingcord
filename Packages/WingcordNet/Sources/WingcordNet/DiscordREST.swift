@@ -59,8 +59,13 @@ public actor DiscordREST {
     /// request, because it is made with an activity's bearer token rather than
     /// the account's. See `oauthIdentity(bearer:)`.
     let metadata: ClientMetadata
-    private let limiter = RateLimiter()
+    /// `internal` for the sign-in routes, which send their own requests: see
+    /// `DiscordREST+Auth`.
+    let limiter = RateLimiter()
     private var token: String?
+    /// The `X-Fingerprint` Discord hands a client that isn't signed in, sent on
+    /// the sign-in routes as its web client sends it. See `DiscordREST+Auth`.
+    var fingerprint: String?
     /// Who can put a human check on screen. See `DiscordREST+Captcha`.
     ///
     /// **Nil is a working configuration**, not a missing dependency: with none
@@ -843,7 +848,10 @@ public actor DiscordREST {
     /// Returns nil for every other outcome — no challenge in the body, a service
     /// this build cannot render, no solver installed, or somebody who closed it
     /// — and the caller then reports Discord's own rejection.
-    private func solveCaptcha(in data: Data) async -> CaptchaSolution? {
+    ///
+    /// `internal` for the sign-in routes, whose refusals are read whole rather
+    /// than thrown: see `DiscordREST+Auth`.
+    func solveCaptcha(in data: Data) async -> CaptchaSolution? {
         guard let solver = captchaSolver,
               let challenge = Self.captchaChallenge(in: data),
               challenge.isSolvable

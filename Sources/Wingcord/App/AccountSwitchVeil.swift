@@ -17,17 +17,25 @@ struct AccountSwitchVeilHost: ViewModifier {
     func body(content: Content) -> some View {
         content
             .overlay {
-                if model.accountSwitch != nil {
-                    Color.clear
-                        .readingSurface()
-                        .contentShape(.rect)
-                        .accessibilityHidden(true)
-                        .transition(.opacity)
+                if let change = model.accountSwitch {
+                    // A switch covers the window it's emptying. A sign-in has
+                    // nothing behind it to hide but its own backdrop, which only
+                    // dims, so the ember runs on under the veil.
+                    Group {
+                        if change.kind == .signingIn {
+                            Color.black.opacity(0.42)
+                        } else {
+                            Color.clear.readingSurface()
+                        }
+                    }
+                    .contentShape(.rect)
+                    .accessibilityHidden(true)
+                    .transition(.opacity)
                 }
             }
             .overlay {
                 if let change = model.accountSwitch {
-                    AccountSwitchVeil(target: change.target)
+                    AccountSwitchVeil(target: change.target, kind: change.kind)
                         .transition(motion.reduceMotion ? AnyTransition.opacity : AnyTransition(.materialize))
                 }
             }
@@ -53,8 +61,16 @@ struct AccountSwitchVeilHost: ViewModifier {
 
 private struct AccountSwitchVeil: View {
     var target: StoredAccount
+    var kind: AccountSwitch.Kind
 
     private static let picture: CGFloat = 96
+
+    private var title: String {
+        switch kind {
+        case .switching: "Switching to \(target.preferredName)"
+        case .signingIn: "Logging in as \(target.preferredName)"
+        }
+    }
 
     var body: some View {
         VStack(spacing: Spacing.margin) {
@@ -64,7 +80,7 @@ private struct AccountSwitchVeil: View {
                 side: Self.picture
             )
             VStack(spacing: Spacing.hair) {
-                Text("Switching to \(target.preferredName)")
+                Text(title)
                     .font(.system(.title2, weight: .semibold))
                     .foregroundStyle(InkColor.solid)
                 Text("@\(target.username)")
@@ -77,7 +93,7 @@ private struct AccountSwitchVeil: View {
         .accessibilityElement(children: .combine)
         // The whole window's changing under somebody who can't see it change.
         .onAppear {
-            AccessibilityNotification.Announcement("Switching to \(target.preferredName)").post()
+            AccessibilityNotification.Announcement(title).post()
         }
     }
 }

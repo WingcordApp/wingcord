@@ -567,11 +567,11 @@ final class SessionController {
         watchSwitch(serial)
     }
 
-    private func beginVeil(over account: StoredAccount) -> UInt64 {
+    private func beginVeil(over account: StoredAccount, kind: AccountSwitch.Kind = .switching) -> UInt64 {
         model.accountSwitchSerial &+= 1
         let serial = model.accountSwitchSerial
         model.profileRequest = nil
-        model.accountSwitch = AccountSwitch(target: account, serial: serial)
+        model.accountSwitch = AccountSwitch(target: account, serial: serial, kind: kind)
         return serial
     }
 
@@ -614,6 +614,107 @@ final class SessionController {
             } catch {
                 self.model.reportAccountProblem("That sign-in didn't work. \(Self.describe(error))")
             }
+        }
+    }
+
+    /// A token from the sign-in screen, with nobody signed in: **checked, kept, and the
+    /// veil up saying who it is** while the session comes up (docs/LOGIN-ONBOARDING.md
+    /// D11). The check happens before anything is stored, for `beginSession`'s reason.
+    ///
+    /// - Returns: what went wrong, for the screen to say, or nil once it's under way.
+    func signIn(token: String) async -> String? {
+        guard startingAccountID == nil, model.accountSwitch == nil else { return "Already signing in." }
+        if LaunchOptions.current.usesDemoFixtures {
+            await signInInDemo()
+            return nil
+        }
+        startingAccountID = "pending"
+        let probe = DiscordREST(metadata: metadata)
+        await probe.setToken(token)
+        let current: CurrentAccount
+        do {
+            current = try await probe.currentUser()
+        } catch DiscordREST.Failure.unauthorized {
+            startingAccountID = nil
+            return "That sign-in did not produce a usable token. Try again."
+        } catch {
+            startingAccountID = nil
+            return Self.describe(error)
+        }
+        let user = current.user
+        do {
+            try TokenStore.store(token, forAccount: user.id.description)
+        } catch {
+            startingAccountID = nil
+            return "Signed in, but the sign-in couldn't be saved to the Keychain."
+        }
+        let stored = StoredAccount(
+            id: user.id.description,
+            username: user.handle,
+            displayName: user.displayName,
+            avatarHash: user.avatarHash
+        )
+        AccountLedger.upsert(stored)
+        model.reloadAccounts()
+        let serial = beginVeil(over: stored, kind: .signingIn)
+        try? await Task.sleep(for: .seconds(AccountSwitch.veilIn))
+        startingAccountID = stored.id
+        model.connectionState = .connecting
+        await rest.setToken(token)
+        adoptEntitlements(of: current)
+        connect(token: token)
+        startingAccountID = nil
+        watchSwitch(serial)
+        return nil
+    }
+
+    /// `--demo`: the same veil, then the fixtures, as the account the demo signs in as.
+    private func signInInDemo() async {
+        let account = DemoFixtures.demoSignInAccount
+        // The demo's usual company on the switcher, with this one on top.
+        if AccountLedger.accounts().isEmpty { DemoFixtures.seedAccounts() }
+        AccountLedger.upsert(account)
+        model.reloadAccounts()
+        _ = beginVeil(over: account, kind: .signingIn)
+        try? await Task.sleep(for: .seconds(AccountSwitch.veilIn))
+        model.connectionState = .connecting
+        try? await Task.sleep(for: .milliseconds(600))
+        DemoFixtures.populate(model, asAccount: account.id)
+        model.reloadAccounts()
+        _ = openLastPlace()
+    }
+
+    /// Add an Account's token, from the native sign-in card: `addAccount`, answering
+    /// whether it worked so the card can say so where it's being looked at.
+    func addSignedInAccount(token: String) async -> String? {
+        if LaunchOptions.current.usesDemoFixtures {
+            guard let added = DemoFixtures.addAccount() else { return "There's no room for another account." }
+            model.reloadAccounts()
+            model.requestAccountSwitch(to: added)
+            return nil
+        }
+        let probe = DiscordREST(metadata: metadata)
+        await probe.setToken(token)
+        do {
+            let user = try await probe.currentUser().user
+            try TokenStore.store(token, forAccount: user.id.description)
+            let stored = StoredAccount(
+                id: user.id.description,
+                username: user.handle,
+                displayName: user.displayName,
+                avatarHash: user.avatarHash
+            )
+            let isCurrent = model.currentUserID == user.id
+            if isCurrent {
+                AccountLedger.refresh(stored)
+            } else {
+                AccountLedger.add(stored)
+            }
+            model.reloadAccounts()
+            if !isCurrent { model.requestAccountSwitch(to: stored) }
+            return nil
+        } catch {
+            return "That sign-in didn't work. \(Self.describe(error))"
         }
     }
 

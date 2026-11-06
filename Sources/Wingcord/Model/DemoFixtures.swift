@@ -2493,6 +2493,16 @@ enum DemoFixtures {
         names.indices.first { demoAccount(rotation: $0).id == accountID } ?? 0
     }
 
+    /// `--saved-accounts`: the demo's accounts, every session dead — which is when the
+    /// real app shows "Choose an account" rather than opening the last one.
+    static func seedExpiredAccounts() {
+        seedAccounts()
+        for account in AccountLedger.accounts() { AccountLedger.expire(account.id) }
+    }
+
+    /// Who `--demo --signed-out` signs in as, by password or by QR code.
+    static var demoSignInAccount: StoredAccount { demoAccount(rotation: 0) }
+
     /// Who the demo starts with: the reader, somebody else, and one whose session has
     /// died, which only turns out when it's pressed, as a real one would.
     static func seedAccounts() {

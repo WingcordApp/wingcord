@@ -74,7 +74,7 @@ struct CaptchaSheet: View {
     private var header: some View {
         ModalHeader(
             title: "Quick check",
-            subtitle: Text("Discord asks for this before letting a new client join a server."),
+            subtitle: Text("Discord asks a new app for this now and then, before a sign-in or a join goes through."),
             close: { onFinish(nil) }
         )
     }
@@ -100,6 +100,7 @@ struct CaptchaSheet: View {
                 HCaptchaWebView(
                     sitekey: challenge.sitekey,
                     rqdata: challenge.rqdata,
+                    isInvisible: challenge.serveInvisible,
                     onEvent: handle
                 )
                 // Identity, not a `.task` — a retry has to build a new web view,
@@ -176,27 +177,26 @@ struct CaptchaSheet: View {
 ///     Discord's sitekey is registered against that host and hCaptcha checks the
 ///     origin. Served from `about:blank` the widget renders happily and then
 ///     issues a token Discord will not take.
-///   * **`rqdata` is passed at RENDER.** It is the enterprise payload out of
-///     Discord's 400, and it is what binds the token to this challenge. Without
-///     it the token comes back well-formed and is rejected — which reads as a
-///     wrong answer rather than a missing parameter, and is the most expensive
-///     way this can fail.
+///   * **`rqdata` goes in with `hcaptcha.setData`, after the render — not
+///     among the render's options**, which don't read it. Discord's own captcha
+///     (`283cac4b…`, the `S` callback) calls `setData({rqdata})` the moment the
+///     widget loads, and again after an error or a close. It is the enterprise
+///     payload out of Discord's 400 and what binds the token to this challenge;
+///     without it the token comes back well-formed and is refused, which reads
+///     as a wrong answer — and it is why, until 2026-11-06, no token this app
+///     made had ever been accepted (it was passed at render).
 ///   * **`render=explicit`.** The implicit form races the container element and
 ///     intermittently renders nothing at all.
-///   * **A `normal` checkbox widget, not `size: 'invisible'`.** This is the one
-///     choice here made against a capture rather than against taste, and the
-///     taste was wrong. `forza onboarding1.har` is a real join through Discord's
-///     own client, and the screenshot of it is the "I am human" checkbox — so
-///     the checkbox is the shape whose token Discord was *observed* to accept
-///     for `POST /invites/{code}`. Invisible is tempting (it opens straight into
-///     the challenge, and a low-risk session passes with no interaction at all)
-///     and it moves `rqdata` from `render` to `execute`, which is a different
-///     binding this project has never seen accepted by Discord. An unproven
-///     token binding fails as "solved it correctly and was refused", which is
-///     the one failure somebody cannot work around.
+///   * **The checkbox, unless Discord asks for invisible.** Discord's modal
+///     (`645320`) renders `size: "invisible"` and executes at once when the 400
+///     says `should_serve_invisible`, and the checkbox otherwise — the shape
+///     `forza onboarding1.har`'s screenshot shows for a join. This does the same.
+///   * **`recaptchacompat=off`**, as hCaptcha's React wrapper loads the script
+///     for Discord (`reCaptchaCompat: false`).
 private struct HCaptchaWebView: NSViewRepresentable {
     let sitekey: String
     let rqdata: String?
+    let isInvisible: Bool
     let onEvent: (Event) -> Void
 
     enum Event: Equatable {
@@ -251,42 +251,7 @@ private struct HCaptchaWebView: NSViewRepresentable {
     }
 
     private var page: String {
-        let rqdataLine = rqdata.map { "rqdata: \($0.jsQuoted)," } ?? ""
-        return """
-        <!doctype html>
-        <html><head>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <script src="https://js.hcaptcha.com/1/api.js?render=explicit&onload=onHCaptchaLoad" async defer></script>
-        <style>
-          html, body { margin: 0; height: 100%; background: transparent; }
-          #box { display: flex; align-items: flex-start; justify-content: center; padding-top: 8px; }
-        </style></head>
-        <body><div id="box"></div>
-        <script>
-          function post(kind, value) {
-            try {
-              window.webkit.messageHandlers.\(Coordinator.messageName)
-                .postMessage({ kind: kind, value: value || '' });
-            } catch (e) {}
-          }
-          function onHCaptchaLoad() {
-            try {
-              hcaptcha.render('box', {
-                sitekey: \(sitekey.jsQuoted),
-                \(rqdataLine)
-                theme: 'dark',
-                callback: function (token) { post('token', token); },
-                'error-callback': function (e) { post('error', String(e)); },
-                'expired-callback': function () { post('error', 'expired'); },
-                'chalexpired-callback': function () { post('error', 'expired'); },
-                'close-callback': function () { post('closed'); }
-              });
-              post('ready');
-            } catch (e) { post('error', String(e)); }
-          }
-          window.onerror = function (m) { post('error', String(m)); };
-        </script></body></html>
-        """
+        HCaptchaPage.html(sitekey: sitekey, rqdata: rqdata, isInvisible: isInvisible, messageName: Coordinator.messageName)
     }
 
     /// Forwards script messages without retaining the coordinator.
@@ -386,5 +351,62 @@ extension String {
               text.count > 2
         else { return "\"\"" }
         return String(text.dropFirst().dropLast())
+    }
+}
+
+/// The page `HCaptchaWebView` loads: hCaptcha, rendered and bound the way
+/// Discord's own client does it (see the notes on `HCaptchaWebView`). Its own
+/// type so a test can hold it to that.
+enum HCaptchaPage {
+    static func html(sitekey: String, rqdata: String?, isInvisible: Bool, messageName: String) -> String {
+        let rqdataValue = rqdata.map(\.jsQuoted) ?? "null"
+        return """
+        <!doctype html>
+        <html><head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <script src="https://js.hcaptcha.com/1/api.js?render=explicit&onload=onHCaptchaLoad&recaptchacompat=off" async defer></script>
+        <style>
+          html, body { margin: 0; height: 100%; background: transparent; }
+          #box { display: flex; align-items: flex-start; justify-content: center; padding-top: 8px; }
+        </style></head>
+        <body><div id="box"></div>
+        <script>
+          function post(kind, value) {
+            try {
+              window.webkit.messageHandlers.\(messageName)
+                .postMessage({ kind: kind, value: value || '' });
+            } catch (e) {}
+          }
+          var widget = null;
+          var rqdata = \(rqdataValue);
+          var invisible = \(isInvisible ? "true" : "false");
+          // Discord's own order (283cac4b…, its `S`): the widget, then its
+          // rqdata through setData, then — invisible only — execute.
+          function bind() {
+            if (widget === null) { return; }
+            if (rqdata) { hcaptcha.setData(widget, { rqdata: rqdata }); }
+          }
+          function onHCaptchaLoad() {
+            try {
+              widget = hcaptcha.render('box', {
+                sitekey: \(sitekey.jsQuoted),
+                theme: 'dark',
+                size: invisible ? 'invisible' : 'normal',
+                callback: function (token) { post('token', token); },
+                'error-callback': function (e) { bind(); post('error', String(e)); },
+                'expired-callback': function () { post('error', 'expired'); },
+                'chalexpired-callback': function () { post('error', 'expired'); },
+                'close-callback': function () { bind(); post('closed'); },
+                'open-callback': function () { post('ready'); }
+              });
+              bind();
+              // Invisible keeps the spinner until hCaptcha opens a challenge —
+              // or passes straight to a token — as Discord's modal does.
+              if (invisible) { hcaptcha.execute(widget); } else { post('ready'); }
+            } catch (e) { post('error', String(e)); }
+          }
+          window.onerror = function (m) { post('error', String(m)); };
+        </script></body></html>
+        """
     }
 }

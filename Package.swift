@@ -76,6 +76,10 @@ let package = Package(
                 .copy("Resources/Art"),
                 // highlight.js 11.11.1, every language — see `CodeHighlighter`.
                 .copy("Resources/Highlight"),
+                // The sign-in backdrop: MetalForge's wallpaper and particles.
+                // SwiftPM compiles a processed `.metal` into the bundle's
+                // `default.metallib` itself, with no build step of ours.
+                .process("Welcome/Shaders/SignInBackdrop.metal"),
             ],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
