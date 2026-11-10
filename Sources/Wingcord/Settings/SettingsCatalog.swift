@@ -204,11 +204,16 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
 /// navigation row three levels down wants to change the selection, and passing a
 /// `Binding` through each intermediate view would put the selection in the
 /// signature of panes that never touch it.
+///
+/// **It holds the window's history, not a closure over it.** A closure in an
+/// environment value cannot be compared, so every pane that reads this was run
+/// again each time the window's root was — Apple's own rule for custom keys.
+/// The same reference compares equal, and going somewhere is a method on it.
 struct SettingsNavigate: Sendable {
-    var perform: @MainActor (SettingsSection) -> Void = { _ in }
+    var history: SettingsHistory?
 
     @MainActor
-    func callAsFunction(_ section: SettingsSection) { perform(section) }
+    func callAsFunction(_ section: SettingsSection) { history?.go(to: section) }
 }
 
 extension EnvironmentValues {

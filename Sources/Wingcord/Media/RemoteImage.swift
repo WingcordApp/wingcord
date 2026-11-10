@@ -166,7 +166,7 @@ struct AvatarView: View {
         guard animates, let url, CDN.canAnimate(url) else { return false }
         // Game Mode's animated-emoji override reaches avatars too: they are
         // the same frames on the same clock.
-        return settings.playsAnimatedContent && !motion.reduceMotion && !GameMode.shared.isThrottling
+        return settings.playsAnimatedMedia && !motion.reduceMotion && !GameMode.shared.isThrottling
     }
 
     /// Whether the still under the moving decoration has been taken away.

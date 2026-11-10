@@ -141,7 +141,7 @@ struct ExpressionPicker: View {
                     topInset: chromeHeight,
                     // Reduce Motion is resolved once at the root and read from
                     // the environment; the app's own preference sits beside it.
-                    animates: settings.playsAnimatedContent && !motion.reduceMotion,
+                    animates: settings.playsAnimatedMedia && !motion.reduceMotion,
                     // A search result set is one flat section; jumping into it
                     // has no meaning and would fight the reader's scroll.
                     jump: query.isEmpty ? jump : nil,

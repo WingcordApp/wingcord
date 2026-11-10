@@ -288,6 +288,8 @@ struct ChannelSidebar: View, Equatable {
                 // (`ChannelOptionsMenu`); the model decides which.
                 openMenu: { openMenu(channel.id, $0) }
             )
+            // Skipped when nothing it draws changed — see its `==`.
+            .equatable()
             .tag(SidebarTarget.channel(channel.id))
         case .thread(let thread):
             SidebarThreadRow(
@@ -295,6 +297,7 @@ struct ChannelSidebar: View, Equatable {
                 isSelected: target == .channel(thread.id),
                 openMenu: { openMenu(thread.id, $0) }
             )
+            .equatable()
             .tag(SidebarTarget.channel(thread.id))
         }
     }

@@ -375,9 +375,13 @@ extension SessionController {
     func removeMember(_ userID: UserID, from guildID: GuildID) {
         model.memberSafety?.remove(userID, from: guildID)
         guard model.members[guildID]?.removeValue(forKey: userID) != nil else { return }
-        model.permissionGate.invalidate()
         model.memberRevision &+= 1
-        model.roleRevision &+= 1
+        // Somebody else leaving changes nothing the reader may do — see
+        // `ingestMembers`.
+        if userID == model.currentUserID {
+            model.permissionGate.invalidate()
+            model.roleRevision &+= 1
+        }
     }
 
     private func apply(_ member: Member?, in guildID: GuildID) {

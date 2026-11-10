@@ -204,6 +204,7 @@ final class MemoryPressureWatcher {
                 } else {
                     ImageStore.shared.shedLargeImages()
                 }
+                Self.returnFreedMemory()
             }
         }
         // A `DispatchSource` that was created and never resumed must never be
@@ -212,16 +213,50 @@ final class MemoryPressureWatcher {
         // reachable.
         source.resume()
         self.source = source
+        // Covered, minimized or hidden: the caches hold pictures nobody can see.
+        AppVisibility.shared.observe(self) { [weak self] visible in
+            if visible { self?.windowDidShow() } else { self?.windowDidHide() }
+        }
     }
 
     /// Called when the window goes out of sight.
     func windowDidHide() {
         hiddenShedTask?.cancel()
         hiddenShedTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(20))
+            try? await Task.sleep(for: Self.hiddenShedDelay)
             guard !Task.isCancelled else { return }
-            await MainActor.run { _ = self }
-            ImageStore.shared.shedLargeImages()
+            self?.shedForHiddenWindow()
+        }
+    }
+
+    /// A minute, because the window is usually only covered for a moment, and
+    /// what comes back has to be decoded again.
+    private static let hiddenShedDelay = Duration.seconds(60)
+
+    private func shedForHiddenWindow() {
+        ImageStore.shared.shedLargeImages()
+        AnimatedImageStore.shared.purge()
+        FilmFrames.shared.purge()
+        // Built when a picker opens, and the most expensive snapshot in the app
+        // to hold: every emoji in every server.
+        model?.emojiCatalogCache = nil
+        model?.reactionEmojiCatalogCache = nil
+        model?.stickerCatalogCache = nil
+        Self.returnFreedMemory()
+    }
+
+    /// Asks the allocator to give back the pages it is holding empty.
+    ///
+    /// **Letting go of a cache frees its objects, not its memory.** malloc
+    /// keeps the pages for the next allocation, so the footprint stays at the
+    /// peak — which is how a session ends up at several hundred megabytes with
+    /// nothing much resident. Asked for after each shed, a turn later so what
+    /// the shed released has actually gone, and off the main thread: it walks
+    /// every zone.
+    private static func returnFreedMemory() {
+        Task.detached(priority: .utility) {
+            try? await Task.sleep(for: .seconds(1))
+            malloc_zone_pressure_relief(nil, 0)
         }
     }
 

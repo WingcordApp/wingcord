@@ -1,6 +1,7 @@
 import AppKit
 import CoreText
 import Foundation
+import Synchronization
 import WingcordCore
 
 /// Turns a parsed message into an attributed string CoreText can lay out.
@@ -336,7 +337,56 @@ nonisolated struct MentionContext: Sendable {
     /// an embed rendered in a context with no names caches the placeholder form
     /// (`@user`, `#channel`) and the transcript then serves that to everyone,
     /// forever. Closures have no identity to hash; a generation does.
+    ///
+    /// **A context that names only some people leaves them out of it**
+    /// (`AppModel.mentionContext(naming:)`): whoever keys on that one checks the
+    /// names it used itself, as the transcript's rows do.
     var token: UInt64 = 0
+    /// Where the user mentions looked up here are noted, for a caller that
+    /// checks a cached text against the names it was set from. Nil everywhere
+    /// else. See `MentionLookups`.
+    var lookups: MentionLookups?
+}
+
+/// Which user mentions a builder asked a context about.
+///
+/// **The names a row was set from are part of what it was laid out against.**
+/// The row cache keyed on a counter that moved whenever any user record
+/// anywhere changed, so a stranger writing in another server relaid every
+/// loaded row of the open transcript. A row now remembers the few names its
+/// words asked for, and this is how the layout engine learns which those were
+/// without every builder reporting them.
+nonisolated final class MentionLookups: Sendable {
+    private struct State {
+        var pending: [UserID] = []
+        var pass: Set<UserID> = []
+    }
+
+    private let state = Mutex(State())
+
+    /// A builder looked this person up.
+    func note(_ userID: UserID) {
+        state.withLock { $0.pending.append(userID) }
+    }
+
+    /// Everybody looked up since the last call.
+    func take() -> [UserID] {
+        state.withLock { state in
+            let taken = state.pending
+            state.pending = []
+            return taken
+        }
+    }
+
+    /// Everybody one layout pass's rows name: those it built, and those it
+    /// took from its cache.
+    func finishPass(_ asked: Set<UserID>) {
+        state.withLock { $0.pass = asked }
+    }
+
+    var askedInPass: Set<UserID> {
+        state.withLock { $0.pass }
+    }
 }
 
 /// What a channel chip needs to know about one channel.
@@ -548,6 +598,7 @@ nonisolated enum MessageTextBuilder {
                     ))
 
                 case .userMention(let userID):
+                    context.lookups?.note(userID)
                     let name = context.userNames[userID].map { "@\($0)" } ?? "@unknown"
                     appendMention(name, base: attributes, target: .user(userID))
 

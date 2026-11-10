@@ -38,6 +38,9 @@ final class PermissionGate {
     /// change and leaks a private channel into the list.
     private var builtStructureRevision: UInt64 = .max
     private var builtRoleRevision: UInt64 = .max
+    /// How many answers have been worked out rather than looked up. What a test
+    /// reads to know that the cache was used.
+    private(set) var resolutions = 0
 
     init(model: AppModel) {
         self.model = model
@@ -93,6 +96,7 @@ final class PermissionGate {
         let governing = channel.kind.isThread
             ? channel.parentID.flatMap { model.channelIndex[$0] } ?? channel
             : channel
+        resolutions += 1
         let resolved = PermissionResolver.permissions(
             forMember: memberRoles,
             userID: userID,
@@ -175,6 +179,19 @@ final class PermissionGate {
     /// channel, so a permission resolved against one would be right by accident.
     func canChangeNickname(in guildID: GuildID) -> Bool {
         !permissions(inGuild: guildID).isDisjoint(with: [.changeNickname, .manageNicknames])
+    }
+
+    /// Starts a walk over many channels: staleness is checked here once rather
+    /// than per channel, because the check reads two observed properties and a
+    /// walk of the whole account paid for that thousands of times over.
+    func beginWalk() {
+        refreshIfStale()
+    }
+
+    /// `canView` inside a walk, after `beginWalk()`. Reads no observed state on
+    /// the path that answers from the cache.
+    func canViewDuringWalk(_ channelID: ChannelID) -> Bool {
+        (channels[channelID] ?? permissions(in: channelID)).contains(.viewChannel)
     }
 
     /// Whether a channel appears in the list at all.

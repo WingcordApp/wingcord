@@ -669,7 +669,7 @@ enum DemoFixtures {
         }
         model.roleRevision &+= 1
         model.memberRevision &+= 1
-        model.presenceRevision &+= 1
+        model.noteEveryPresenceChanged()
         model.railRevision &+= 1
         model.sidebarRevision &+= 1
 
@@ -1085,7 +1085,7 @@ enum DemoFixtures {
                     ),
                 ])
             )
-            model.presenceRevision &+= 1
+            model.noteEveryPresenceChanged()
         }
 
         // **A second room, with nobody the reader knows in it.** This is the

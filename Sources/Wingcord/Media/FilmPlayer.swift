@@ -117,7 +117,7 @@ final class FilmPlayer {
     /// plays on the render server, which does not know the app went away, so
     /// this watches for it rather than leaving it to each owner.
     private func applyPlayback() {
-        let playing = isWanted && Self.isAppActive
+        let playing = isWanted && Self.isAppActive && AppVisibility.shared.isVisible
         guard playing != isPlaying else { return }
         isPlaying = playing
         stream?.setPlaying(playing)
@@ -133,6 +133,7 @@ final class FilmPlayer {
     private static var isAppActive = NSApp?.isActive ?? true
     private static let live = NSHashTable<FilmPlayer>.weakObjects()
     private static var activityObservers: [NSObjectProtocol] = []
+    private static let visibilityOwner = NSObject()
 
     /// One pair of observers for every player there is.
     private static func watchActivity() {
@@ -149,6 +150,10 @@ final class FilmPlayer {
             center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main, using: update),
             center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main, using: update),
         ]
+        // Covered or minimized while still the active app.
+        AppVisibility.shared.observe(FilmPlayer.visibilityOwner) { _ in
+            for player in live.allObjects { player.applyPlayback() }
+        }
     }
 
     private func load() {
@@ -273,7 +278,7 @@ nonisolated final class FilmFrames: @unchecked Sendable {
     private let cache = NSCache<NSString, Box>()
 
     private init() {
-        cache.totalCostLimit = 48 * 1024 * 1024
+        cache.totalCostLimit = 32 * 1024 * 1024
     }
 
     func cached(_ key: FilmPlayer.Key) -> ResidentFilm? {

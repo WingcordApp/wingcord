@@ -27,7 +27,7 @@ nonisolated final class AnimatedImageStore: @unchecked Sendable {
     /// people than that, which is the point — the ones off screen are evicted
     /// and re-decoded when they come back, and re-decoding is 0.65 ms a frame
     /// off the main thread.
-    static let budget = 64 * 1024 * 1024
+    static let budget = 48 * 1024 * 1024
 
     struct Key: Hashable, Sendable {
         var url: URL

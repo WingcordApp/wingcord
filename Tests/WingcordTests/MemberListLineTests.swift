@@ -319,7 +319,7 @@ struct MemberListRowFactsTests {
             // A presence nobody has heard yet might be invisible.
             #expect(model.roster.members.values.contains { $0.userID == visitor } == false)
             model.presences[visitor] = Presence(userID: visitor, status: .online)
-            model.presenceRevision &+= 1
+            model.notePresencesChanged(for: [visitor])
             #expect(model.roster.members.values.contains { $0.userID == visitor })
         }
     }

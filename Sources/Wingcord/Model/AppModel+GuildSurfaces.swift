@@ -497,7 +497,7 @@ extension AppModel {
             // the KEY *and* read before the cache: a memo that consults its
             // cache first registers no observation dependency, so the page
             // would neither notice the change nor be re-evaluated by it.
-            sidebarRevision: sidebarRevision,
+            sidebarRevision: sidebarRevision &+ readRevision,
             // The profile aside draws the reader's own roles, so a role landing
             // has to rebuild the page. `memberRevision` is the counter that
             // moves when a member record does.
@@ -918,11 +918,23 @@ extension AppModel {
     /// is only ever narrowed for a server the reader demonstrably uses this on,
     /// and every other server shows everything.
     func hidesUnfollowedChannels(inGuild guildID: GuildID) -> Bool {
-        guard guildOnboardings[guildID]?.isEnabled == true else { return false }
-        guard !followedChannelIDs.isEmpty else { return false }
-        return channelIndex.channelIDs(inGuild: guildID).contains {
-            followedChannelIDs.contains($0)
-        }
+        Self.hidesUnfollowedChannels(
+            inGuild: guildID,
+            onboardings: guildOnboardings,
+            followed: followedChannelIDs,
+            index: channelIndex
+        )
+    }
+
+    static func hidesUnfollowedChannels(
+        inGuild guildID: GuildID,
+        onboardings: [GuildID: GuildOnboarding],
+        followed: Set<ChannelID>,
+        index: ChannelIndex
+    ) -> Bool {
+        guard onboardings[guildID]?.isEnabled == true else { return false }
+        guard !followed.isEmpty else { return false }
+        return index.channelIDs(inGuild: guildID).contains { followed.contains($0) }
     }
 
     /// Whether a channel belongs in the sidebar.
@@ -933,6 +945,18 @@ extension AppModel {
     func isChannelInList(_ channel: Channel, filtered: Bool) -> Bool {
         guard filtered else { return true }
         return isChannelFollowed(channel) || channel.id == selectedChannelID
+    }
+
+    static func isChannelInList(
+        _ channel: Channel,
+        filtered: Bool,
+        followed: Set<ChannelID>,
+        selected: ChannelID?
+    ) -> Bool {
+        guard filtered else { return true }
+        if followed.contains(channel.id) || channel.id == selected { return true }
+        guard let parentID = channel.parentID else { return false }
+        return followed.contains(parentID)
     }
 
     /// Follows or unfollows one channel or category from the browse list.

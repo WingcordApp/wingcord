@@ -24,24 +24,9 @@ struct WingcordApp: App {
             object: nil,
             queue: .main
         ) { _ in CrashReporter.finishCleanly() }
-        // **Memory the app is holding for a window nobody is looking at.**
-        // `PerformanceMonitor` already knows how to shed the large decoded
-        // images twenty seconds after the window goes away, and to cancel that
-        // the moment it comes back — it was simply never told when either
-        // happened, so the shed never ran and a hidden window cost as much as a
-        // visible one.
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didMiniaturizeNotification, object: nil, queue: .main
-        ) { _ in MainActor.assumeIsolated { MemoryPressureWatcher.shared.windowDidHide() } }
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.didHideNotification, object: nil, queue: .main
-        ) { _ in MainActor.assumeIsolated { MemoryPressureWatcher.shared.windowDidHide() } }
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didDeminiaturizeNotification, object: nil, queue: .main
-        ) { _ in MainActor.assumeIsolated { MemoryPressureWatcher.shared.windowDidShow() } }
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.didUnhideNotification, object: nil, queue: .main
-        ) { _ in MainActor.assumeIsolated { MemoryPressureWatcher.shared.windowDidShow() } }
+        // What the system saw of earlier runs — a hang, a crash it caught —
+        // filed beside the app's own reports.
+        SystemDiagnostics.shared.start()
         if DiagnosticLog.isEnabled {
             GatewaySocket.traceSink = { message in
                 DiagnosticLog.trace("gateway", message)
@@ -594,6 +579,27 @@ struct WingcordCommands: Commands {
                 Button("Add @time") { ComposerFormatCommand.send(.insert("@time")) }
             }
             .disabled(!isWorkspace || !model.menuContext.isConversation)
+        }
+
+        // **Help, with things that answer.** Left alone, SwiftUI puts "Wingcord
+        // Help" here, and choosing it says help is not available — an item
+        // whose whole content is that it does nothing. These are the three
+        // things somebody opening this menu can actually be given today.
+        CommandGroup(replacing: .help) {
+            Button("Keyboard Shortcuts…") { SettingsWindow.open(.shortcuts) }
+            Button("Reveal Logs in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([CrashReporter.reportDirectory])
+            }
+            Divider()
+            // The licences of what this app is built with, which their terms
+            // ask to travel with it — `scripts/build-app.sh` puts the file in
+            // the bundle.
+            Button("Acknowledgements") {
+                guard let url = Bundle.main.url(forResource: "Acknowledgements", withExtension: "txt")
+                else { return }
+                NSWorkspace.shared.open(url)
+            }
+            .disabled(Bundle.main.url(forResource: "Acknowledgements", withExtension: "txt") == nil)
         }
 
         // Window › going somewhere, above the window list — where the

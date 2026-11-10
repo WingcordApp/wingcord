@@ -45,7 +45,7 @@ extension AppModel {
         let key = OverlaySidebarMemoKey(
             structureRevision: channelIndex.structureRevision,
             valueRevision: channelIndex.valueRevision,
-            sidebarRevision: sidebarRevision,
+            sidebarRevision: sidebarRevision &+ readRevision,
             identityRevision: identityRevision,
             presenceRevision: presenceRevision,
             voiceRevision: voiceRevision,

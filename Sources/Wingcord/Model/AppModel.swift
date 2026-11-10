@@ -225,7 +225,7 @@ final class AppModel {
     /// ten resident channels also pin every avatar, emoji and attachment those
     /// rows pulled into the image caches, so the real cost of a high bound is
     /// paid in the media budget rather than here.
-    private(set) var messageBoxes: [ChannelID: MessageBox] = [:]
+    @ObservationIgnored let messageBoxes = MessageBoxTable()
     private var boxRecency: [ChannelID] = []
     static let residentChannelLimit = 3
     /// The composers' words, kept across a relaunch — see `DraftStore`. Fed
@@ -292,7 +292,12 @@ final class AppModel {
 
     // MARK: Navigation
 
-    var selectedGuildID: GuildID?
+    var selectedGuildID: GuildID? {
+        didSet {
+            guard let selectedGuildID, selectedGuildID != oldValue else { return }
+            noteGuildOpened(selectedGuildID)
+        }
+    }
     var selectedChannelID: ChannelID? {
         didSet {
             // Discord forgets the summary the reader went to when they leave
@@ -1349,8 +1354,19 @@ final class AppModel {
     /// Moves when the rail's arrangement or badges change. NOT when a message
     /// arrives in a guild that is already unread.
     var railRevision: UInt64 = 0
-    /// Moves when the selected guild's channel tree or its read state changes.
+    /// Moves when the selected guild's channel tree changes.
     var sidebarRevision: UInt64 = 0
+    /// Moves when any channel's read state does — every message that lands,
+    /// every ack.
+    ///
+    /// **Its own counter, because it moves on every inbound message in the
+    /// account.** Keyed on one number, the list on screen was rebuilt for
+    /// messages in servers nobody was looking at, about once a second on a busy
+    /// account. Everything that shows read state adds this to `sidebarRevision`;
+    /// a sidebar asks for `readRevision(ofList:)`, the part that is its own.
+    /// Written through `noteReadStateChanged(in:)`.
+    var readRevision: UInt64 = 0
+    @ObservationIgnored private var readRevisionsByList: [GuildID?: UInt64] = [:]
     /// Moves when any server's emoji or sticker set changes — a server becoming
     /// available, or one of the two catalog events.
     ///
@@ -1369,10 +1385,28 @@ final class AppModel {
     /// the online line the overwhelming majority of the time, which is exactly
     /// why the roster is memoized on it rather than rebuilt.
     var presenceRevision: UInt64 = 0
+    /// `presenceRevision` for the conversations: moves only when the presence of
+    /// somebody the reader has a one-to-one conversation with does.
+    ///
+    /// The list draws their dot and what they're doing. Keyed on every presence
+    /// in the account it was rebuilt up to five times a second, whole, for
+    /// people who are not in it. Written through `notePresencesChanged(for:)`.
+    var directMessagePresenceRevision: UInt64 = 0
+    /// `presenceRevision` for the member list on screen: moves only when the
+    /// presence of somebody in the selected server does, or for a conversation's
+    /// list, whose few people are not worth telling apart.
+    var rosterPresenceRevision: UInt64 = 0
     /// Moves when a message's CONTENT changes without the set changing — an
     /// edit, a reaction added, an embed unfurling. Distinct from the message
     /// count, which cannot see any of those.
     var messageContentRevision: UInt64 = 0
+    /// Moves when a message lands, is edited or goes, anywhere in the account.
+    ///
+    /// **Apart from `messageContentRevision` because it never stops moving.** A
+    /// transcript asks for its own channel's part of it,
+    /// `MessageBoxTable.contentRevision(of:)`; a surface that shows messages from
+    /// many channels adds this one. Written through `noteMessageChanged(in:)`.
+    var inboundMessageRevision: UInt64 = 0
     /// Moves when a name, nickname or role colour anywhere could have changed.
     /// The mention memo keys on it; a memo keyed on the text alone serves
     /// whichever surface rendered it first, forever.
@@ -1714,6 +1748,15 @@ final class AppModel {
     /// Each conversation's newest known message, for its preview line — see
     /// `noteNewest`. Read by the list's memo, which keys on the revision.
     @ObservationIgnored var latestDirectMessages: [ChannelID: Message] = [:]
+    /// What each conversation's row says about its newest message. Worked out
+    /// once per message: it's five regular expressions, per conversation, on
+    /// every rebuild of the list. See `directMessagePreviewLine`.
+    @ObservationIgnored var directMessagePreviewLines: [ChannelID: (key: DirectMessagePreviewKey, line: String?)] = [:]
+    /// Who the one-to-one conversations are with — see `notePresencesChanged(for:)`.
+    @ObservationIgnored private var directMessagePartnersCache: (structure: UInt64, partners: Set<UserID>)?
+    /// Servers in the order they were opened, the newest last.
+    @ObservationIgnored private var guildRecency: [GuildID] = []
+    static let residentGuildLimit = 5
     /// Moves when a conversation's newest message does.
     var directMessagePreviewRevision: UInt64 = 0
     /// The direct-message list's own memo — see `sidebarPresentation(for:)`.
@@ -1744,6 +1787,8 @@ final class AppModel {
     /// most often asked for, because the timeline rebuilds its layout input on
     /// every inbound message.
     @ObservationIgnored var mentionCache: (key: MentionMemoKey, value: MentionContext)?
+    /// The same table with nobody in it — see `mentionContext(naming:)`.
+    @ObservationIgnored var peoplelessMentionCache: (key: MentionMemoKey, value: MentionContext)?
     /// The channel chips' table. See `linkChannelTable()`.
     @ObservationIgnored var linkTableCache: (key: LinkTableKey, value: LinkChannelTable)?
     /// Every stage that is live right now, keyed by its channel.
@@ -2046,13 +2091,107 @@ final class AppModel {
     }
 
     func mutateBox(_ channelID: ChannelID, _ body: (inout MessageBox) -> Void) {
-        let previous = messageBoxes[channelID]
+        let previous = messageBoxes.peek(channelID)
         var box = previous ?? MessageBox()
         body(&box)
         noteDraft(of: box, replacing: previous, in: channelID)
         messageBoxes[channelID] = box
         touchBox(channelID)
         noteNewest(of: box, in: channelID)
+    }
+
+    /// A message in this channel landed, changed or went.
+    func noteMessageChanged(in channelID: ChannelID) {
+        inboundMessageRevision &+= 1
+        messageBoxes.noteContentChanged(in: channelID)
+    }
+
+    /// Records that a server was opened, and lets go of the people in the ones
+    /// left longest ago.
+    ///
+    /// **Hopping through twenty servers took the app from 175 MB to 340.** Each
+    /// one's member table, member list and presences stayed for the session
+    /// (docs/PERFORMANCE.md). They all come back when the server is opened again,
+    /// with its subscription and `resolveMessageMembers`.
+    private func noteGuildOpened(_ guildID: GuildID) {
+        guildRecency.removeAll { $0 == guildID }
+        guildRecency.append(guildID)
+        guard guildRecency.count > Self.residentGuildLimit else { return }
+        let held = Set([connectedVoiceChannelID.flatMap { channelIndex.guildID(of: $0) }, guildPreview?.guildID].compactMap { $0 })
+        var kept = Array(guildRecency.suffix(Self.residentGuildLimit))
+        let evicted = guildRecency.dropLast(Self.residentGuildLimit).filter { !held.contains($0) }
+        for guildID in guildRecency where held.contains(guildID) && !kept.contains(guildID) { kept.insert(guildID, at: 0) }
+        guildRecency = kept
+        guard !evicted.isEmpty else { return }
+        for guildID in evicted { forgetMembers(ofGuild: guildID) }
+        presences = survivingPresences(inGuilds: Set(kept).union(held))
+        memberRevision &+= 1
+        memberListRevision &+= 1
+    }
+
+    /// Drops one server's people, keeping the reader's own record: the
+    /// permission gate reads it for every server in the account.
+    private func forgetMembers(ofGuild guildID: GuildID) {
+        if let currentUserID, let own = members[guildID]?[currentUserID] {
+            members[guildID] = [currentUserID: own]
+        } else {
+            members[guildID] = nil
+        }
+        memberLists = memberLists.filter { $0.key.guildID != guildID }
+    }
+
+    /// A channel's read state changed. Every high-frequency write goes through
+    /// here, so the lists that do not show that channel are left alone.
+    func noteReadStateChanged(in channelID: ChannelID) {
+        readRevisionsByList[channelIndex.guildID(of: channelID), default: 0] &+= 1
+        readRevision &+= 1
+    }
+
+    /// How often the read state of one list's channels has changed; nil is the
+    /// conversations. Reads `readRevision` so whoever asks is told when any of
+    /// them moves, and a memo keyed on this answers from its cache for the rest.
+    func readRevision(ofList guildID: GuildID?) -> UInt64 {
+        _ = readRevision
+        return readRevisionsByList[guildID, default: 0]
+    }
+
+    /// Presences changed for these people.
+    func notePresencesChanged(for userIDs: some Collection<UserID>) {
+        presenceRevision &+= 1
+        let partners = directMessagePartners
+        if userIDs.contains(where: partners.contains) {
+            directMessagePresenceRevision &+= 1
+        }
+        guard let selectedGuildID else {
+            rosterPresenceRevision &+= 1
+            return
+        }
+        // Active Now also lists people in a room and friends, member or not.
+        let shown = members[selectedGuildID]
+        if userIDs.contains(where: { shown?[$0] != nil || voiceStates[$0] != nil || relationships[$0] != nil }) {
+            rosterPresenceRevision &+= 1
+        }
+    }
+
+    /// Presences changed for anybody at all — a READY, a fixture.
+    func noteEveryPresenceChanged() {
+        presenceRevision &+= 1
+        directMessagePresenceRevision &+= 1
+        rosterPresenceRevision &+= 1
+    }
+
+    private var directMessagePartners: Set<UserID> {
+        let structure = channelIndex.structureRevision
+        if let directMessagePartnersCache, directMessagePartnersCache.structure == structure {
+            return directMessagePartnersCache.partners
+        }
+        var partners = Set<UserID>()
+        for channelID in channelIndex.privateChannelIDs() {
+            guard let channel = channelIndex[channelID], channel.kind == .directMessage else { continue }
+            partners.formUnion(channel.recipientIDs)
+        }
+        directMessagePartnersCache = (structure, partners)
+        return partners
     }
 
     /// Conversations' newest messages from `SessionController.loadDirectMessagePreviews`.
@@ -2123,7 +2262,7 @@ final class AppModel {
     /// through `touchBox`, and a second place that empties it would be a second
     /// place to forget the recency list.
     func clearAllMessages() {
-        messageBoxes.removeAll(keepingCapacity: false)
+        messageBoxes.removeAll()
         boxRecency.removeAll(keepingCapacity: false)
     }
 
@@ -2227,13 +2366,10 @@ final class AppModel {
         boxRecency = boxRecency.filter(keep.contains)
 
         let keptGuild = selectedGuildID
-        if members.count > 1 {
-            members = keptGuild.flatMap { id in members[id].map { [id: $0] } } ?? [:]
+        for guildID in members.keys where guildID != keptGuild {
+            forgetMembers(ofGuild: guildID)
         }
-        // A list is a row of user ids, and the records they name went with the
-        // guild's member table. The lists come back with their subscriptions.
-        memberLists = memberLists.filter { $0.key.guildID == keptGuild }
-        presences = survivingPresences(inGuild: keptGuild)
+        presences = survivingPresences(inGuilds: keptGuild.map { [$0] } ?? [])
 
         ImageStore.shared.purge()
         // The layouts each transcript keeps of the conversations it left.
@@ -2255,6 +2391,7 @@ final class AppModel {
         invokedCommands.removeAll()
         stickerCatalogCache = nil
         mentionCache = nil
+        peoplelessMentionCache = nil
         linkTableCache = nil
         // Every channel in the account, walked through the permission gate. Both
         // are rebuilt the next time their surface opens, which costs a pass
@@ -2263,21 +2400,24 @@ final class AppModel {
         quickSwitchCache = nil
         memberRevision &+= 1
         memberListRevision &+= 1
-        presenceRevision &+= 1
+        noteEveryPresenceChanged()
     }
 
     /// The presences still worth holding: the people on screen or one click from
     /// it — the selected guild's roster, whoever is in a DM, and the reader.
-    private func survivingPresences(inGuild guildID: GuildID?) -> [UserID: Presence] {
+    private func survivingPresences(inGuilds guildIDs: some Sequence<GuildID>) -> [UserID: Presence] {
         var keep: Set<UserID> = []
         if let currentUserID { keep.insert(currentUserID) }
-        if let guildID, let table = members[guildID] {
-            keep.formUnion(table.keys)
+        for guildID in guildIDs {
+            if let table = members[guildID] { keep.formUnion(table.keys) }
         }
         for channelID in channelIndex.privateChannelIDs() {
             guard let channel = channelIndex[channelID] else { continue }
             keep.formUnion(channel.recipientIDs)
         }
+        // The Friends page and everyone in a room, whichever server they're in.
+        keep.formUnion(relationships.keys)
+        keep.formUnion(voiceStates.keys)
         guard keep.count < presences.count else { return presences }
 
         var result: [UserID: Presence] = [:]
@@ -2456,5 +2596,90 @@ struct MessageBox: Sendable {
         heldLive.removeAll { $0.id == messageID }
         // Dismissing one of Clyde's is the same act from the reader's side.
         notices.removeAll { $0.id == messageID }
+    }
+}
+
+/// Loaded transcripts, watched one channel at a time.
+///
+/// **One dictionary in one observed property told every reader about every
+/// write.** A message landing anywhere in the account re-evaluated every view
+/// that showed any transcript, composer or draft, about once a second on a busy
+/// account. Reading through the subscript registers an interest in that channel
+/// alone, so every existing reader gets this by construction. There is no second
+/// list of who cares about what to keep in step.
+///
+/// **The setter is `fileprivate`**, for the reason the table was `private(set)`:
+/// a box is evicted in one place, `AppModel.touchBox`.
+@MainActor
+final class MessageBoxTable: Sequence {
+    @Observable
+    fileprivate final class Signal {
+        var revision: UInt64 = 0
+        var contentRevision: UInt64 = 0
+    }
+
+    private var boxes: [ChannelID: MessageBox] = [:]
+    private var signals: [ChannelID: Signal] = [:]
+
+    private func signal(for channelID: ChannelID) -> Signal {
+        if let signal = signals[channelID] { return signal }
+        let signal = Signal()
+        signals[channelID] = signal
+        return signal
+    }
+
+    fileprivate(set) subscript(channelID: ChannelID) -> MessageBox? {
+        get {
+            _ = signal(for: channelID).revision
+            return boxes[channelID]
+        }
+        set {
+            boxes[channelID] = newValue
+            // No signal means nobody has ever asked about this channel, so
+            // there is nobody to tell.
+            signals[channelID]?.revision &+= 1
+        }
+    }
+
+    /// The box, without registering an interest in it: for a writer, which is
+    /// not a reader, and for every channel in the account that only ever writes.
+    func peek(_ channelID: ChannelID) -> MessageBox? {
+        boxes[channelID]
+    }
+
+    /// How often a message in this channel has landed, changed or gone.
+    func contentRevision(of channelID: ChannelID) -> UInt64 {
+        signal(for: channelID).contentRevision
+    }
+
+    fileprivate func noteContentChanged(in channelID: ChannelID) {
+        signals[channelID]?.contentRevision &+= 1
+    }
+
+    fileprivate func removeAll() {
+        boxes.removeAll(keepingCapacity: false)
+        for signal in signals.values { signal.revision &+= 1 }
+        signals.removeAll(keepingCapacity: false)
+    }
+
+    // Every box: registers an interest in all of them, as reading the whole
+    // dictionary did.
+    private func noteWholeTableRead() {
+        for channelID in boxes.keys { _ = signal(for: channelID).revision }
+    }
+
+    func makeIterator() -> Dictionary<ChannelID, MessageBox>.Iterator {
+        noteWholeTableRead()
+        return boxes.makeIterator()
+    }
+
+    var keys: Dictionary<ChannelID, MessageBox>.Keys {
+        noteWholeTableRead()
+        return boxes.keys
+    }
+
+    var values: Dictionary<ChannelID, MessageBox>.Values {
+        noteWholeTableRead()
+        return boxes.values
     }
 }

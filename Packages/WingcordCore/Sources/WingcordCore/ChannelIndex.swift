@@ -57,8 +57,35 @@ public struct ChannelIndex: Sendable {
     /// that genuinely care about recency — the DM list's ordering — key on this
     /// one instead.
     public private(set) var valueRevision: UInt64 = 0
+    /// `valueRevision` per list: a server's channels, and the conversations.
+    ///
+    /// **A sidebar shows one list, and every message anywhere moved the counter
+    /// it keyed on.** On a busy account the list on screen was rebuilt about once
+    /// a second for messages in servers nobody was looking at. A memo over one
+    /// list keys on `valueRevision(inGuild:)`.
+    private var guildValueRevisions: [GuildID: UInt64] = [:]
+    private var privateValueRevision: UInt64 = 0
+    /// Moves when a change could have touched any list, so every list's answer
+    /// moves with it.
+    private var everyListValueRevision: UInt64 = 0
 
     public init() {}
+
+    /// How often anything about one list's channels has changed; nil is the
+    /// conversations. Only ever grows.
+    public func valueRevision(inGuild guildID: GuildID?) -> UInt64 {
+        let own = guildID.map { guildValueRevisions[$0, default: 0] } ?? privateValueRevision
+        return own &+ everyListValueRevision
+    }
+
+    private mutating func noteValueChanged(inGuild guildID: GuildID?) {
+        valueRevision &+= 1
+        if let guildID {
+            guildValueRevisions[guildID, default: 0] &+= 1
+        } else {
+            privateValueRevision &+= 1
+        }
+    }
 
     // MARK: Reading
 
@@ -147,7 +174,7 @@ public struct ChannelIndex: Sendable {
         }
         channelsByGuild[guildID] = ids
         structureRevision &+= 1
-        valueRevision &+= 1
+        noteValueChanged(inGuild: guildID)
     }
 
     /// Replaces the DM and group-DM list. Structural.
@@ -164,7 +191,7 @@ public struct ChannelIndex: Sendable {
         privateChannels = ids
         sortPrivateChannels()
         structureRevision &+= 1
-        valueRevision &+= 1
+        noteValueChanged(inGuild: nil)
     }
 
     /// Adds or replaces one channel. Structural if the channel is new or has
@@ -200,11 +227,15 @@ public struct ChannelIndex: Sendable {
             partitionPrivateChannels()
             structureRevision &+= 1
         }
-        valueRevision &+= 1
+        if let previousGuild, previousGuild != channel.guildID {
+            noteValueChanged(inGuild: previousGuild)
+        }
+        noteValueChanged(inGuild: channel.guildID)
     }
 
     public mutating func remove(_ channelID: ChannelID) {
         guard let channel = channels.removeValue(forKey: channelID) else { return }
+        let owner = guildOfChannel[channelID]
         if let parentID = parentOfThread.removeValue(forKey: channelID) {
             threadsByParent[parentID]?.removeAll { $0 == channelID }
             if threadsByParent[parentID]?.isEmpty == true { threadsByParent[parentID] = nil }
@@ -223,7 +254,7 @@ public struct ChannelIndex: Sendable {
             partitionPrivateChannels()
         }
         structureRevision &+= 1
-        valueRevision &+= 1
+        noteValueChanged(inGuild: owner)
     }
 
     // MARK: Threads
@@ -250,7 +281,7 @@ public struct ChannelIndex: Sendable {
         }
         threadsByParent[parentID] = sortedThreadIDs(threadsByParent[parentID] ?? [])
         structureRevision &+= 1
-        valueRevision &+= 1
+        noteValueChanged(inGuild: thread.guildID ?? guildOfChannel[parentID])
     }
 
     /// Replaces the known threads under the named parents.
@@ -283,7 +314,13 @@ public struct ChannelIndex: Sendable {
         }
         for thread in list { upsertThread(thread) }
         structureRevision &+= 1
-        valueRevision &+= 1
+        if let guildID {
+            noteValueChanged(inGuild: guildID)
+        } else {
+            // A resync with no guild named: it could have been any of them.
+            valueRevision &+= 1
+            everyListValueRevision &+= 1
+        }
     }
 
     /// Most recently active first, ties broken on id so the order is stable
@@ -318,7 +355,7 @@ public struct ChannelIndex: Sendable {
             // here would clear the sidebar's memo on every message in a thread.
             threadsByParent[parentID] = sortedThreadIDs(threadsByParent[parentID] ?? [])
         }
-        valueRevision &+= 1
+        noteValueChanged(inGuild: channel.guildID)
     }
 
     private func sortedIDs(_ ids: [ChannelID]) -> [ChannelID] {

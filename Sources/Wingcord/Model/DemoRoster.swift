@@ -224,7 +224,7 @@ extension DemoFixtures {
             presences: model.presences,
             roles: model.roles[guildID] ?? [:]
         )
-        model.presenceRevision &+= 1
+        model.noteEveryPresenceChanged()
         model.memberListRevision &+= 1
 
         if let longList = model.guilds.values.first(where: { $0.name.hasPrefix("Krxqz") })?.id {

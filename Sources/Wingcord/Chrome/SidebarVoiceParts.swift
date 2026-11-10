@@ -268,24 +268,20 @@ struct VoiceStatusLine: View {
 
 /// How long the session in a room has been running.
 ///
-/// **A `TimelineView` on a one-second cadence, and only where there is a session
-/// to time.** Nothing else in the sidebar has a clock in it, so this is the one
-/// view in the column that redraws on its own — which is why it is the smallest
-/// possible leaf: the label alone re-renders each second, not the row, not the
-/// strip and not the list.
-///
-/// `SwiftUI.TimelineView` fully qualified: this app has a `TimelineView` of its
-/// own and the unqualified name resolves to the message canvas.
+/// **The call card's drawn label, not a `TimelineView`** (`INVARIANTS.md` §2,
+/// "anything that ticks lives outside the big view graph"). It was one, on a
+/// one-second cadence, on the reasoning that only the label re-renders. The
+/// label is all that re-renders, but the graph it sits in is still updated for
+/// it — the sidebar's, the largest in the app — and each room's clock started
+/// on its own phase, so four rooms running were four updates a second. Drawn,
+/// a second costs one short string in one small layer, and nothing while the
+/// window cannot be seen.
 struct VoiceSessionClock: View {
     var startedAt: Date
 
     var body: some View {
-        SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text(Self.elapsed(since: startedAt, at: context.date))
-                .font(Typeface.voiceChannelClock)
-                .foregroundStyle(Palette.presenceOnline)
-        }
-        .accessibilityHidden(true)
+        CallTimerLabel(since: startedAt, style: .room)
+            .accessibilityHidden(true)
     }
 
     /// `h:mm:ss` over an hour, `m:ss` under it — the same shape the activity

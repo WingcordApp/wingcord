@@ -198,7 +198,7 @@ struct PersonalAssetImage: View {
     /// or Game Mode's throttle, as with every other moving thing here.
     private var plays: Bool {
         isAnimated
-            && (AppSettings.shared.playsAnimatedContent || isHovering)
+            && (AppSettings.shared.playsAnimatedMedia || isHovering)
             && !motion.reduceMotion
             && !GameMode.shared.isThrottling
     }

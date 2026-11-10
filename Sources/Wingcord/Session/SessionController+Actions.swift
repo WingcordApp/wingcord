@@ -237,7 +237,7 @@ extension SessionController {
         state.lastAcknowledgedID = messageID
         model.readStates[channelID] = state
         model.suppressedAckChannelID = channelID
-        model.sidebarRevision &+= 1
+        model.noteReadStateChanged(in: channelID)
         model.railRevision &+= 1
         Task { [weak self] in
             guard let self else { return }

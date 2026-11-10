@@ -8,7 +8,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="${1:-release}"
-APP="$ROOT/build/Wingcord.app"
+# Where the app is put, and what it is signed with. The defaults are the stable
+# build's; `scripts/build-perf.sh` overrides all three for the copy that is
+# recorded, so making that copy can never write over this one.
+APP="${WINGCORD_APP:-$ROOT/build/Wingcord.app}"
+ENTITLEMENTS="${WINGCORD_ENTITLEMENTS:-$ROOT/Packaging/Wingcord.entitlements}"
 
 cd "$ROOT"
 swift build -c "$CONFIG" --product Wingcord
@@ -20,6 +24,37 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Wingcord"
 cp "$ROOT/Packaging/Info.plist" "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+
+# ── Symbols ────────────────────────────────────────────────────────────────
+# The binary SwiftPM links carries the name of every function in it and a map
+# back to the object files on this Mac: 84 MB of a 125 MB file (measured
+# 2026-11-10), with some 1,400 paths that spell out the folder it was built in.
+# None of it is needed to run. The shipped copy is stripped, and the names are
+# kept beside it in a dSYM filed under the build's own id — which is what turns
+# the addresses in a tester's crash report back into names
+# (`scripts/symbolicate.sh`).
+#
+# **The dSYM first, and the strip only if it was made.** A stripped build with
+# no dSYM is a build whose crashes can never be read.
+#
+# Release only: a debug build is for stepping through, and wants them.
+#
+# **Not the copy that is recorded** (`WINGCORD_KEEP_SYMBOLS=1`): `sample`,
+# `leaks` and Instruments read names straight from the binary, and a profile of
+# addresses is one more step between a recording and its answer.
+if [ "$CONFIG" = "release" ] && [ -z "${WINGCORD_KEEP_SYMBOLS:-}" ]; then
+    DSYM_DIR="$ROOT/build/dSYMs"
+    mkdir -p "$DSYM_DIR"
+    BUILD_UUID="$(dwarfdump --uuid "$BIN" | awk '{ print $2; exit }')"
+    DSYM="$DSYM_DIR/Wingcord-$BUILD_UUID.dSYM"
+    if [ -n "$BUILD_UUID" ] && dsymutil "$BIN" -o "$DSYM" 2> "$DSYM_DIR/dsymutil.log" \
+        && [ -s "$DSYM/Contents/Resources/DWARF/Wingcord" ]; then
+        strip -x "$APP/Contents/MacOS/Wingcord"
+        echo "Symbols: $DSYM"
+    else
+        echo "warning: no dSYM was made (see $DSYM_DIR/dsymutil.log); shipping the binary unstripped." >&2
+    fi
+fi
 
 # ── Resource bundle ────────────────────────────────────────────────────────
 # SwiftPM emits declared resources into a bundle beside the binary and
@@ -36,6 +71,12 @@ if [ ! -d "$BUNDLE" ]; then
     exit 1
 fi
 cp -R "$BUNDLE" "$APP/Contents/Resources/"
+
+# ── Acknowledgements ───────────────────────────────────────────────────────
+# The licences of what the app is built with travel with it: Apache 2.0 and
+# the BSD licences all ask for their notice to go wherever the binary does.
+# Plain text, so Help › Acknowledgements opens it on any Mac.
+cp "$ROOT/THIRD-PARTY-NOTICES.md" "$APP/Contents/Resources/Acknowledgements.txt"
 
 # ── App icon ───────────────────────────────────────────────────────────────
 # The icon is an Icon Composer document, not a pre-rendered .icns. `actool`
@@ -163,7 +204,7 @@ codesign --force --sign "$SIGN_IDENTITY" --timestamp=none \
     || echo "warning: signing MediaRemoteAdapter.framework failed." >&2
 
 codesign --force --sign "$SIGN_IDENTITY" \
-    --entitlements "$ROOT/Packaging/Wingcord.entitlements" \
+    --entitlements "$ENTITLEMENTS" \
     --timestamp=none "$APP" \
     || echo "warning: codesign failed with identity '$SIGN_IDENTITY'." >&2
 

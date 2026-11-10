@@ -738,6 +738,27 @@ final class AppSettings {
         didSet { defaults.set(playsAnimatedContent, forKey: Key.playsAnimated) }
     }
 
+    /// Whether moving pictures play right now: the reader's switch, and Low
+    /// Power Mode, which is the reader asking the Mac to spend less and is
+    /// honoured the same way.
+    var playsAnimatedMedia: Bool { playsAnimatedContent && !isLowPowerModeOn && !isRunningHot }
+
+    /// The Mac's Low Power Mode, kept current so anything drawn from
+    /// `playsAnimatedMedia` follows it.
+    private(set) var isLowPowerModeOn = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @ObservationIgnored private var powerStateObserver: NSObjectProtocol?
+
+    /// Whether the Mac says it is running hot — `ProcessInfo.thermalState` at
+    /// serious or critical, where the system is already slowing things down.
+    /// Honoured as Low Power Mode is: moving pictures are the one cost here
+    /// that nobody needs in order to read.
+    private(set) var isRunningHot = AppSettings.isHot(ProcessInfo.processInfo.thermalState)
+    @ObservationIgnored private var thermalStateObserver: NSObjectProtocol?
+
+    nonisolated static func isHot(_ state: ProcessInfo.ThermalState) -> Bool {
+        state == .serious || state == .critical
+    }
+
     /// Whether media loads at all on a metered connection.
     var loadsImagesAutomatically = true {
         didSet { defaults.set(loadsImagesAutomatically, forKey: Key.loadsImages) }
@@ -1735,6 +1756,21 @@ final class AppSettings {
         // Last, and after every assignment above: from here on a setter may talk
         // to the rest of the app.
         isLoaded = true
+        powerStateObserver = NotificationCenter.default.addObserver(
+            forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            let isOn = ProcessInfo.processInfo.isLowPowerModeEnabled
+            MainActor.assumeIsolated { self?.isLowPowerModeOn = isOn }
+        }
+        thermalStateObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            let isHot = AppSettings.isHot(ProcessInfo.processInfo.thermalState)
+            MainActor.assumeIsolated {
+                guard let self, self.isRunningHot != isHot else { return }
+                self.isRunningHot = isHot
+            }
+        }
     }
 
     /// How the microphone is gated.

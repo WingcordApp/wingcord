@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import MachO
 import OSLog
 
 /// Catches the ways this app can die and leaves something worth reading.
@@ -32,6 +33,10 @@ nonisolated enum CrashReporter {
     /// This run's report, which a clean exit removes.
     nonisolated(unsafe) private static var reportPath: String?
     nonisolated(unsafe) private static var isInstalled = false
+    /// Where this run's binary was loaded and which build it is, as bytes the
+    /// handler can write — see `describeMainImage`.
+    nonisolated(unsafe) private static var imageLine: UnsafeMutablePointer<CChar>?
+    nonisolated(unsafe) private static var imageLineLength = 0
 
     /// Where reports go.
     ///
@@ -69,6 +74,11 @@ nonisolated enum CrashReporter {
             open($0, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
         }
         guard reportDescriptor >= 0 else { return }
+
+        // Made now, while allocating is legal, and only written in a crash.
+        let line = describeMainImage()
+        imageLine = strdup(line)
+        imageLineLength = line.utf8.count
 
         Breadcrumbs.record("session started")
 
@@ -151,6 +161,7 @@ nonisolated enum CrashReporter {
         write(descriptor, "footprint-bytes ", 16)
         writeInteger(Int(PerformanceMonitor.physicalFootprint()), to: descriptor)
         write(descriptor, "\n", 1)
+        if let imageLine { write(descriptor, imageLine, imageLineLength) }
 
         Breadcrumbs.dump(to: descriptor)
 
@@ -170,6 +181,31 @@ nonisolated enum CrashReporter {
         // the system reporter with a real signal rather than being swallowed.
         signal(number, SIG_DFL)
         raise(number)
+    }
+
+    /// `image-base 0x… uuid …`: where the app's binary sits in memory, and
+    /// which build it is.
+    ///
+    /// **What turns a shipped build's addresses back into names.** The release
+    /// binary carries no function names — `scripts/build-app.sh` strips them
+    /// and keeps a dSYM per build — so a stack here is addresses, and an
+    /// address means nothing without the place the binary was loaded at. The
+    /// build's id says which dSYM to read them against;
+    /// `scripts/symbolicate.sh` does both.
+    private static func describeMainImage() -> String {
+        guard let header = _dyld_get_image_header(0) else { return "image-base unknown\n" }
+        let base = UnsafeRawPointer(header)
+        var build = "unknown"
+        var cursor = base + MemoryLayout<mach_header_64>.size
+        for _ in 0..<header.pointee.ncmds {
+            let command = cursor.assumingMemoryBound(to: load_command.self).pointee
+            if command.cmd == UInt32(LC_UUID) {
+                build = UUID(uuid: cursor.assumingMemoryBound(to: uuid_command.self).pointee.uuid).uuidString
+                break
+            }
+            cursor += Int(command.cmdsize)
+        }
+        return "image-base 0x" + String(UInt(bitPattern: base), radix: 16) + " uuid " + build + "\n"
     }
 
     /// Writes an integer without allocating.
@@ -199,6 +235,7 @@ nonisolated enum CrashReporter {
         text += "name: \(exception.name.rawValue)\n"
         text += "reason: \(exception.reason ?? "—")\n"
         text += "footprint-bytes \(PerformanceMonitor.physicalFootprint())\n"
+        text += describeMainImage()
         text += Breadcrumbs.formatted()
         text += "\n--- call stack ---\n"
         text += exception.callStackSymbols.joined(separator: "\n")

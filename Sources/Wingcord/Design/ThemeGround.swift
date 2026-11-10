@@ -38,16 +38,29 @@ import SwiftUI
 /// `PresentationOrigin` already anchors profile cards with — so both halves of
 /// the arithmetic come from it: the root publishes its frame, and each ground
 /// reads its own.
+///
+/// **An object the grounds read, not a rect in the environment.** As a value
+/// there, every step of a window resize was an environment write at the
+/// window's root, and each one makes every view under it that reads *any*
+/// environment key check whether its own moved — several hundred of them, for
+/// a number three views draw with. The reference never changes, so the
+/// environment is written once; only a ground reads `rect`, and only a ground
+/// is told when it moves.
+@Observable
+final class WindowField {
+    var rect: CGRect = .zero
+}
+
 extension EnvironmentValues {
-    @Entry var windowField: CGRect = .zero
+    @Entry var windowField: WindowField? = nil
 }
 
 private struct WindowFieldModifier: ViewModifier {
-    @State private var field: CGRect = .zero
+    @State private var field = WindowField()
 
     func body(content: Content) -> some View {
         content
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { field = $0 }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { field.rect = $0 }
             .environment(\.windowField, field)
     }
 }
@@ -433,6 +446,7 @@ private struct ThemeGroundLayer: View {
     /// This column's place in the window. Falls back to filling itself when
     /// there is no root above — the settings window's own preview is the case.
     private var frame: BackdropFrame {
+        let windowField = windowField?.rect ?? .zero
         guard windowField.width > 1, windowField.height > 1 else {
             return BackdropFrame(container: mine.size, rect: CGRect(origin: .zero, size: mine.size))
         }

@@ -234,6 +234,9 @@ final class TimelineCoordinator: NSObject {
 
     /// Laid-out message rows, reused across passes. Swept by the engine.
     private var rowCache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
+    /// Everybody the last pass's rows mentioned, so the next one names them
+    /// from the start — see `runLayout`.
+    private var mentionedUserIDs: Set<UserID> = []
     /// The layouts at the width the transcript had before a sidebar toggle —
     /// the other of the two widths it moves between — so toggling back
     /// relays nothing that has not changed. Kept only across a toggle: a live
@@ -1349,11 +1352,23 @@ final class TimelineCoordinator: NSObject {
             cardRevision: cardRevision
         )
         let channel = channelID.flatMap { model.channelIndex[$0] }
-        let input = TimelineLayoutEngine.Input(
+        // **Only the people this page's words mention are named**: the ones
+        // each message lists, and whoever the rows asked for last time — a
+        // mention inside an embed is in no message's list. The table of
+        // everybody in the session was rebuilt for every stranger who wrote
+        // anywhere in the account.
+        var naming = mentionedUserIDs
+        for case .message(let message) in items {
+            naming.formUnion(message.message.mentionedUserIDs)
+        }
+        let lookups = MentionLookups()
+        var mentions = model.mentionContext(naming: naming)
+        mentions.lookups = lookups
+        var input = TimelineLayoutEngine.Input(
             items: items,
             width: width,
             style: style,
-            mentions: model.mentionContext(),
+            mentions: mentions,
             channelName: channel.map { model.displayName(of: $0) } ?? "",
             head: head,
             postActions: postActions,
@@ -1399,7 +1414,20 @@ final class TimelineCoordinator: NSObject {
         )
 
         isApplyingUpdate = true
-        let rows = engine.layout(input, cache: &rowCache)
+        var rows = Signposts.interval("Transcript layout") {
+            engine.layout(input, cache: &rowCache)
+        }
+        // Somebody the rows asked for whom the pass did not name, and whom the
+        // store knows: set once more with them. Only the rows that asked are
+        // built again — every other one still matches its entry.
+        let asked = lookups.askedInPass
+        mentionedUserIDs = asked
+        if asked.contains(where: { !naming.contains($0) && model.users[$0] != nil }) {
+            var named = model.mentionContext(naming: asked.union(naming))
+            named.lookups = lookups
+            input.mentions = named
+            rows = engine.layout(input, cache: &rowCache)
+        }
         let height = canvas.apply(
             rows: rows,
             leadingSpace: leadingSpace(forRowsHeight: rows.reduce(0) { $0 + $1.height })

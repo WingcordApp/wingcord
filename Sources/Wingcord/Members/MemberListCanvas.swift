@@ -141,6 +141,10 @@ final class MemberListCanvas: NSView {
         setAccessibilityRole(.list)
         setAccessibilityLabel("Members")
         adoptAvatarFilm()
+        AppVisibility.shared.observe(self) { [weak self] _ in
+            self?.updateLiveClock()
+            self?.refreshDurationClock()
+        }
     }
 
     @available(*, unavailable)
@@ -158,6 +162,7 @@ final class MemberListCanvas: NSView {
     /// Releases the clock and anything in flight. Called by the coordinator that
     /// owns this view; `deinit` covers the case where nobody does.
     func tearDown() {
+        AppVisibility.shared.stopObserving(self)
         liveClock?.invalidate()
         liveClock = nil
         onHoveredRowChange = nil
@@ -243,11 +248,14 @@ final class MemberListCanvas: NSView {
     }
 
     private func updateLiveClock() {
-        let hasLive = activity?.cards.contains(where: \.isLive) == true
+        let hasLive = AppVisibility.shared.isVisible
+            && activity?.cards.contains(where: \.isLive) == true
         if hasLive, liveClock == nil {
             let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.tickLiveCards() }
             }
+            // Room to land on a wakeup the system was making anyway.
+            timer.tolerance = 0.2
             RunLoop.main.add(timer, forMode: .common)
             liveClock = timer
         } else if !hasLive {
@@ -920,11 +928,13 @@ final class MemberListCanvas: NSView {
     private var durationClock: Timer?
 
     private func refreshDurationClock() {
-        let wanted = roster.members.values.contains { $0.line?.since != nil }
+        let wanted = AppVisibility.shared.isVisible
+            && roster.members.values.contains { $0.line?.since != nil }
         if wanted, durationClock == nil {
             let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.tickDurations() }
             }
+            timer.tolerance = 5
             RunLoop.main.add(timer, forMode: .common)
             durationClock = timer
         } else if !wanted {

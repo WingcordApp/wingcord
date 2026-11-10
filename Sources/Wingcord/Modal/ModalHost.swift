@@ -170,13 +170,18 @@ private struct ModalCardStage: View {
     @State private var isLeaving = false
     @State private var dismissDisabled = false
     @State private var refusals = 0
+    /// What the card's dismiss runs — see `ModalDismissAction`.
+    @State private var closeBox = ModalCloseBox()
 
     private var isTop: Bool { depth == 0 && !isCovered }
 
     var body: some View {
+        // Kept current here rather than captured: the asking site hands a new
+        // closure on every pass, and the box is what stays the same.
+        let _ = (closeBox.close = entry.close)
         entry.content
             .id(entry.contentID)
-            .environment(\.modalDismiss, ModalDismissAction(close: entry.close))
+            .environment(\.modalDismiss, ModalDismissAction(box: closeBox))
             .environment(\.isTopModal, isTop)
             .modifier(ModalContentFade(reduceMotion: motion.reduceMotion))
             .background { ModalFocusAnchor(isTop: isTop) }

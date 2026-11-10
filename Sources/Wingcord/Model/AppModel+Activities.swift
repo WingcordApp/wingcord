@@ -388,7 +388,7 @@ extension AppModel {
             isOnMobile: presences[userID]?.isOnMobile ?? false,
             activities: list.isEmpty ? nil : PresenceActivities(list: list)
         )
-        presenceRevision &+= 1
+        noteEveryPresenceChanged()
     }
 
     /// **Milliseconds, whatever the app sent.** The wire is milliseconds and

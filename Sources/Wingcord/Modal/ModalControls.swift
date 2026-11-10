@@ -3,10 +3,21 @@ import SwiftUI
 // MARK: - What a card's contents can ask of it
 
 /// Closes the card the view is in.
+///
+/// **The close is held in a box, not in this value.** A closure in an
+/// environment value cannot be compared, so every view in a card that reads
+/// its dismiss was run again each time the card's stage was — on every point
+/// of a drag, while it is being thrown. The box is the same reference from one
+/// pass to the next, so the value compares equal and nobody is told.
 struct ModalDismissAction {
-    var close: @MainActor () -> Void
+    let box: ModalCloseBox
 
-    @MainActor func callAsFunction() { close() }
+    @MainActor func callAsFunction() { box.close() }
+}
+
+/// What a card's dismiss runs: its stage keeps this current.
+final class ModalCloseBox {
+    var close: @MainActor () -> Void = {}
 }
 
 extension EnvironmentValues {

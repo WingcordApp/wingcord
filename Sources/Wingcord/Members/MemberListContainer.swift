@@ -90,10 +90,7 @@ struct MemberListContainer: View {
         }
         // Everyone in a room here that this session has no record of, so Active
         // Now can name them.
-        .task(id: model.selectedGuildID.map { RoomPeopleKey(guildID: $0, inRooms: Set(model.voiceStates.values.compactMap { $0.guildID == model.selectedGuildID && $0.channelID != nil ? $0.userID : nil })) }) {
-            guard let guildID = model.selectedGuildID else { return }
-            model.sessionController.requestPeopleInRooms(inGuild: guildID)
-        }
+        .background { RoomPeopleRequest() }
         // The feed's authors this server has not sent, so the section can
         // tell who here may see the channel.
         .task(id: ActivityAuthorsKey(guildID: model.selectedGuildID, feed: model.activityFeed.inbox?.refreshToken)) {
@@ -129,6 +126,31 @@ private struct MemberListTopFade: View {
 private struct RoomPeopleKey: Hashable {
     var guildID: GuildID
     var inRooms: Set<UserID>
+}
+
+/// Asks for the people in this server's rooms whenever who is in them changes.
+///
+/// **A view of its own, because the question reads every voice state in the
+/// account.** Asked in the container's body it made the whole member list —
+/// its roster, a dozen closures and the drawn canvas's update — run again for
+/// every join, leave and mute in every server. Here that costs this one view.
+private struct RoomPeopleRequest: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let guildID = model.selectedGuildID
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .task(id: guildID.map { guildID in
+                RoomPeopleKey(guildID: guildID, inRooms: Set(model.voiceStates.values.compactMap {
+                    $0.guildID == guildID && $0.channelID != nil ? $0.userID : nil
+                }))
+            }) {
+                guard let guildID else { return }
+                model.sessionController.requestPeopleInRooms(inGuild: guildID)
+            }
+    }
 }
 
 private struct ActivityAuthorsKey: Hashable {

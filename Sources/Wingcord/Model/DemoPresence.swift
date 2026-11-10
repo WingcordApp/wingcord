@@ -88,7 +88,7 @@ extension DemoFixtures {
         }
 
         model.recentActivity[owner] = recentActivity(of: owner)
-        model.presenceRevision &+= 1
+        model.noteEveryPresenceChanged()
     }
 
     /// The outbox, as the capture's own entries.

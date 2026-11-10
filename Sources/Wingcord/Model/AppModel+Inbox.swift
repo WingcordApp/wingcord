@@ -115,7 +115,7 @@ extension AppModel {
             presentationRevision: presentationRevision,
             // The transcript's own tables move under these lists: a message
             // edited, an author's name resolved, a channel renamed.
-            messageRevision: messageContentRevision,
+            messageRevision: messageContentRevision &+ inboundMessageRevision,
             identityRevision: identityRevision,
             // **Read states, and leaving it out was a bug.** `MESSAGE_ACK`
             // moves `sidebarRevision` and `railRevision` and nothing else — so
@@ -124,7 +124,7 @@ extension AppModel {
             // `sidebarRevision` is the one that tracks read state; `railRevision`
             // deliberately does *not* move when a message lands in a guild that
             // is already unread, which makes it the wrong one to key on.
-            sidebarRevision: sidebarRevision
+            sidebarRevision: sidebarRevision &+ readRevision
         )
         if let inboxCardCache, inboxCardCache.key == key { return inboxCardCache.value }
 

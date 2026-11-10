@@ -138,6 +138,7 @@ struct MessageActionBarOverlay: View {
         let hover = model.messageHover
         let _ = model.roleRevision
         let _ = model.messageContentRevision
+        let _ = model.inboundMessageRevision
         let current = hover ?? (isPointerOnBar ? held : nil)
         let actions = current.map { model.actions(for: $0.messageID, in: channelID) } ?? []
         let items = actions.isEmpty ? [] : actions.barItems(shifted: isShifted)

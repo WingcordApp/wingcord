@@ -72,7 +72,7 @@ nonisolated final class ImageStore: @unchecked Sendable {
 
     enum Budget {
         /// Avatars, guild icons, emoji — small, numerous, re-shown constantly.
-        static let thumbnails = 48 * 1024 * 1024
+        static let thumbnails = 32 * 1024 * 1024
         /// Chat attachments and embed artwork — large, seen once, scrolled past.
         /// **Three screens of them**: the transcript asks a screen ahead of the
         /// reader either way (REDESIGN.md D12), and a laptop window's worth of
@@ -657,13 +657,20 @@ actor ConcurrencyGate {
             active += 1
             return
         }
+        // The place is handed over by whoever leaves — see `release`.
         await withCheckedContinuation { waiters.append($0) }
-        active += 1
     }
 
+    /// **A leaving caller hands its place to the first one waiting, and the
+    /// count does not move.** Counting down here and up again when the waiter
+    /// resumed left a gap between the two: a new caller arriving in it saw a
+    /// free place and took it, the waiter then took it as well, and the gate
+    /// ran one over its limit for every such race.
     private func release() {
-        active -= 1
-        guard !waiters.isEmpty else { return }
+        guard !waiters.isEmpty else {
+            active -= 1
+            return
+        }
         waiters.removeFirst().resume()
     }
 }

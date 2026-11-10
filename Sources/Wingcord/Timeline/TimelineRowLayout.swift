@@ -1190,7 +1190,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     /// the registry is main-actor state and the layout deliberately is not — and
     /// because resolving here means only the faces actually on screen are ever
     /// registered.
-    struct AuthorInfo: @unchecked Sendable {
+    struct AuthorInfo: @unchecked Sendable, Equatable {
         var name: String
         var colorValue: UInt32?
         var avatarURL: URL?
@@ -1264,9 +1264,29 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// entry that carries them never matches.
         var width: Int
         var presentationRevision: UInt64
-        /// What the mention table was at, which is also what a name, a nickname
-        /// and a role colour move with — all three are drawn into the row.
+        /// What the mention table was at: the channels, roles and servers a
+        /// row can name. **Not the people.** They are checked one by one,
+        /// below, because a counter for them moves with every user record in
+        /// the account.
         var identityToken: UInt64
+        /// Everybody the row draws by their own name and face — its author,
+        /// whoever it quotes, whoever ran its command — as each stood when it
+        /// was laid out. See `TimelineLayoutEngine.people(in:autoMod:)`.
+        var people: [Person] = []
+        /// The user mentions its words asked for, and what each was set as:
+        /// nil for somebody not known then, so the row is set again once they
+        /// are.
+        var names: [MentionedName] = []
+
+        struct Person: Sendable {
+            var id: UserID
+            var info: AuthorInfo?
+        }
+
+        struct MentionedName: Sendable {
+            var id: UserID
+            var name: String?
+        }
         /// What the Spotify table was at.
         ///
         /// **A card resolves *after* the row is already laid out**, and it is a
@@ -1332,7 +1352,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             canManageMessages: Bool?,
             stageInvitationOpen: Bool?,
             stageStartEvent: UInt64?,
-            gifStickers: [StickerRef]?
+            gifStickers: [StickerRef]?,
+            authors: [UserID: AuthorInfo],
+            userNames: [UserID: String]
         ) -> Bool {
             self.width == width
                 && self.presentationRevision == presentationRevision
@@ -1349,7 +1371,26 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 && self.gifStickers == gifStickers
                 && self.message == message
                 && (awaitingHighlightAt.map { $0 == CodeHighlighter.revision } ?? true)
+                // After the message itself: an equal message names the same
+                // people, so what is left to ask is whether any of them changed.
+                && people.allSatisfy { authors[$0.id] == $0.info }
+                && names.allSatisfy { userNames[$0.id] == $0.name }
         }
+    }
+
+    /// Everybody a message's row draws by their own name and face: its author,
+    /// whoever ran its command, whoever it quotes, and the people an AutoMod
+    /// card names.
+    ///
+    /// **The same people `AppModel.authorInfo` resolves, and it has to stay
+    /// so.** Somebody resolved there and missing here is a row that never hears
+    /// their name changed; the other way round costs a lookup that finds nil.
+    static func people(in message: Message, autoMod: AutoModMessage?) -> [UserID] {
+        var ids = [message.authorID]
+        if let invoker = message.interaction?.userID { ids.append(invoker) }
+        if let quoted = message.reference?.authorID { ids.append(quoted) }
+        if let autoMod { ids.append(contentsOf: autoMod.namedUserIDs) }
+        return ids
     }
 
     var presentationRevision: UInt64
@@ -1437,6 +1478,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var used = Set<MessageID>()
         used.reserveCapacity(input.items.count)
         let width = Int(input.width.rounded())
+        // The user mentions each row's words ask for, noted as they are asked
+        // — see `MentionLookups`. The caller's own, where it wants to hear
+        // which names the whole pass used.
+        let lookups = input.mentions.lookups ?? MentionLookups()
+        var input = input
+        input.mentions.lookups = lookups
+        var asked = Set<UserID>()
 
         for item in input.items {
             switch item {
@@ -1520,9 +1568,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                        canManageMessages: canManageMessages,
                        stageInvitationOpen: stageInvitationOpen,
                        stageStartEvent: stageStartEvent,
-                       gifStickers: gifStickers
+                       gifStickers: gifStickers,
+                       authors: input.authors,
+                       userNames: input.mentions.userNames
                    )
                 {
+                    for name in cached.names { asked.insert(name.id) }
                     // Painted, so carried over rather than keyed on.
                     var row = cached.row
                     row.isPending = message.flags.contains(.pending)
@@ -1533,6 +1584,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 // Read before the build: an answer landing while the row is
                 // built must leave it stale, not fresh.
                 let highlightAt = CodeHighlighter.revision
+                // What a head or a fold asked for before this row is not this
+                // row's to remember.
+                asked.formUnion(lookups.take())
                 var row = if let autoMod {
                     Self.autoModRow(message, autoMod, input: input, parser: parser)
                 } else if message.message.isSystemEvent {
@@ -1541,10 +1595,19 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     buildMessage(message, input: input, parser: parser)
                 }
                 row.isInOpenFold = message.flags.contains(.inOpenGroup)
+                var names: [CacheEntry.MentionedName] = []
+                for userID in lookups.take() where !names.contains(where: { $0.id == userID }) {
+                    names.append(.init(id: userID, name: input.mentions.userNames[userID]))
+                    asked.insert(userID)
+                }
                 cache[message.message.id] = CacheEntry(
                     width: width,
                     presentationRevision: presentationRevision,
                     identityToken: input.mentions.token,
+                    people: Self.people(in: message.message, autoMod: autoMod).map {
+                        .init(id: $0, info: input.authors[$0])
+                    },
+                    names: names,
                     cardRevision: cardRevision,
                     carriesCards: Self.carriesCards(message.message),
                     isRunHead: message.isRunHead,
@@ -1585,6 +1648,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             }
         }
 
+        // Whatever the rows built last asked for, a head's topic included.
+        asked.formUnion(lookups.take())
+        lookups.finishPass(asked)
         return rows
     }
 

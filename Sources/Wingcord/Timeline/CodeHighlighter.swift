@@ -38,6 +38,11 @@ nonisolated final class CodeHighlighter: @unchecked Sendable {
     /// Touched on `queue` only.
     private var engine: Engine?
     private var engineFailed = false
+    /// Touched on `queue` only. The engine is freed this long after its last
+    /// use: it is 16 MB of JavaScript heap for something that runs for a moment
+    /// when a code block appears, and it would otherwise stay for the session.
+    private var releaseEngine: DispatchWorkItem?
+    private static let engineLifetime: TimeInterval = 120
 
     private struct CacheKey: Hashable {
         var language: String
@@ -128,7 +133,18 @@ nonisolated final class CodeHighlighter: @unchecked Sendable {
         guard let canonical = engine.canonicalName(language),
               Self.admits(code, canonicalLanguage: canonical)
         else { return nil }
+        scheduleEngineRelease()
         return engine.highlight(code, language: language)
+    }
+
+    private func scheduleEngineRelease() {
+        releaseEngine?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.engine = nil
+            self?.releaseEngine = nil
+        }
+        releaseEngine = work
+        queue.asyncAfter(deadline: .now() + Self.engineLifetime, execute: work)
     }
 
     private func loadedEngine() -> Engine? {

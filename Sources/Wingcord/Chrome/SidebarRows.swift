@@ -934,3 +934,34 @@ private nonisolated struct ThreadHook: Shape {
 /// A round glyph button in a sidebar row, under the pointer: light in a dark
 /// room, shade in a light one.
 private let sidebarGlyphHovered = Color.relative(dark: 0.14, light: 0.10)
+
+// MARK: - Rows that are skipped when nothing about them changed
+
+/// **Compared by what a row draws, never by its closures** (`INVARIANTS.md`
+/// §2, "`.equatable()` over a memoized value snapshot").
+///
+/// The channel list hands every row three closures, made new on every pass, so
+/// SwiftUI could not tell an unchanged row from a changed one and ran all of
+/// them whenever anything in the list moved: one channel going unread ran a
+/// two-hundred-channel server's every visible row. What a closure *does* never
+/// changes between passes — it calls the store with this row's own id, which is
+/// in `channel` — so only whether the row has one is part of the answer.
+extension SidebarChannelRow: Equatable {
+    static func == (lhs: SidebarChannelRow, rhs: SidebarChannelRow) -> Bool {
+        lhs.channel == rhs.channel
+            && lhs.isSelected == rhs.isSelected
+            && lhs.guildID == rhs.guildID
+            && lhs.isConnected == rhs.isConnected
+            && (lhs.join == nil) == (rhs.join == nil)
+            && (lhs.openChat == nil) == (rhs.openChat == nil)
+            && (lhs.openMenu == nil) == (rhs.openMenu == nil)
+    }
+}
+
+extension SidebarThreadRow: Equatable {
+    static func == (lhs: SidebarThreadRow, rhs: SidebarThreadRow) -> Bool {
+        lhs.thread == rhs.thread
+            && lhs.isSelected == rhs.isSelected
+            && (lhs.openMenu == nil) == (rhs.openMenu == nil)
+    }
+}

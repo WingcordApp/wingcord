@@ -12,6 +12,44 @@ import Testing
 @Suite("Channel index")
 struct ChannelIndexTests {
 
+    @Test("A message moves its own list's revision and leaves every other list alone")
+    func valueRevisionPerList() {
+        var index = ChannelIndex()
+        let other = GuildID(rawValue: 20)
+        index.replaceChannels([channel(1)], inGuild: guildID)
+        index.replaceChannels(
+            [Channel(id: ChannelID(rawValue: 2), kind: .text, guildID: other, name: "other")],
+            inGuild: other
+        )
+        index.replacePrivateChannels([Channel(id: ChannelID(rawValue: 3), kind: .directMessage)])
+        let (first, second, conversations) = (
+            index.valueRevision(inGuild: guildID),
+            index.valueRevision(inGuild: other),
+            index.valueRevision(inGuild: nil)
+        )
+
+        index.patchLastMessage(MessageID(rawValue: 100), in: ChannelID(rawValue: 1))
+
+        #expect(index.valueRevision(inGuild: guildID) != first)
+        #expect(index.valueRevision(inGuild: other) == second)
+        #expect(index.valueRevision(inGuild: nil) == conversations)
+
+        index.patchLastMessage(MessageID(rawValue: 101), in: ChannelID(rawValue: 3))
+        #expect(index.valueRevision(inGuild: nil) != conversations)
+        #expect(index.valueRevision(inGuild: other) == second)
+    }
+
+    @Test("A thread resync that names no server moves every list")
+    func unnamedResyncMovesEveryList() {
+        var index = ChannelIndex()
+        let before = index.valueRevision(inGuild: guildID)
+        let conversations = index.valueRevision(inGuild: nil)
+        index.replaceThreads([], inParents: nil, guildID: nil)
+        #expect(index.valueRevision(inGuild: guildID) != before)
+        #expect(index.valueRevision(inGuild: nil) != conversations)
+    }
+
+
     private let guildID = GuildID(rawValue: 10)
 
     private func channel(

@@ -59,7 +59,7 @@ final class AnimationClock {
     /// off while a game is in front and the app is neither focused nor under
     /// the pointer.
     static var playsAnimatedEmoji: Bool {
-        AppSettings.shared.playsAnimatedContent
+        AppSettings.shared.playsAnimatedMedia
             && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             && !GameMode.shared.isThrottling
     }
@@ -84,6 +84,7 @@ final class AnimationClock {
     private var lastTimestamp: CFTimeInterval?
     private var isAppActive = true
     private var activeObservers: [NSObjectProtocol] = []
+    private var canRun: Bool { isAppActive && AppVisibility.shared.isVisible }
 
     private init() {
         let center = NotificationCenter.default
@@ -99,6 +100,9 @@ final class AnimationClock {
                 queue: .main
             ) { _ in MainActor.assumeIsolated { AnimationClock.shared.setActive(true) } },
         ]
+        // Minimized or covered while still the active app: an animation nobody
+        // can see is as much heat as one in the background.
+        AppVisibility.shared.observe(self) { [weak self] _ in self?.conditionsChanged() }
     }
 
     // MARK: Subscription
@@ -150,11 +154,15 @@ final class AnimationClock {
     private func setActive(_ active: Bool) {
         guard isAppActive != active else { return }
         isAppActive = active
-        if active { startIfNeeded() } else { stop() }
+        conditionsChanged()
+    }
+
+    private func conditionsChanged() {
+        if canRun { startIfNeeded() } else { stop() }
     }
 
     private func startIfNeeded() {
-        guard link == nil, isAppActive, !subscribers.isEmpty else { return }
+        guard link == nil, canRun, !subscribers.isEmpty else { return }
         guard let screen = NSScreen.main else { return }
         let link = screen.displayLink(target: self, selector: #selector(step(_:)))
         link.add(to: .main, forMode: .common)

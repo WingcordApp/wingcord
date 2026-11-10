@@ -133,7 +133,7 @@ struct DirectMessageRowTests {
             status: .online,
             activities: PresenceActivities(list: [Activity(kind: .playing, name: "Xcode")])
         )
-        model.presenceRevision &+= 1
+        model.notePresencesChanged(for: [them])
         #expect(row(model)?.activityLine?.text == "Xcode")
     }
 }

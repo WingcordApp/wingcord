@@ -128,7 +128,7 @@ extension AppModel {
             channelID: selectedChannelID,
             memberListRevision: memberListRevision,
             memberRevision: memberRevision,
-            presenceRevision: presenceRevision,
+            presenceRevision: rosterPresenceRevision,
             roleRevision: roleRevision,
             structureRevision: channelIndex.structureRevision,
             colorSaturation: userColorSaturation,
@@ -150,7 +150,9 @@ extension AppModel {
 
         if let rosterCache, rosterCache.key == key { return rosterCache.value }
 
-        let value = buildRoster(members: memberTable, presences: presenceTable, voice: key.voice)
+        let value = Signposts.interval("Member list build") {
+            buildRoster(members: memberTable, presences: presenceTable, voice: key.voice)
+        }
         rosterCache = (key, value)
         return value
     }

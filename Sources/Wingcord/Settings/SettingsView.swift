@@ -41,7 +41,7 @@ struct SettingsView: View {
         } detail: {
             SettingsDetailPane(history: history)
         }
-        .environment(\.settingsNavigate, SettingsNavigate { history.go(to: $0) })
+        .environment(\.settingsNavigate, SettingsNavigate(history: history))
         .frame(
             minWidth: SettingsMetrics.minWidth,
             minHeight: SettingsMetrics.minHeight

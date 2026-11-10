@@ -445,7 +445,7 @@ extension AppModel {
         state.mentionCount = 0
         readStates[channelID] = state
         if suppressedAckChannelID == channelID { suppressedAckChannelID = nil }
-        sidebarRevision &+= 1
+        noteReadStateChanged(in: channelID)
         railRevision &+= 1
     }
 

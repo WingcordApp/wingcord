@@ -324,7 +324,7 @@ final class WallpaperVideoView: NSView {
                     MainActor.assumeIsolated { self?.updatePlayback() }
                 })
             }
-            for name in [NSApplication.didHideNotification, NSApplication.didUnhideNotification] {
+            for name in [NSApplication.didHideNotification, NSApplication.didUnhideNotification, Notification.Name.NSProcessInfoPowerStateDidChange, ProcessInfo.thermalStateDidChangeNotification] {
                 observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                     MainActor.assumeIsolated { self?.updatePlayback() }
                 })
@@ -340,7 +340,11 @@ final class WallpaperVideoView: NSView {
         // Muted again before every play: a resumed player keeps no promise.
         player?.isMuted = true
         player?.volume = 0
-        if visible && plays { player?.play() } else { player?.pause() }
+        // Low Power Mode, or a Mac running hot: a video nobody asked to watch
+        // is the first thing to stop.
+        let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+            || AppSettings.isHot(ProcessInfo.processInfo.thermalState)
+        if visible && plays && !lowPower { player?.play() } else { player?.pause() }
     }
 
     func stop() {

@@ -323,6 +323,10 @@ final class SessionController {
     private var pendingPresences: [UserID: Presence] = [:]
     private var presenceFlushTask: Task<Void, Never>?
     private static let presenceFlushInterval = Duration.milliseconds(200)
+    /// How long updates wait for company while no window can be seen.
+    private static let heldUpdatesInterval = Duration.milliseconds(750)
+    private var heldUpdates: [GatewaySocket.Event] = []
+    private var heldUpdatesFlush: Task<Void, Never>?
 
     /// The call, and everything that follows from being in one.
     ///
@@ -784,6 +788,10 @@ final class SessionController {
         model.summaryLoader = { [weak self] channelID, request in
             self?.loadSummaries(in: channelID, request)
         }
+        // A window coming back shows what happened while it was gone at once.
+        AppVisibility.shared.observe(self) { [weak self] visible in
+            if visible { self?.flushHeldUpdates() }
+        }
         eventTask = Task { [weak self] in
             await socket.connect(token: token)
             guard let stream = await socket.events else {
@@ -793,7 +801,7 @@ final class SessionController {
             SessionController.trace("consuming events")
             for await event in stream {
                 guard let self, !self.isTornDown else { return }
-                self.apply(event)
+                self.receive(event)
             }
         }
     }
@@ -939,6 +947,9 @@ final class SessionController {
 
     private func teardownConnection() {
         isTornDown = true
+        heldUpdates.removeAll(keepingCapacity: false)
+        heldUpdatesFlush?.cancel()
+        heldUpdatesFlush = nil
         requestedPreviewChannels.removeAll()
         cancelFolderSave()
         stopGameDetection()
@@ -963,6 +974,48 @@ final class SessionController {
 
     // MARK: Applying
 
+    /// Takes one event from the socket: at once while a window can be seen,
+    /// and in a batch while none can.
+    ///
+    /// **SwiftUI updates a graph for a window nobody can see, minimized or
+    /// covered, every time an observed property moves.** On a busy account that
+    /// is several whole passes a second for a window with nobody looking at it.
+    /// Held updates are applied together in one main-actor turn, so a second of
+    /// them is one pass. Nothing is lost and the order is the socket's.
+    ///
+    /// **Not during a call**: a join or a leave is heard the moment it happens.
+    /// And an event that is not an update is never held, with whatever was
+    /// waiting applied first so nothing overtakes it.
+    private func receive(_ event: GatewaySocket.Event) {
+        if case .update = event, !AppVisibility.shared.isVisible, model.connectedVoiceChannelID == nil {
+            heldUpdates.append(event)
+            scheduleHeldUpdatesFlush()
+            return
+        }
+        flushHeldUpdates()
+        apply(event)
+    }
+
+    private func scheduleHeldUpdatesFlush() {
+        guard heldUpdatesFlush == nil else { return }
+        heldUpdatesFlush = Task { [weak self] in
+            try? await Task.sleep(for: Self.heldUpdatesInterval, tolerance: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            self?.flushHeldUpdates()
+        }
+    }
+
+    private func flushHeldUpdates() {
+        heldUpdatesFlush?.cancel()
+        heldUpdatesFlush = nil
+        guard !heldUpdates.isEmpty else { return }
+        let held = heldUpdates
+        heldUpdates.removeAll(keepingCapacity: true)
+        for event in held { apply(event) }
+        // In this same turn, so it is the same pass.
+        if !pendingPresences.isEmpty { flushPresences() }
+    }
+
     private func apply(_ event: GatewaySocket.Event) {
         switch event {
         case .connecting:
@@ -980,7 +1033,7 @@ final class SessionController {
             // were counted from may have moved while the socket was down.
             model.forumPostUnreadCounts = [:]
             model.forumUnreadsRequested = []
-            applyReady(snapshot)
+            Signposts.interval("READY applied") { applyReady(snapshot) }
         case .readySupplemental(let snapshot):
             applyReadySupplemental(snapshot)
             // Discord asks for the activity feed as the connection opens.
@@ -1178,7 +1231,7 @@ final class SessionController {
         model.sidebarRevision &+= 1
         model.roleRevision &+= 1
         model.memberRevision &+= 1
-        model.presenceRevision &+= 1
+        model.noteEveryPresenceChanged()
         model.identityRevision &+= 1
         model.connectionState = .ready
         // **What this client published before READY, mirrored now.** A game
@@ -1269,7 +1322,7 @@ final class SessionController {
         refreshVoiceActivityIcons()
 
         if !snapshot.membersByGuild.isEmpty { model.memberRevision &+= 1 }
-        if !snapshot.presences.isEmpty { model.presenceRevision &+= 1 }
+        if !snapshot.presences.isEmpty { model.noteEveryPresenceChanged() }
         model.sidebarCache = nil
         model.sidebarRevision &+= 1
     }
@@ -1360,7 +1413,7 @@ final class SessionController {
             noteGameMentions(in: [message])
             model.clearTyping(author.id, in: message.channelID)
             model.channelIndex.patchLastMessage(message.id, in: message.channelID)
-            model.messageContentRevision &+= 1
+            model.noteMessageChanged(in: message.channelID)
             bumpUnread(for: message)
             model.countForumPostMessage(message)
             // **After the unread, and it is not the same question.** The unread
@@ -1394,12 +1447,12 @@ final class SessionController {
                 if let payload = message.payload { merged.payload = payload }
                 box.messages[index] = merged
             }
-            model.messageContentRevision &+= 1
+            model.noteMessageChanged(in: message.channelID)
             model.applyOpenerUpdated(message)
 
         case .messageDeleted(let messageID, let channelID):
             model.mutateBox(channelID) { $0.remove(messageID) }
-            model.messageContentRevision &+= 1
+            model.noteMessageChanged(in: channelID)
             model.applyOpenerDeleted(messageID, in: channelID)
 
         case .voiceStateChanged(let state, let member, let user):
@@ -1690,7 +1743,7 @@ final class SessionController {
             model.readStates[channelID, default: ReadState()].lastAcknowledgedID = messageID
             model.readStates[channelID, default: ReadState()].mentionCount = mentionCount
             model.noteForumPostRead(channelID)
-            model.sidebarRevision &+= 1
+            model.noteReadStateChanged(in: channelID)
             model.railRevision &+= 1
 
         case .currentUserUpdated(let user, let premiumType, let ageVerificationStatus, let verification):
@@ -1908,7 +1961,7 @@ final class SessionController {
             state.mentionCount += 1
         }
         model.readStates[message.channelID] = state
-        model.sidebarRevision &+= 1
+        model.noteReadStateChanged(in: message.channelID)
         model.railRevision &+= 1
     }
 
@@ -1916,7 +1969,8 @@ final class SessionController {
 
     private func enqueue(_ presence: Presence) {
         pendingPresences[presence.userID] = presence
-        guard presenceFlushTask == nil else { return }
+        // While nothing can be seen the held batch applies these at its end.
+        guard presenceFlushTask == nil, AppVisibility.shared.isVisible else { return }
         presenceFlushTask = Task { [weak self] in
             try? await Task.sleep(for: Self.presenceFlushInterval)
             guard let self, !Task.isCancelled else { return }
@@ -1935,8 +1989,8 @@ final class SessionController {
         let touchesVoice = pendingPresences.keys.contains { model.voiceStates[$0] != nil }
         let movesHost = model.listeningAlong.map { pendingPresences[$0.hostID] != nil } ?? false
         model.presences.merge(pendingPresences) { _, new in new }
+        model.notePresencesChanged(for: pendingPresences.keys)
         pendingPresences.removeAll(keepingCapacity: true)
-        model.presenceRevision &+= 1
         if touchesVoice {
             model.voicePresenceRevision &+= 1
             refreshVoiceActivityIcons()
@@ -2329,13 +2383,40 @@ final class SessionController {
         inGuild guildID: GuildID
     ) {
         guard !members.isEmpty else { return }
-        model.members[guildID, default: [:]].merge(members) { _, new in new }
-        model.users.merge(users) { existing, new in new.merged(over: existing) }
-        model.presences.merge(presences) { _, new in new }
-        model.permissionGate.invalidate()
-        model.memberRevision &+= 1
-        model.presenceRevision &+= 1
-        model.roleRevision &+= 1
+        // **Only what differs is written, and only the reader's own record can
+        // change what the reader may do.** A member list sends a batch for
+        // every person scrolling past, several times a second on a busy
+        // server. This used to throw away the permission cache and move
+        // `roleRevision` for each of them, so the server list worked out every
+        // channel's permissions in every server again — a fifth of the main
+        // thread on a real account, and the reason everything keyed on the
+        // roles was rebuilt for people who have nothing to do with the reader.
+        let known = model.members[guildID]
+        let changedMembers = members.filter { known?[$0.key] != $0.value }
+        var changedUsers: [UserID: User] = [:]
+        for (userID, user) in users {
+            let existing = model.users[userID]
+            let merged = user.merged(over: existing)
+            if merged != existing { changedUsers[userID] = merged }
+        }
+        let changedPresences = presences.filter { model.presences[$0.key] != $0.value }
+        if !changedMembers.isEmpty {
+            model.members[guildID, default: [:]].merge(changedMembers) { _, new in new }
+        }
+        if !changedUsers.isEmpty {
+            model.users.merge(changedUsers) { _, new in new }
+        }
+        if !changedPresences.isEmpty {
+            model.presences.merge(changedPresences) { _, new in new }
+            model.notePresencesChanged(for: changedPresences.keys)
+        }
+        if !changedMembers.isEmpty || !changedUsers.isEmpty {
+            model.memberRevision &+= 1
+        }
+        if let reader = model.currentUserID, changedMembers[reader] != nil {
+            model.permissionGate.invalidate()
+            model.roleRevision &+= 1
+        }
     }
 
     /// Asks a server for the labels and session clocks on its voice channels.
@@ -2841,6 +2922,9 @@ final class SessionController {
             guard !palette.isEmpty else { return }
             model.derivedPalettes[url] = palette
             model.identityRevision &+= 1
+            // A card in the transcript may wear this colour, and its row no
+            // longer hears the counter above.
+            model.cardRevision &+= 1
         }
     }
 
@@ -2864,7 +2948,7 @@ final class SessionController {
         state.mentionCount = 0
         model.readStates[channelID] = state
         model.noteForumPostRead(channelID)
-        model.sidebarRevision &+= 1
+        model.noteReadStateChanged(in: channelID)
         model.railRevision &+= 1
         Task { try? await rest.acknowledge(messageID, in: channelID) }
     }

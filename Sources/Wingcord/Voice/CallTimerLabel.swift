@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WingcordCore
 
 /// How long the call has run — "7:39", "1:07:39" — turning over once a second.
 ///
@@ -11,11 +12,17 @@ import SwiftUI
 /// the frame meter caught a hitch every second or two. Here a second costs one
 /// short string drawn into one small layer, and the graph hears about it only
 /// when the digits need more room — at ten minutes, and at an hour.
+///
+/// **A room's clock in the channel list is the same view** (`.room`). It was a
+/// `TimelineView` on a one-second cadence inside that same graph, one phase
+/// per room, so a server with four rooms running updated the sidebar four
+/// times a second — the rule above, broken one row further down.
 struct CallTimerLabel: NSViewRepresentable {
     var since: Date
+    var style: CallTimerView.Style = .call
 
     func makeNSView(context: Context) -> CallTimerView {
-        CallTimerView(since: since)
+        CallTimerView(since: since, style: style)
     }
 
     func updateNSView(_ view: CallTimerView, context: Context) {
@@ -24,26 +31,46 @@ struct CallTimerLabel: NSViewRepresentable {
 }
 
 final class CallTimerView: NSView {
+    /// Whose clock it is: the call card's, or a room's row in the channel list.
+    enum Style {
+        case call
+        case room
+    }
+
     var since: Date {
         didSet {
             guard since != oldValue else { return }
             tick()
-            if window != nil { schedule() }
+            if window != nil, AppVisibility.shared.isVisible { schedule() }
         }
     }
 
+    private let style: Style
     private var text = ""
     private var size = CGSize.zero
     private var timer: Timer?
 
-    /// The HUD's callout, with digits of one width so the line does not
-    /// shuffle as they turn.
-    private static var font: NSFont {
-        .monospacedDigitSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize, weight: .regular)
+    /// The call card's callout or the room row's caption, with digits of one
+    /// width so the line does not shuffle as they turn.
+    private var font: NSFont {
+        switch style {
+        case .call:
+            .monospacedDigitSystemFont(
+                ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize, weight: .regular
+            )
+        case .room:
+            // `Typeface.voiceChannelClock`, which the count beside it wears.
+            .monospacedDigitSystemFont(
+                ofSize: NSFont.preferredFont(forTextStyle: .caption2).pointSize, weight: .semibold
+            )
+        }
     }
 
-    init(since: Date) {
+    private static let roomInk = NSColor(Palette.presenceOnline)
+
+    init(since: Date, style: Style = .call) {
         self.since = since
+        self.style = style
         super.init(frame: .zero)
         setContentHuggingPriority(.required, for: .horizontal)
         setContentHuggingPriority(.required, for: .vertical)
@@ -61,9 +88,24 @@ final class CallTimerView: NSView {
         super.viewDidMoveToWindow()
         timer?.invalidate()
         timer = nil
-        guard window != nil else { return }
+        guard window != nil else {
+            AppVisibility.shared.stopObserving(self)
+            return
+        }
+        // **Nothing ticks for a window nobody can see** (`INVARIANTS.md` §2).
+        // The digits are put right the moment it can be seen again.
+        AppVisibility.shared.observe(self) { [weak self] visible in
+            guard let self, self.window != nil else { return }
+            if visible {
+                self.tick()
+                self.schedule()
+            } else {
+                self.timer?.invalidate()
+                self.timer = nil
+            }
+        }
         tick()
-        schedule()
+        if AppVisibility.shared.isVisible { schedule() }
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -74,9 +116,13 @@ final class CallTimerView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         // The ink resolves against this view's appearance while it draws, so
         // light, dark and Increase Contrast each get their own rung.
+        let ink: NSColor = switch style {
+        case .call: InkRamp.nsColor(.secondary)
+        case .room: Self.roomInk
+        }
         (text as NSString).draw(at: .zero, withAttributes: [
-            .font: Self.font,
-            .foregroundColor: InkRamp.nsColor(.secondary),
+            .font: font,
+            .foregroundColor: ink,
         ])
     }
 
@@ -96,11 +142,15 @@ final class CallTimerView: NSView {
 
     private func tick() {
         let seconds = Int(max(0, Date().timeIntervalSince(since)))
-        let next = Self.digits(seconds)
+        let next: String = switch style {
+        case .call: Self.digits(seconds)
+        // The activity card's clock: a reader who has learned one has learned both.
+        case .room: ActivityCardContent.clock(seconds)
+        }
         guard next != text else { return }
         text = next
         needsDisplay = true
-        let measured = (next as NSString).size(withAttributes: [.font: Self.font])
+        let measured = (next as NSString).size(withAttributes: [.font: font])
         let fitted = CGSize(width: measured.width.rounded(.up), height: measured.height.rounded(.up))
         // Only a change of width is news to the layout — the digit count, not
         // the digits.
@@ -121,7 +171,9 @@ final class CallTimerView: NSView {
 
     // MARK: Accessibility
 
-    override func isAccessibilityElement() -> Bool { true }
+    // A room's clock was hidden from VoiceOver as text, and stays so: the row
+    // says who is in the room.
+    override func isAccessibilityElement() -> Bool { style == .call }
     override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
     override func accessibilityLabel() -> String? { "Call duration" }
 

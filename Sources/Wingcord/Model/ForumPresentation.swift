@@ -206,7 +206,7 @@ extension AppModel {
             threadSearchFailed: threadSearchFailed,
             readStateCount: readStates.count,
             readMark: forumReadMarks[channelID],
-            sidebarRevision: sidebarRevision,
+            sidebarRevision: sidebarRevision &+ readRevision,
             showsEmbeds: AppSettings.shared.showsEmbeds,
             blockedUserIDs: blockedUserIDs,
             ignoredUserIDs: ignoredUserIDs

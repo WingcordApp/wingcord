@@ -47,7 +47,7 @@ extension AppModel {
             hasMoreNewer: box?.hasMoreNewer ?? false,
             marks: marks,
             failure: box?.historyFailure,
-            contentRevision: messageContentRevision,
+            contentRevision: messageContentRevision &+ messageBoxes.contentRevision(of: channelID),
             outbox: outbox.map(\.shape),
             notices: notices.map(\.id),
             blocked: blockedUserIDs,
@@ -369,6 +369,63 @@ extension AppModel {
         )
         if let mentionCache, mentionCache.key == key { return mentionCache.value }
 
+        var context = mentionContextWithoutPeople(guildID: guildID)
+        // With everybody in it, the token moves with them as well.
+        context.token = context.token &+ identityRevision &* 1_000_003
+        // **Every user in the session, and this is why it is memoized.** A
+        // walk of the whole user table — tens of thousands of entries on a
+        // large account — with a member lookup each. The transcript does not
+        // come here any more: it asks for `mentionContext(naming:)`.
+        //
+        // Nicknames are resolved once here rather than per lookup because the
+        // builder is `nonisolated` and cannot reach the store at all.
+        context.userNames.reserveCapacity(users.count)
+        let guildMembers = guildID.flatMap { members[$0] }
+        for (userID, user) in users {
+            context.userNames[userID] = guildMembers?[userID]?.nickname ?? user.preferredName
+        }
+
+        mentionCache = (key, context)
+        return context
+    }
+
+    /// The same table, naming only these people.
+    ///
+    /// **What the transcript asks for, on every layout.** Its rows check the
+    /// names they used one by one (`TimelineLayoutEngine.CacheEntry`), so this
+    /// context's token leaves people out — and with nobody but a page's own
+    /// mentions to resolve, a stranger writing in another server costs it
+    /// nothing. The table of everybody was rebuilt for each of them.
+    func mentionContext(naming userIDs: some Sequence<UserID>) -> MentionContext {
+        let guildID = selectedChannelID.flatMap { channelIndex.guildID(of: $0) }
+        var context = mentionContextWithoutPeople(guildID: guildID)
+        let guildMembers = guildID.flatMap { members[$0] }
+        for userID in userIDs {
+            guard let user = users[userID] else { continue }
+            context.userNames[userID] = guildMembers?[userID]?.nickname ?? user.preferredName
+        }
+        return context
+    }
+
+    /// Everything in the table but the people: the channels, the roles, the
+    /// servers and the games. Memoized on what those move with, none of which
+    /// is a message arriving.
+    private func mentionContextWithoutPeople(guildID: GuildID?) -> MentionContext {
+        let key = MentionMemoKey(
+            guildID: guildID,
+            identityRevision: 0,
+            memberRevision: 0,
+            structureRevision: channelIndex.structureRevision,
+            roleRevision: roleRevision,
+            expressionRevision: expressionRevision,
+            gameMentionRevision: gameMentionRevision,
+            hiddenAuthorRevision: hiddenAuthorRevision,
+            presentationRevision: PresentationRevision.shared.value
+        )
+        if let peoplelessMentionCache, peoplelessMentionCache.key == key {
+            return peoplelessMentionCache.value
+        }
+
         var context = MentionContext()
         context.selfIDs = mentionableIDs
         // **Every input a laid-out row can name, in the one number the row
@@ -377,8 +434,7 @@ extension AppModel {
         // people alone, a renamed channel kept its old chip for the life of the
         // cached row. All five only ever grow, so the weighted sum moves
         // whenever any of them does.
-        context.token = identityRevision &* 1_000_003
-            &+ channelIndex.structureRevision &* 8_191
+        context.token = channelIndex.structureRevision &* 8_191
             &+ roleRevision &* 131
             &+ expressionRevision
             &+ gameMentionRevision &* 524_287
@@ -409,24 +465,7 @@ extension AppModel {
                 )
             }
         }
-        // **Every user in the session, and this is why it is memoized.**
-        //
-        // `runLayout` calls this, and `runLayout` runs on every inbound message.
-        // Unmemoized, a single message anywhere in the account walked the whole
-        // user table — tens of thousands of entries on an account this size —
-        // did a per-user member lookup, and built a fresh dictionary of that
-        // many strings, all to redraw one row. That is a full table walk several
-        // times a second at rest.
-        //
-        // Nicknames are resolved once here rather than per lookup because the
-        // builder is `nonisolated` and cannot reach the store at all.
-        context.userNames.reserveCapacity(users.count)
-        let guildMembers = guildID.flatMap { members[$0] }
-        for (userID, user) in users {
-            context.userNames[userID] = guildMembers?[userID]?.nickname ?? user.preferredName
-        }
-
-        mentionCache = (key, context)
+        peoplelessMentionCache = (key, context)
         return context
     }
 

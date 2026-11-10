@@ -105,6 +105,22 @@ struct SidebarMemoKey: Hashable, Sendable {
     var folderRevision: UInt64 = 0
     /// The conversations' newest messages, which only the DM list draws.
     var previewRevision: UInt64 = 0
+    /// How often this list's own channels have changed read state.
+    var readRevision: UInt64 = 0
+    /// Names, faces and the Friends row's count: only the conversations draw
+    /// them, and until this list stopped being rebuilt for every message in the
+    /// account nothing had to say when they changed.
+    var identityRevision: UInt64 = 0
+    var pendingFriendRequests = 0
+}
+
+/// The inputs of a conversation row's preview line.
+struct DirectMessagePreviewKey: Equatable {
+    var messageID: MessageID
+    var editedAt: Date?
+    /// The names a mention in it would be drawn with.
+    var identityRevision: UInt64
+    var structureRevision: UInt64
 }
 
 // MARK: - Projections
@@ -146,17 +162,20 @@ extension AppModel {
 
         if let railCache, railCache.key == key { return railCache.value }
 
-        let value = Self.buildRail(
-            folders: folderList,
-            guilds: guildTable,
-            expanded: expandedFolderIDs,
-            badge: { [self] guildID in guildBadge(for: guildID) },
-            connectedVoiceGuild: connectedVoiceChannelID.flatMap {
-                channelIndex.guildID(of: $0)
-            },
-            voiceMarks: voiceMarksByGuild,
-            applicationMarks: key.applicationMarks
-        )
+        let walk = GuildBadgeWalk(model: self)
+        let value = Signposts.interval("Server list build") {
+            Self.buildRail(
+                folders: folderList,
+                guilds: guildTable,
+                expanded: expandedFolderIDs,
+                badge: { guildID in walk.badge(for: guildID) },
+                connectedVoiceGuild: connectedVoiceChannelID.flatMap {
+                    channelIndex.guildID(of: $0)
+                },
+                voiceMarks: voiceMarksByGuild,
+                applicationMarks: key.applicationMarks
+            )
+        }
         railCache = (key, value)
         return value
     }
@@ -176,7 +195,7 @@ extension AppModel {
             eventsRow: guildID.flatMap(sidebarEventsRow(for:)),
             boostGoal: guildID.flatMap(sidebarBoostGoal(for:)),
             structureRevision: channelIndex.structureRevision,
-            valueRevision: channelIndex.valueRevision,
+            valueRevision: channelIndex.valueRevision(inGuild: guildID),
             sidebarRevision: sidebarRevision,
             roleRevision: roleRevision,
             guildID: guildID,
@@ -184,13 +203,18 @@ extension AppModel {
             followRevision: followRevision,
             voiceRevision: voiceRevision,
             voicePresenceRevision: voicePresenceRevision,
-            speakingIDs: speakingUserIDs,
+            // Only the server with the call in it draws who is talking.
+            speakingIDs: guildID != nil && guildID == connectedVoiceChannelID.flatMap { channelIndex.guildID(of: $0) }
+                ? speakingUserIDs : [],
             hiddenSelection: hiddenSelectedChannelID,
             surfaceRows: guildID.map(guildSurfaceRows(for:)) ?? [],
-            presenceRevision: guildID == nil ? presenceRevision : 0,
+            presenceRevision: guildID == nil ? directMessagePresenceRevision : 0,
             typingRevision: guildID == nil ? directMessageTypingRevision : 0,
             folderRevision: guildID == nil ? DirectMessageFolders.shared.revision : 0,
-            previewRevision: guildID == nil ? directMessagePreviewRevision : 0
+            previewRevision: guildID == nil ? directMessagePreviewRevision : 0,
+            readRevision: readRevision(ofList: guildID),
+            identityRevision: guildID == nil ? identityRevision : 0,
+            pendingFriendRequests: guildID == nil ? FriendRequest.incomingCount(of: relationships) : 0
         )
         let guildTable = guilds
         // Read before the early return, so a cache hit still registers the
@@ -209,7 +233,9 @@ extension AppModel {
             } ?? .empty
             sidebarCache = (key, value)
         } else {
-            value = buildDirectMessageSidebar(users: userTable)
+            value = Signposts.interval("Conversation list build") {
+                buildDirectMessageSidebar(users: userTable)
+            }
             homeSidebarCache = (key, value)
         }
         return value
@@ -703,7 +729,7 @@ extension AppModel {
                 preview: latestDirectMessages[channelID]
                     .flatMap { $0.id == channel.lastMessageID ? $0 : nil }
                     .flatMap { message in
-                        previewLine(for: message).map {
+                        directMessagePreviewLine(for: message, in: channelID).map {
                             SidebarChannel.Preview(
                                 text: $0,
                                 sentAt: message.sentAt,
@@ -782,6 +808,21 @@ extension AppModel {
     /// A message as one line under its conversation's name — Messages' preview:
     /// the words with their markup read out, or what was sent when there are
     /// none, and "You: " before the reader's own.
+    /// `previewLine`, once per message. The list is rebuilt for everything a
+    /// row draws, and almost none of that is this.
+    private func directMessagePreviewLine(for message: Message, in channelID: ChannelID) -> String? {
+        let key = DirectMessagePreviewKey(
+            messageID: message.id,
+            editedAt: message.editedAt,
+            identityRevision: identityRevision,
+            structureRevision: channelIndex.structureRevision
+        )
+        if let known = directMessagePreviewLines[channelID], known.key == key { return known.line }
+        let line = previewLine(for: message)
+        directMessagePreviewLines[channelID] = (key, line)
+        return line
+    }
+
     func previewLine(for message: Message) -> String? {
         var text = message.content
         if !text.isEmpty {
@@ -1031,6 +1072,13 @@ extension AppModel {
     /// and a second copy of "is this channel unread" is a second place for the
     /// mute rule to be forgotten.
     func unreadState(of channel: Channel) -> (unread: Bool, mentions: Int, muted: Bool) {
+        Self.unreadState(of: channel, in: readStates)
+    }
+
+    static func unreadState(
+        of channel: Channel,
+        in readStates: [ChannelID: ReadState]
+    ) -> (unread: Bool, mentions: Int, muted: Bool) {
         guard let state = readStates[channel.id] else {
             return (channel.lastMessageID != nil, 0, false)
         }
@@ -1057,30 +1105,7 @@ extension AppModel {
     }
 
     func guildBadge(for guildID: GuildID) -> (mentions: Int, unread: Bool, muted: Bool) {
-        // The dot survives; only the COUNT is suppressed. A reader who turned
-        // counts off still wants to know a server has something new — what they
-        // turned off is the number, which on a busy account is a wall of digits.
-        let countsBadges = AppSettings.shared.showsUnreadCounts
-        let filtersByFollow = hidesUnfollowedChannels(inGuild: guildID)
-        var mentions = 0
-        var unread = false
-        for channelID in channelIndex.channelIDs(inGuild: guildID) {
-            guard let channel = channelIndex[channelID], channel.kind.isConversation else {
-                continue
-            }
-            // A channel the reader cannot see must not contribute a badge. A
-            // rail tile marked unread for a channel that does not appear in the
-            // list is a dot nobody can ever clear — and a channel the reader has
-            // opted OUT of is exactly as absent from that list, so it is held to
-            // the same rule.
-            guard permissionGate.canView(channelID) else { continue }
-            guard isChannelInList(channel, filtered: filtersByFollow) else { continue }
-            let state = unreadState(of: channel)
-            guard !state.muted else { continue }
-            mentions += state.mentions
-            unread = unread || state.unread
-        }
-        return (countsBadges ? mentions : 0, unread, false)
+        GuildBadgeWalk(model: self).badge(for: guildID)
     }
 
     // MARK: Naming and assets
@@ -1269,5 +1294,71 @@ extension AppModel {
         } else {
             collapsedCategoryIDs.insert(categoryID)
         }
+    }
+}
+
+/// One server's rail tile, from tables read once for the whole rail.
+///
+/// **Reading an observed property inside the loop was a fifth of the app's
+/// main thread on a real account.** A rail is every channel in every server,
+/// and each lookup through the store goes through observation tracking; a
+/// walk of five thousand channels registered tens of thousands of accesses
+/// for one answer. The tables are copy-on-write, so holding them here is a
+/// retain, and the loop below touches no observed property at all.
+@MainActor
+struct GuildBadgeWalk {
+    private let model: AppModel
+    private let channelIndex: ChannelIndex
+    private let readStates: [ChannelID: ReadState]
+    private let followedChannelIDs: Set<ChannelID>
+    private let guildOnboardings: [GuildID: GuildOnboarding]
+    private let countsBadges: Bool
+
+    init(model: AppModel) {
+        self.model = model
+        channelIndex = model.channelIndex
+        readStates = model.readStates
+        followedChannelIDs = model.followedChannelIDs
+        guildOnboardings = model.guildOnboardings
+        countsBadges = AppSettings.shared.showsUnreadCounts
+        model.permissionGate.beginWalk()
+    }
+
+    func badge(for guildID: GuildID) -> (mentions: Int, unread: Bool, muted: Bool) {
+        let filtersByFollow = AppModel.hidesUnfollowedChannels(
+            inGuild: guildID,
+            onboardings: guildOnboardings,
+            followed: followedChannelIDs,
+            index: channelIndex
+        )
+        // Read only where it can matter, so a rail with no follow filter on it
+        // is not re-evaluated by every click in the channel list.
+        let selectedChannelID = filtersByFollow ? model.selectedChannelID : nil
+        let gate = model.permissionGate
+        var mentions = 0
+        var unread = false
+        for channelID in channelIndex.channelIDs(inGuild: guildID) {
+            guard let channel = channelIndex[channelID], channel.kind.isConversation else {
+                continue
+            }
+            // A channel the reader cannot see must not contribute a badge. A
+            // rail tile marked unread for a channel that does not appear in the
+            // list is a dot nobody can ever clear — and a channel the reader has
+            // opted OUT of is exactly as absent from that list, so it is held to
+            // the same rule.
+            guard gate.canViewDuringWalk(channelID) else { continue }
+            guard AppModel.isChannelInList(
+                channel, filtered: filtersByFollow,
+                followed: followedChannelIDs, selected: selectedChannelID
+            ) else { continue }
+            let state = AppModel.unreadState(of: channel, in: readStates)
+            guard !state.muted else { continue }
+            mentions += state.mentions
+            unread = unread || state.unread
+        }
+        // The dot survives; only the COUNT is suppressed. A reader who turned
+        // counts off still wants to know a server has something new — what they
+        // turned off is the number, which on a busy account is a wall of digits.
+        return (countsBadges ? mentions : 0, unread, false)
     }
 }
