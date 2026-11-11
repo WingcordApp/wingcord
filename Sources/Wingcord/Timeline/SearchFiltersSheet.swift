@@ -132,6 +132,7 @@ struct SearchFiltersSheet: View {
             options: channels,
             chosen: chosen,
             emptyMenu: "No channels to search",
+            prompt: "Search channels",
             toggle: { toggleChannel($0) }
         )
     }
@@ -150,32 +151,56 @@ struct SearchFiltersSheet: View {
                 }
             }
             ForEach(Array(draft.dates.enumerated()), id: \.offset) { index, _ in
-                HStack(spacing: Spacing.base) {
-                    SegmentedPicker(
-                        options: [.init(0, "Before"), .init(2, "During"), .init(1, "After")],
-                        selection: kindBinding(at: index)
-                    )
-                    .fixedSize()
-                    DatePicker("", selection: dayBinding(at: index), displayedComponents: .date)
-                        .labelsHidden()
-                        .datePickerStyle(.field)
-                    Spacer(minLength: 0)
-                    Button {
-                        draft.dates.remove(at: index)
-                    } label: {
-                        Image(systemName: "minus.circle.fill")
-                            .font(.system(.title3))
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(Ink.secondary)
-                            .contentShape(.circle)
+                // **Two rows on one column**: the strip over the day it bounds,
+                // the same width, the remove button beside the pair. On one row
+                // the strip left the day 110 points, and "Mon, 21 Sep 2026"
+                // read as "Mon…".
+                VStack(spacing: Spacing.tight) {
+                    HStack(spacing: Spacing.base) {
+                        SegmentedPicker(
+                            options: [.init(0, "Before"), .init(2, "During"), .init(1, "After")],
+                            selection: kindBinding(at: index),
+                            fillsWidth: true
+                        )
+                        .frame(maxWidth: .infinity)
+                        removeDateButton(at: index)
                     }
-                    .buttonStyle(.plain)
-                    .help("Remove this date")
-                    .accessibilityLabel("Remove this date")
+                    HStack(spacing: Spacing.base) {
+                        // Wingcord's own picker, a day alone and looking back:
+                        // nothing can be found from tomorrow.
+                        PlayfulDatePicker(
+                            selection: dayBinding(at: index),
+                            accessibilityTitle: "Date",
+                            showsTime: false,
+                            maximum: .now,
+                            looksBack: true
+                        )
+                        .frame(maxWidth: .infinity)
+                        // The button's own room, held empty, so the day ends
+                        // where the strip ends.
+                        removeDateButton(at: index)
+                            .hidden()
+                            .accessibilityHidden(true)
+                    }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+    }
+
+    private func removeDateButton(at index: Int) -> some View {
+        Button {
+            draft.dates.remove(at: index)
+        } label: {
+            Image(systemName: "minus.circle.fill")
+                .font(.system(.title3))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Ink.secondary)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .help("Remove this date")
+        .accessibilityLabel("Remove this date")
     }
 
     private func kindBinding(at index: Int) -> Binding<Int> {
@@ -355,42 +380,31 @@ private struct SearchPickRow: View {
     var options: [SearchFilterOption]
     var chosen: [SearchFilterOption]
     var emptyMenu: String
+    /// The flyout's field's prompt — "Search members", "Search channels".
+    var prompt: String = "Search members"
     var toggle: (UInt64) -> Void
+
+    @State private var isPicking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.base) {
             HStack(alignment: .center, spacing: Spacing.base) {
                 SearchFilterTitle(title: title, detail: detail)
                 Spacer(minLength: Spacing.base)
-                Menu {
-                    if options.isEmpty {
-                        Text(emptyMenu)
-                    } else {
-                        ForEach(options) { option in
-                            Button {
-                                toggle(option.id)
-                            } label: {
-                                if chosen.contains(where: { $0.id == option.id }) {
-                                    Label(option.title, systemImage: "checkmark")
-                                } else {
-                                    Text(option.title)
-                                }
-                            }
-                        }
+                // **A flyout with a search, not a menu**: a server's members are
+                // hundreds of names, and a menu is a list to scroll rather than
+                // a name to type (Alex, 2026-11-11).
+                SearchCapsuleButton(title: "Add", symbolName: "plus") { isPicking = true }
+                    .popover(isPresented: $isPicking, arrowEdge: .bottom) {
+                        SearchPickFlyout(
+                            prompt: prompt,
+                            options: options,
+                            chosen: Set(chosen.map(\.id)),
+                            emptyText: emptyMenu,
+                            toggle: toggle
+                        )
                     }
-                } label: {
-                    Label("Add", systemImage: "plus")
-                        .font(.system(.subheadline, weight: .semibold))
-                        .foregroundStyle(Ink.primary)
-                        .padding(.horizontal, 12)
-                        .frame(height: 28)
-                        .contentShape(.capsule)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .plainChip(in: .capsule)
-                .accessibilityLabel(Text("Add to \(title)"))
+                    .accessibilityLabel(Text("Add to \(title)"))
             }
             if !chosen.isEmpty {
                 FlowLayout(spacing: 6) {

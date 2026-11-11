@@ -121,28 +121,53 @@ struct CreateChannelSheet: View {
         }
     }
 
+    /// Discord's switch row (`143129`, laid out `horizontal` with its sentence
+    /// `under-label`): the lock, the name with its sentence under it, and the
+    /// switch at the far edge.
+    ///
+    /// **On the type list's columns**: the lock sits in the marks' column, the
+    /// words start where the types' names start, and the switch ends where the
+    /// radios end, so the sheet reads as one grid. A plain `Toggle` put the
+    /// switch straight after its words, halfway along the row, with the lock
+    /// out at the sheet's margin.
     private var privacySwitch: some View {
-        Toggle(isOn: $isPrivate) {
-            HStack(alignment: .top, spacing: Spacing.snug) {
+        let title = isCategory ? "Private Category" : "Private Channel"
+        let detail = isCategory
+            ? "By making a category private, only select members and roles will be able to view this category. Linked channels in this category will automatically match to this setting."
+            : "Only selected members and roles will be able to view this channel."
+        return HStack(alignment: .privacyTitle, spacing: Spacing.snug) {
+            // The words are part of the control, as Discord's `interactiveLabel`
+            // makes them: a press anywhere on them turns the switch.
+            HStack(alignment: .privacyTitle, spacing: Spacing.snug) {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 13))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Ink.secondary)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(isCategory ? "Private Category" : "Private Channel")
+                    .frame(width: 24)
+                    .alignmentGuide(.privacyTitle) { $0[VerticalAlignment.center] }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
                         .font(.system(.body, weight: .medium))
                         .foregroundStyle(Ink.primary)
-                    Text(isCategory
-                        ? "By making a category private, only select members and roles will be able to view this category. Linked channels in this category will automatically match to this setting."
-                        : "Only selected members and roles will be able to view this channel.")
+                        .alignmentGuide(.privacyTitle) { $0[VerticalAlignment.center] }
+                    Text(detail)
                         .font(.system(.caption))
                         .foregroundStyle(Ink.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .contentShape(.rect)
+            .onTapGesture { isPrivate.toggle() }
+            .accessibilityHidden(true)
+            Toggle(title, isOn: $isPrivate)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .alignmentGuide(.privacyTitle) { $0[VerticalAlignment.center] }
+                .accessibilityHint(Text(detail))
         }
-        .toggleStyle(.switch)
-        .controlSize(.small)
+        // The type rows' own inset, so the columns meet.
+        .padding(.horizontal, Spacing.snug)
     }
 
     private var categoryName: String? {
@@ -252,4 +277,16 @@ private struct ChannelTypeOption: View {
         default: "Send messages, images, GIFs, emoji, opinions, and puns"
         }
     }
+}
+
+private extension VerticalAlignment {
+    /// The middle of the private switch's name line, which the lock and the
+    /// switch sit on however many lines the sentence under it takes.
+    enum PrivacyTitle: AlignmentID {
+        static func defaultValue(in context: ViewDimensions) -> CGFloat {
+            context[VerticalAlignment.center]
+        }
+    }
+
+    static let privacyTitle = VerticalAlignment(PrivacyTitle.self)
 }

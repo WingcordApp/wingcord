@@ -15,15 +15,30 @@ public enum ChannelCreation {
 
     /// The kinds the modal offers, in its order — Text, Voice, Forum, then
     /// Media, Announcement and Stage where the server can hold them
-    /// (`showAnnouncementChannelOption`, `canCreateMediaChannel`,
-    /// `canCreateStageChannel`, all community features).
+    /// (`canCreateMediaChannel`, `showAnnouncementChannelOption`,
+    /// `canCreateStageChannel`).
     public static func kinds(features: Set<String>) -> [ChannelKind] {
         var kinds: [ChannelKind] = [.text, .voice, .forum]
         let isCommunity = features.contains("COMMUNITY")
-        if isCommunity { kinds.append(.media) }
+        if offersMedia(features: features) { kinds.append(.media) }
         if isCommunity || features.contains("NEWS") { kinds.append(.announcement) }
         if isCommunity { kinds.append(.stage) }
         return kinds
+    }
+
+    /// Whether a server can make a media channel — Discord's
+    /// `canCreateMediaChannel` (`219444.V`, refetched 2026-11-11).
+    ///
+    /// **Not every Community server**: a Community server that sells server
+    /// subscriptions (`CREATOR_MONETIZABLE`, or `…_PROVISIONAL` while that is
+    /// being set up), or one of Discord's own staff servers. Anywhere else the
+    /// modal never shows the choice, and offering it only to have the create
+    /// refused was a Media row nobody had seen in Discord.
+    public static func offersMedia(features: Set<String>) -> Bool {
+        let sellsSubscriptions = features.contains("CREATOR_MONETIZABLE")
+            || features.contains("CREATOR_MONETIZABLE_PROVISIONAL")
+        return (sellsSubscriptions && features.contains("COMMUNITY"))
+            || features.contains("INTERNAL_EMPLOYEE_ONLY")
     }
 
     /// A name as Discord writes it while it is typed (`842937`, applied to

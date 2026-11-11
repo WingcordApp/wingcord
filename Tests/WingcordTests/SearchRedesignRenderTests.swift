@@ -57,4 +57,37 @@ struct SearchRedesignRenderTests {
         }
         withExtendedLifetime(window) {}
     }
+
+    @Test("Add's flyout: a field over the people, the chosen ones ticked")
+    func pickFlyout() throws {
+        let people = [
+            SearchFilterOption(id: 7, title: "alex", detail: "alex", monogram: "A"),
+            SearchFilterOption(id: 8, title: "Blåhaj", detail: "blahaj", monogram: "B"),
+            SearchFilterOption(id: 9, title: "Voltcast", detail: "voltcast", monogram: "E"),
+        ]
+        let flyout = SearchPickFlyout(prompt: "Search members", options: people, chosen: [8], emptyText: "Nobody to add", toggle: { _ in })
+            .background(Color(white: 0.16))
+            .environment(\.colorScheme, .dark)
+        let host = NSHostingView(rootView: flyout)
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 300, height: 240),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = host
+        host.frame = CGRect(origin: .zero, size: host.fittingSize)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        // Three rows of 38 under the 36 pt field: nothing wrapped or cut.
+        #expect(host.fittingSize.width == 300)
+        #expect(host.fittingSize.height < 36 + 3 * 40 + 60)
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        if let directory = ProcessInfo.processInfo.environment["WINGCORD_RENDER_DIR"] {
+            try rep.representation(using: .png, properties: [:])?
+                .write(to: URL(fileURLWithPath: directory).appendingPathComponent("search-pick-flyout.png"))
+        }
+        withExtendedLifetime(window) {}
+    }
 }

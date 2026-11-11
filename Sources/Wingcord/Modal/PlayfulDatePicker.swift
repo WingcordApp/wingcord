@@ -23,6 +23,15 @@ struct PlayfulDatePicker: View {
     /// not started.
     var minimum: Date?
     var accessibilityTitle: String
+    /// Whether a time is chosen as well as a day. **Off for a day alone** —
+    /// a search's before, during and after, where the hour means nothing.
+    var showsTime = true
+    /// The latest day that may be chosen — today, for a search, which cannot
+    /// find a message from tomorrow.
+    var maximum: Date? = nil
+    /// Whether the quick days look back (Today, Yesterday, Last Week, Last
+    /// Month) rather than ahead — a search is about what has been said.
+    var looksBack = false
 
     @Environment(\.motion) private var motion
     @State private var isOpen = false
@@ -36,15 +45,18 @@ struct PlayfulDatePicker: View {
                     .foregroundStyle(Palette.accent)
                 Text(selection, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
                     .foregroundStyle(Ink.primary)
+                    .lineLimit(1)
                     .contentTransition(.numericText())
-                Text(verbatim: "·")
-                    .foregroundStyle(Ink.secondary)
-                Image(systemName: "clock")
-                    .foregroundStyle(Palette.accent)
-                Text(selection, format: .dateTime.hour().minute())
-                    .foregroundStyle(Ink.primary)
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
+                if showsTime {
+                    Text(verbatim: "·")
+                        .foregroundStyle(Ink.secondary)
+                    Image(systemName: "clock")
+                        .foregroundStyle(Palette.accent)
+                    Text(selection, format: .dateTime.hour().minute())
+                        .foregroundStyle(Ink.primary)
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down")
                     .font(.system(.caption, weight: .bold))
@@ -61,10 +73,18 @@ struct PlayfulDatePicker: View {
         .animation(motion.standard, value: selection)
         .animation(motion.standard, value: isOpen)
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
-            DateTimeBoard(selection: $selection, minimum: minimum)
+            DateTimeBoard(
+                selection: $selection,
+                minimum: minimum,
+                maximum: maximum,
+                showsTime: showsTime,
+                looksBack: looksBack
+            )
         }
         .accessibilityLabel(Text(accessibilityTitle))
-        .accessibilityValue(Text(selection, format: .dateTime.weekday(.wide).day().month(.wide).year().hour().minute()))
+        .accessibilityValue(showsTime
+            ? Text(selection, format: .dateTime.weekday(.wide).day().month(.wide).year().hour().minute())
+            : Text(selection, format: .dateTime.weekday(.wide).day().month(.wide).year()))
         .accessibilityHint(Text("Opens a calendar"))
     }
 }
@@ -107,6 +127,9 @@ extension PlayfulDatePicker {
 private struct DateTimeBoard: View {
     @Binding var selection: Date
     var minimum: Date?
+    var maximum: Date?
+    var showsTime: Bool
+    var looksBack: Bool
 
     @Environment(\.motion) private var motion
     /// The first day of the month on show.
@@ -116,9 +139,12 @@ private struct DateTimeBoard: View {
 
     private let calendar = Calendar.current
 
-    init(selection: Binding<Date>, minimum: Date?) {
+    init(selection: Binding<Date>, minimum: Date?, maximum: Date?, showsTime: Bool, looksBack: Bool) {
         _selection = selection
         self.minimum = minimum
+        self.maximum = maximum
+        self.showsTime = showsTime
+        self.looksBack = looksBack
         let calendar = Calendar.current
         _month = State(initialValue: calendar.dateInterval(of: .month, for: selection.wrappedValue)?.start ?? selection.wrappedValue)
     }
@@ -136,8 +162,10 @@ private struct DateTimeBoard: View {
             }
             .clipped()
             quickDays
-            Divider().overlay(Ink.quaternary)
-            TimeSetter(selection: $selection)
+            if showsTime {
+                Divider().overlay(Ink.quaternary)
+                TimeSetter(selection: $selection)
+            }
         }
         .padding(Spacing.margin)
         .frame(width: Self.width)
@@ -172,8 +200,21 @@ private struct DateTimeBoard: View {
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
         .controlSize(.small)
+        // A month with no day that may be chosen is not one to turn to — every
+        // month after today, for a search.
+        .disabled(!canTurn(by: step))
         .help(label)
         .accessibilityLabel(Text(label))
+    }
+
+    /// Whether the month `step` along has a day inside the bounds.
+    private func canTurn(by step: Int) -> Bool {
+        guard let next = calendar.date(byAdding: .month, value: step, to: month),
+              let span = calendar.dateInterval(of: .month, for: next)
+        else { return false }
+        if let maximum, span.start > calendar.startOfDay(for: maximum) { return false }
+        if let minimum, span.end <= calendar.startOfDay(for: minimum) { return false }
+        return true
     }
 
     private var weekdays: some View {
@@ -213,12 +254,21 @@ private struct DateTimeBoard: View {
 
 
     private func isSelectable(_ day: Date) -> Bool {
-        guard let minimum else { return true }
-        return calendar.startOfDay(for: day) >= calendar.startOfDay(for: minimum)
+        let start = calendar.startOfDay(for: day)
+        if let minimum, start < calendar.startOfDay(for: minimum) { return false }
+        if let maximum, start > calendar.startOfDay(for: maximum) { return false }
+        return true
     }
 
     /// The day, keeping the time already chosen.
     private func choose(_ day: Date) {
+        // A day alone is the day's start, which is what a search's clauses
+        // measure from.
+        guard showsTime else {
+            withAnimation(motion.standard) { selection = calendar.startOfDay(for: day) }
+            Haptics.tick()
+            return
+        }
         let time = calendar.dateComponents([.hour, .minute], from: selection)
         guard var chosen = calendar.date(
             bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: day
@@ -233,28 +283,47 @@ private struct DateTimeBoard: View {
 
     // MARK: Quick days
 
+    /// **Whole words or one fewer**: when the four do not fit the board, the
+    /// first goes (Today, which the grid's own ringed day already is) rather
+    /// than the last being cut to "Last Mo…".
     private var quickDays: some View {
+        let picks = (looksBack ? QuickDay.behind : QuickDay.ahead).compactMap { quick -> (QuickDay, Date)? in
+            guard let day = quick.day(from: .now, calendar: calendar), isSelectable(day) else { return nil }
+            return (quick, day)
+        }
+        return ViewThatFits(in: .horizontal) {
+            quickRow(picks)
+            quickRow(Array(picks.dropFirst()))
+        }
+    }
+
+    private func quickRow(_ picks: [(QuickDay, Date)]) -> some View {
         HStack(spacing: Spacing.tight) {
-            ForEach(QuickDay.allCases, id: \.self) { quick in
-                if let day = quick.day(from: .now, calendar: calendar), isSelectable(day) {
-                    Button(quick.title) {
-                        choose(day)
-                        if let start = calendar.dateInterval(of: .month, for: day)?.start, start != month {
-                            turnedForward = start > month
-                            month = start
-                        }
-                        Haptics.pop()
+            ForEach(picks, id: \.0) { quick, day in
+                Button(quick.title) {
+                    choose(day)
+                    if let start = calendar.dateInterval(of: .month, for: day)?.start, start != month {
+                        turnedForward = start > month
+                        month = start
                     }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.small)
+                    Haptics.pop()
                 }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
+                .fixedSize()
             }
         }
     }
 
     private enum QuickDay: CaseIterable {
         case today, tomorrow, weekend, nextWeek
+        case yesterday, lastWeek, lastMonth
+
+        /// For something still to come — an event.
+        static let ahead: [QuickDay] = [.today, .tomorrow, .weekend, .nextWeek]
+        /// For what has already been said — a search.
+        static let behind: [QuickDay] = [.today, .yesterday, .lastWeek, .lastMonth]
 
         var title: String {
             switch self {
@@ -262,6 +331,9 @@ private struct DateTimeBoard: View {
             case .tomorrow: "Tomorrow"
             case .weekend: "Weekend"
             case .nextWeek: "Next Week"
+            case .yesterday: "Yesterday"
+            case .lastWeek: "Last Week"
+            case .lastMonth: "Last Month"
             }
         }
 
@@ -274,6 +346,9 @@ private struct DateTimeBoard: View {
                 calendar.isDateInWeekend(now) ? now
                     : calendar.nextDate(after: now, matching: DateComponents(weekday: 7), matchingPolicy: .nextTime)
             case .nextWeek: calendar.date(byAdding: .day, value: 7, to: now)
+            case .yesterday: calendar.date(byAdding: .day, value: -1, to: now)
+            case .lastWeek: calendar.date(byAdding: .day, value: -7, to: now)
+            case .lastMonth: calendar.date(byAdding: .month, value: -1, to: now)
             }
         }
     }

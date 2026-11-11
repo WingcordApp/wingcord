@@ -326,13 +326,16 @@ private struct SearchSortMenu: View {
                     .font(.system(.subheadline, weight: .medium))
             }
             .foregroundStyle(Ink.primary)
-            .padding(.horizontal, Spacing.snug)
-            .frame(height: SearchPaneMetrics.control)
-            .contentShape(.capsule)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        // **On the menu, after the style** — `INVARIANTS.md`, "a borderless
+        // menu ignores a frame set on its label": set on the label, the pill
+        // came out shorter than the two controls beside it.
+        .padding(.horizontal, Spacing.snug)
+        .frame(height: SearchPaneMetrics.control)
+        .contentShape(.capsule)
         .interactiveChrome(in: .capsule)
         .accessibilityLabel("Sort results")
     }
