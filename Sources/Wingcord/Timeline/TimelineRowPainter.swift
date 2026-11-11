@@ -655,7 +655,13 @@ nonisolated enum TimelineRowPainter {
             drawBubble(bubbles, of: row, in: rowFrame, state: state, style: style, context: context)
         }
 
-        if let block = row.textBlock, !(state.hidesBubble && row.bubbles?.bubble != nil) {
+        // A DM's system line under the pointer: the sentence with the name in
+        // clear ink, and the name's effect drawn into the gap after it.
+        let litSystemName = state.isHovered && !row.hasAuthorLine ? row.systemName : nil
+        let litSystemPrepared = litSystemName == nil ? nil : styledAuthorName
+        if let block = (litSystemPrepared != nil ? litSystemName?.unnamedBlock : nil) ?? row.textBlock,
+           !(state.hidesBubble && row.bubbles?.bubble != nil)
+        {
             let origin = CGPoint(
                 x: rowFrame.minX + row.textOrigin.x,
                 y: rowFrame.minY + row.textOrigin.y
@@ -696,6 +702,15 @@ nonisolated enum TimelineRowPainter {
             if row.isPending, row.bubbles == nil {
                 context.endTransparencyLayer()
                 context.restoreGState()
+            }
+            if let slot = litSystemName, let prepared = litSystemPrepared {
+                DisplayNameEffectPainter.draw(
+                    prepared,
+                    fallback: style.primaryColor.cgColor,
+                    time: state.playsNameEffect ? state.animationTime : nil,
+                    at: CGPoint(x: rowFrame.minX + slot.origin.x, y: rowFrame.minY + slot.origin.y),
+                    context: context
+                )
             }
         }
 

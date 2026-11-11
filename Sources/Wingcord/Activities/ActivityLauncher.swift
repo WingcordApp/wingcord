@@ -31,8 +31,10 @@ struct ActivityLauncher: View {
     /// The debounce. A keystroke per request would send five for "wordl".
     @State private var searchTask: Task<Void, Never>?
 
+    /// The expression picker's own panel, so the composer's flyouts are one
+    /// size whichever control opened them (POLISH-NOV decision 6).
     static let width = ExpressionPicker.width
-    static let height: CGFloat = 468
+    static let height = ExpressionPicker.height
 
     /// How long a keystroke waits before it becomes a request. Short enough to
     /// feel like typing, long enough that a five-letter word is one call.

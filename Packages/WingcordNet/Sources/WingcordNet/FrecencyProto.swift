@@ -48,8 +48,13 @@ import WingcordCore
 /// session.
 enum FrecencyProto {
 
-    private enum Field {
+    enum Field {
         static let favoriteGIFs = 2
+        static let favoriteStickers = 3
+        static let stickerFrecency = 4
+        static let favoriteEmojis = 5
+        static let emojiFrecency = 6
+        static let emojiReactionFrecency = 13
         static let applicationCommandFrecency = 7
         static let favoriteSoundboardSounds = 8
         static let applicationFrecency = 9
@@ -395,10 +400,18 @@ enum FrecencyProto {
     /// ```
     static func playedSoundHistory(base64: String) -> [String: SoundFrecency.Use] {
         guard let data = Data(base64Encoded: base64) else { return [:] }
+        return useHistory(in: data, field: Field.playedSoundFrecency)
+    }
+
+    /// One `map<key, FrecencyItem>` table whole, by field — the played sounds
+    /// (11), the emoji sent (6) and reacted with (13), keyed by string, and the
+    /// stickers sent (4), whose key is a `fixed64` and comes back as its
+    /// decimal string.
+    static func useHistory(in data: Data, field number: Int) -> [String: SoundFrecency.Use] {
         var reader = ProtobufReader(data)
         var history: [String: SoundFrecency.Use] = [:]
         while let field = reader.next() {
-            guard field.number == Field.playedSoundFrecency, field.wireType == 2 else { continue }
+            guard field.number == number, field.wireType == 2 else { continue }
             var map = reader.reader(for: field)
             while let element = map.next() {
                 guard element.number == mapField, element.wireType == 2 else { continue }
@@ -408,6 +421,7 @@ enum FrecencyProto {
                 while let part = entry.next() {
                     switch part.number {
                     case MapEntryField.key where part.wireType == 2: key = entry.string(for: part)
+                    case MapEntryField.key where part.wireType == 1: key = String(part.value)
                     case MapEntryField.value where part.wireType == 2: use = playedSound(entry.reader(for: part))
                     default: continue
                     }
@@ -440,6 +454,20 @@ enum FrecencyProto {
     /// to: Discord's descriptor gives the wrapper one field, the map, and the
     /// item four, and all four are written here. Proto3 leaves out a zero.
     static func playedSoundsPatch(_ history: [String: SoundFrecency.Use]) -> String {
+        var top = ProtobufWriter()
+        top.message(field: Field.playedSoundFrecency, useTable(history, fixedKeys: false))
+        return top.base64
+    }
+
+    /// A use table as the bytes of its top-level field — see `useHistory`.
+    /// Sticker ids go back as the `fixed64` they came as.
+    static func useField(_ number: Int, _ history: [String: SoundFrecency.Use], fixedKeys: Bool) -> Data {
+        var top = ProtobufWriter()
+        top.message(field: number, useTable(history, fixedKeys: fixedKeys))
+        return top.data
+    }
+
+    private static func useTable(_ history: [String: SoundFrecency.Use], fixedKeys: Bool) -> Data {
         var map = ProtobufWriter()
         for (key, use) in history.sorted(by: { $0.key < $1.key }) {
             var item = ProtobufWriter()
@@ -448,13 +476,73 @@ enum FrecencyProto {
             if use.frecency > 0 { item.varint(field: ItemField.frecency, UInt64(use.frecency)) }
             if use.score > 0 { item.varint(field: ItemField.score, UInt64(use.score)) }
             var entry = ProtobufWriter()
-            entry.string(field: MapEntryField.key, key)
+            if fixedKeys {
+                guard let id = UInt64(key) else { continue }
+                entry.fixed64(field: MapEntryField.key, id)
+            } else {
+                entry.string(field: MapEntryField.key, key)
+            }
             entry.message(field: MapEntryField.value, item.data)
             map.message(field: mapField, entry.data)
         }
+        return map.data
+    }
+
+    // MARK: Favourite emoji and stickers
+
+    /// `FavoriteEmojis favorite_emojis = 5 { repeated string emojis = 1 }`,
+    /// unpacked — a custom emoji's id or a Unicode emoji's base name each.
+    static func favoriteEmojis(in data: Data) -> [String] {
+        var reader = ProtobufReader(data)
+        var keys: [String] = []
+        while let field = reader.next() {
+            guard field.number == Field.favoriteEmojis, field.wireType == 2 else { continue }
+            var message = reader.reader(for: field)
+            while let element = message.next() {
+                guard element.number == 1, element.wireType == 2, let key = message.string(for: element) else { continue }
+                keys.append(key)
+            }
+        }
+        return keys
+    }
+
+    /// `FavoriteStickers favorite_stickers = 3 { repeated fixed64 sticker_ids = 1 }`,
+    /// packed as Discord writes it; an unpacked one is read too.
+    static func favoriteStickerIDs(in data: Data) -> [UInt64] {
+        var reader = ProtobufReader(data)
+        var ids: [UInt64] = []
+        while let field = reader.next() {
+            guard field.number == Field.favoriteStickers, field.wireType == 2 else { continue }
+            var message = reader.reader(for: field)
+            while let element = message.next() {
+                guard element.number == 1 else { continue }
+                switch element.wireType {
+                case 2: ids += message.packedFixed64(for: element)
+                case 1: ids.append(element.value)
+                default: continue
+                }
+            }
+        }
+        return ids
+    }
+
+    /// Field 5 whole, for the PATCH — the updater replaces a top-level field,
+    /// so an empty list goes as an empty message and clears it.
+    static func favoriteEmojisField(_ keys: [String]) -> Data {
+        var message = ProtobufWriter()
+        for key in keys { message.string(field: 1, key) }
         var top = ProtobufWriter()
-        top.message(field: Field.playedSoundFrecency, map.data)
-        return top.base64
+        top.message(field: Field.favoriteEmojis, message.data)
+        return top.data
+    }
+
+    /// Field 3 whole, packed.
+    static func favoriteStickersField(_ ids: [UInt64]) -> Data {
+        var message = ProtobufWriter()
+        if !ids.isEmpty { message.packedFixed64(field: 1, ids) }
+        var top = ProtobufWriter()
+        top.message(field: Field.favoriteStickers, message.data)
+        return top.data
     }
 
     /// Applications, by how much the account uses them.

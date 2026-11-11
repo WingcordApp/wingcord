@@ -118,6 +118,11 @@ extension AppModel {
 
         let pending = PendingReaction(messageID: messageID, emoji: emoji.reactionKey, kind: kind)
         guard reactionsInFlight.insert(pending).inserted else { return }
+        // A reaction added is a use of its emoji — the quick reactions'
+        // ranking, Discord's reaction table.
+        if adding, let key = Self.usageKey(for: emoji) {
+            sessionController.trackExpressionUse(reaction: key)
+        }
 
         guard kind == .burst, adding else {
             applyReaction(emoji, kind: kind, to: messageID, in: channelID, added: adding, isMine: true)

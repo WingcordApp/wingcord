@@ -1896,6 +1896,9 @@ public enum GatewayUpdate: Sendable {
         preferences: SyncedPreferences.Delta,
         audioContext: AudioContextSettings?
     )
+    /// The frecency blob (type 2) moved — a star or a use in another client,
+    /// or this one's own write echoed back.
+    case frecencySettingsChanged
     /// An application answered an interaction with a form to fill in.
     case interactionModalCreated(InteractionModal)
     /// Somebody moved in, out of, or between voice channels. A state whose
@@ -2356,6 +2359,8 @@ public enum GatewayUpdate: Sendable {
                 muted: DiscordREST.muted(in: dto),
                 settings: dto.guild_id.map(dto.domain(guildID:))
             )
+        case .userSettingsProtoUpdate(let dto) where dto.settings.type == 2:
+            self = .frecencySettingsChanged
         case .userSettingsProtoUpdate(let dto):
             guard dto.settings.type == 1,
                   let data = Data(base64Encoded: dto.settings.proto, options: .ignoreUnknownCharacters)

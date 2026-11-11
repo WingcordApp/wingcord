@@ -46,6 +46,10 @@ final class ExpressionGridCanvas: NSView {
     }
 
     var onPick: ((ExpressionItem) -> Void)?
+    /// Whether a cell is starred, and how to star it — the right-click menu's
+    /// Favorite. Nil where a picker offers no stars.
+    var isFavorite: ((ExpressionItem) -> Bool)?
+    var onToggleFavorite: ((ExpressionItem) -> Void)?
     var onWidthChange: ((CGFloat) -> Void)?
     var onHover: ((ExpressionHover?) -> Void)?
 
@@ -210,6 +214,33 @@ final class ExpressionGridCanvas: NSView {
         let item = sections[cell.section].items[cell.item]
         guard !sections[cell.section].isLocked, !item.isLocked else { return }
         onPick?(item)
+    }
+
+    /// Discord's right-click on a picker cell: Favorite, or Remove from
+    /// Favorites. A locked cell can be starred too — a star is about the
+    /// emoji, not about this channel.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let onToggleFavorite, let isFavorite else { return nil }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let cell = layout.item(at: point), isValid(cell) else { return nil }
+        let item = sections[cell.section].items[cell.item]
+        let menu = NSMenu()
+        let starred = isFavorite(item)
+        let entry = NSMenuItem(
+            title: starred ? "Remove from Favorites" : "Favorite",
+            action: #selector(toggleFavoriteFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        entry.image = NSImage(systemSymbolName: starred ? "star.slash" : "star", accessibilityDescription: nil)
+        entry.target = self
+        entry.representedObject = ExpressionMenuItem(item: item)
+        menu.addItem(entry)
+        return menu
+    }
+
+    @objc private func toggleFavoriteFromMenu(_ sender: NSMenuItem) {
+        guard let boxed = sender.representedObject as? ExpressionMenuItem else { return }
+        onToggleFavorite?(boxed.item)
     }
 
     /// Repaints one heading's row and nothing else — 26 points, a few times per
@@ -411,6 +442,12 @@ struct ExpressionJump: Equatable {
     var token: Int
 }
 
+/// A cell, carried by a menu item to its action.
+private final class ExpressionMenuItem: NSObject {
+    let item: ExpressionItem
+    init(item: ExpressionItem) { self.item = item }
+}
+
 struct ExpressionGridView: NSViewRepresentable {
     var sections: [ExpressionSection]
     var mode: ExpressionMode
@@ -425,6 +462,8 @@ struct ExpressionGridView: NSViewRepresentable {
     var onPick: (ExpressionItem) -> Void
     var onTopSectionChange: (Int) -> Void
     var onHover: (ExpressionHover?) -> Void
+    var isFavorite: ((ExpressionItem) -> Bool)? = nil
+    var onToggleFavorite: ((ExpressionItem) -> Void)? = nil
 
     func makeCoordinator() -> ExpressionGridCoordinator { ExpressionGridCoordinator() }
 
@@ -436,6 +475,7 @@ struct ExpressionGridView: NSViewRepresentable {
         context.coordinator.onPick = onPick
         context.coordinator.onTopSectionChange = onTopSectionChange
         context.coordinator.onHover = onHover
+        context.coordinator.setFavorites(isFavorite: isFavorite, toggle: onToggleFavorite)
         context.coordinator.update(
             sections: sections, mode: mode, topInset: topInset, animates: animates, jump: jump
         )
@@ -474,6 +514,11 @@ final class ExpressionGridCoordinator: NSObject {
     var onTopSectionChange: (Int) -> Void = { _ in }
     var onHover: (ExpressionHover?) -> Void = { _ in }
     private var animates = true
+
+    func setFavorites(isFavorite: ((ExpressionItem) -> Bool)?, toggle: ((ExpressionItem) -> Void)?) {
+        canvas?.isFavorite = isFavorite
+        canvas?.onToggleFavorite = toggle
+    }
 
     func makeScrollView() -> NSScrollView {
         let canvas = ExpressionGridCanvas(frame: .zero)

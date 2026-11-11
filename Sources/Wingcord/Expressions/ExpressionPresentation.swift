@@ -92,6 +92,8 @@ struct ExpressionSection: Hashable, Sendable, Identifiable {
     enum Badge: Hashable, Sendable {
         case image(URL?, monogram: String)
         case glyph(String)
+        /// An SF Symbol — Favorites' star, Frequently Used's clock.
+        case symbol(String)
     }
     var badge: Badge
     var items: [ExpressionItem]

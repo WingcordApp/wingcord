@@ -136,6 +136,33 @@ public nonisolated enum UnicodeEmoji {
         byName[normalize(shortcode)]?.glyph
     }
 
+    /// Discord's own name for a glyph, tone stripped — the key of its
+    /// favourites and frecency (`UnicodeEmojiDiscordNames.swift`), which is this
+    /// table's primary shortcode for two glyphs in three.
+    public static func discordName(for glyph: String) -> String? {
+        let base = applying(.default, to: glyph)
+        return discordNames.byGlyph[base] ?? shortcode(for: base)
+    }
+
+    /// The glyph Discord's name stands for — Discord's own spelling first,
+    /// where it differs, so a name that means another glyph here cannot win;
+    /// then this table's names and aliases.
+    public static func glyph(forDiscordName name: String) -> String? {
+        discordNames.byName[name] ?? glyph(for: name)
+    }
+
+    private static let discordNames: (byGlyph: [String: String], byName: [String: String]) = {
+        var byGlyph: [String: String] = [:]
+        var byName: [String: String] = [:]
+        for line in discordNameTable.split(separator: "\n", omittingEmptySubsequences: true) {
+            let fields = line.split(separator: " ", maxSplits: 1)
+            guard fields.count == 2 else { continue }
+            byGlyph[String(fields[0])] = String(fields[1])
+            byName[String(fields[1])] = String(fields[0])
+        }
+        return (byGlyph, byName)
+    }()
+
     /// The primary shortcode for a glyph, which is what a write needs.
     ///
     /// Tone is stripped first: `👍🏽` and `👍` are the same name, and a toned

@@ -57,16 +57,20 @@ struct SegmentedPicker<Value: Hashable>: View {
         /// segment's tooltip and accessibility label — the HIG's icon
         /// segments for switching an inspector's views.
         var symbolName: String?
+        /// A few words drawn beside the symbol — a count — with `title` still
+        /// the tooltip and the name VoiceOver reads.
+        var label: String?
 
         init(_ value: Value, _ title: String) {
             self.value = value
             self.title = title
         }
 
-        init(_ value: Value, _ title: String, symbolName: String) {
+        init(_ value: Value, _ title: String, symbolName: String, label: String? = nil) {
             self.value = value
             self.title = title
             self.symbolName = symbolName
+            self.label = label
         }
     }
 }
@@ -137,8 +141,10 @@ private struct SegmentedControl<Value: Hashable>: NSViewRepresentable {
         }
         for (index, option) in options.enumerated() {
             if let symbolName = option.symbolName {
-                // Icon-only: the title names it on hover and to VoiceOver.
-                if control.label(forSegment: index) != "" { control.setLabel("", forSegment: index) }
+                // Icon-only, or the icon and its label: the title names it on
+                // hover and to VoiceOver.
+                let shown = option.label ?? ""
+                if control.label(forSegment: index) != shown { control.setLabel(shown, forSegment: index) }
                 if control.toolTip(forSegment: index) != option.title {
                     control.setToolTip(option.title, forSegment: index)
                     control.setImage(

@@ -66,6 +66,30 @@ nonisolated struct EditedFootSlot: @unchecked Sendable {
 }
 
 /// A message row, laid out.
+/// Where a DM system line names somebody, and what lights it.
+///
+/// **Discord's `447215`**: a system line sets the name in its owner's face
+/// everywhere, and in a private channel only it draws the whole style —
+/// `PLAIN` at rest, `ANIMATED` and looping while the line is under the pointer.
+/// So the line keeps its sentence as laid out, and the hovered paint swaps in
+/// a copy with the name in clear ink and draws the effect over the gap.
+///
+/// Only for a name on one line: an effect is one run of outlines, and a name a
+/// narrow column breaks in two keeps its face and goes without.
+nonisolated struct SystemNameSlot: @unchecked Sendable {
+    var style: DisplayNameStyle
+    var name: String
+    /// The face at the line's size, and its kern at that size.
+    var face: NSFont
+    var tracking: CGFloat
+    /// The name's top-left in the row — its baseline less the face's ascender,
+    /// the point `DisplayNameEffectPainter` draws from.
+    var origin: CGPoint
+    var width: CGFloat
+    /// The same sentence, the name in clear ink, laid out identically.
+    var unnamedBlock: TimelineTextBlock
+}
+
 nonisolated struct MessageRow: @unchecked Sendable {
     var id: MessageID
     var authorID: UserID
@@ -207,6 +231,9 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// of them.
     var systemSymbol: String?
     var systemTint: NSColor?
+    /// A DM system line's name, to be lit under the pointer — see
+    /// `SystemNameSlot`. Nil in a server, and for anybody without a style.
+    var systemName: SystemNameSlot? = nil
 
     /// Where the row sits in the bubble arrangement. Nil in Discord's columns,
     /// and on a system line, which is centred rather than on a side.
@@ -2713,18 +2740,40 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let isCentred = input.arrangement != .columns
         let glyphRoom = TimelineMetrics.systemGlyphSide + TimelineMetrics.avatarGap
         let margin = TimelineMetrics.horizontalMargin
-        let block = TimelineTextBlock(
-            text: text,
-            width: isCentred
-                ? max(80, input.width - margin * 2 - glyphRoom)
-                : max(80, input.width - TimelineMetrics.contentInset - margin),
-            style: input.style,
-            hugsText: isCentred
-        )
+        let blockWidth = isCentred
+            ? max(80, input.width - margin * 2 - glyphRoom)
+            : max(80, input.width - TimelineMetrics.contentInset - margin)
+        let block = TimelineTextBlock(text: text, width: blockWidth, style: input.style, hugsText: isCentred)
         let contentX = isCentred
             ? ((input.width - block.size.width + glyphRoom) / 2).rounded()
             : TimelineMetrics.contentInset
         let contentWidth = max(80, input.width - contentX - margin)
+        let systemName = Self.systemNameSlot(
+            sentence: sentence,
+            author: author,
+            block: block,
+            origin: CGPoint(x: contentX, y: y),
+            input: input,
+            unnamed: {
+                // Laid out exactly as the sentence was, so every line breaks
+                // in the same place and only the name's ink differs.
+                TimelineTextBlock(
+                    text: Self.systemText(
+                        sentence,
+                        authorID: message.authorID,
+                        colorValue: author?.colorValue,
+                        nameFace: author?.nameFace,
+                        nameTracking: author?.nameTracking ?? 0,
+                        time: input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
+                        style: input.style,
+                        clearsName: true
+                    ),
+                    width: blockWidth,
+                    style: input.style,
+                    hugsText: isCentred
+                )
+            }
+        )
 
         // The card of the event a stage start announced, under its line —
         // Discord's embed after `STAGE_START`, while that event is on.
@@ -2812,7 +2861,49 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             threadChip: systemChip.slot,
             systemSymbol: sentence?.symbolName ?? "circle",
             systemTint: Self.tintColor(sentence?.tint),
+            systemName: systemName,
             accessibilityLabel: text.plainLabel
+        )
+    }
+
+    /// The DM-only lit name of a system line, or nil — see `SystemNameSlot`.
+    private static func systemNameSlot(
+        sentence: SystemSentence?,
+        author: TimelineLayoutEngine.AuthorInfo?,
+        block: TimelineTextBlock,
+        origin: CGPoint,
+        input: Input,
+        unnamed: () -> TimelineTextBlock
+    ) -> SystemNameSlot? {
+        // A server's line keeps the face alone; the style is a DM's. (The
+        // author table carries no style in a server either.)
+        guard input.guildID == nil,
+              let sentence, !sentence.name.isEmpty,
+              let worn = author?.nameStyle
+        else { return nil }
+        let start = (sentence.prefix as NSString).length
+        let length = (sentence.name as NSString).length
+        guard length > 0,
+              let first = block.baselineOrigin(at: start),
+              let last = block.baselineOrigin(at: start + length - 1),
+              abs(first.y - last.y) < 0.5
+        else { return nil }
+        let size = input.style.boldFont.pointSize
+        let face = author?.nameFace.map { NSFont(descriptor: $0.fontDescriptor, size: size) ?? $0 }
+            ?? input.style.boldFont
+        let tracking = author?.nameFace.map { (author?.nameTracking ?? 0) * size / max(1, $0.pointSize) } ?? 0
+        let width = NSAttributedString(string: sentence.name, attributes: [
+            .font: face,
+            .kern: tracking,
+        ]).size().width
+        return SystemNameSlot(
+            style: worn,
+            name: sentence.name,
+            face: face,
+            tracking: tracking,
+            origin: CGPoint(x: origin.x + first.x, y: origin.y + first.y - face.ascender),
+            width: ceil(width),
+            unnamedBlock: unnamed()
         )
     }
 
@@ -2828,7 +2919,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         nameFace: NSFont? = nil,
         nameTracking: CGFloat = 0,
         time: String,
-        style: MessageTextStyle
+        style: MessageTextStyle,
+        clearsName: Bool = false
     ) -> MessageText {
         // **The member's own face, in a welcome as in a message.** Discord sets
         // the name in a system line through the same font class a message
@@ -2855,8 +2947,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             let start = output.length
             var named: [NSAttributedString.Key: Any] = [
                 .font: nameFont,
-                .foregroundColor: colorValue.map { NSColor(Color(hex: $0)) }
-                    ?? style.primaryColor,
+                .foregroundColor: clearsName ? NSColor.clear
+                    : colorValue.map { NSColor(Color(hex: $0)) } ?? style.primaryColor,
             ]
             if nameKern != 0 { named[.kern] = nameKern }
             output.append(NSAttributedString(string: sentence.name, attributes: named))

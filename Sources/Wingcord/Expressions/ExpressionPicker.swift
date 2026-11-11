@@ -1,13 +1,15 @@
 import SwiftUI
 import WingcordCore
 
-/// Emoji, stickers or GIFs — **one mode per picker**, chosen by which control in
-/// the composer opened it.
+/// Emoji, stickers or GIFs — **one panel, opened on the tab of the control that
+/// opened it**, with the system's capsule strip to move between the three
+/// without closing it (POLISH-NOV decision 6, retiring "one mode per picker":
+/// a GIF that turns out to be a sticker was a close, a click and a reopen).
+/// Reaction and status pickers pass no tabs and stay emoji alone.
 ///
-/// There is no tab bar inside. Three controls that each open their own thing is
-/// one gesture to what you wanted; a tab bar is a control that opens a control,
-/// and it spends the top of a small panel restating what the button you just
-/// pressed already said.
+/// **Favorites and Frequently Used lead** the emoji and the sticker grids — the
+/// account's own stars and uses from Discord's frecency settings, a right-click
+/// away from starring (`AppModel.withUsageSections`).
 ///
 /// **Everything floats and the grid runs underneath.** The rail and the search
 /// field are glass bars the cells pass beneath, and the section heading is a
@@ -33,6 +35,9 @@ struct ExpressionPicker: View {
     /// The section to open at — a stock sticker's pack, from its card's "View
     /// More Stickers". Nil opens where the picker always opens.
     var initialSectionID: String? = nil
+    /// The tabs offered, in Discord's order (GIFs, Stickers, Emoji). Empty for
+    /// a picker that does one thing — a reaction's, a status's.
+    var tabs: [ExpressionMode] = []
     var onPick: (ExpressionItem) -> Void
     var onPickGIF: (GIF) -> Void
     /// Where a pick goes while the super reaction switch is on.
@@ -48,7 +53,28 @@ struct ExpressionPicker: View {
     /// account may not use there. Nil for everything that writes a message.
     var reactingIn: ChannelID? = nil
 
+    init(
+        mode: ExpressionMode,
+        initialSectionID: String? = nil,
+        tabs: [ExpressionMode] = [],
+        onPick: @escaping (ExpressionItem) -> Void,
+        onPickGIF: @escaping (GIF) -> Void,
+        onPickSuperReaction: ((ExpressionItem) -> Void)? = nil,
+        reactingIn: ChannelID? = nil
+    ) {
+        self.mode = mode
+        self.initialSectionID = initialSectionID
+        self.tabs = tabs
+        self.onPick = onPick
+        self.onPickGIF = onPickGIF
+        self.onPickSuperReaction = onPickSuperReaction
+        self.reactingIn = reactingIn
+        _shown = State(initialValue: mode)
+    }
+
     @Environment(AppModel.self) private var model
+    /// The tab on show — the opening control's, until the strip moves it.
+    @State private var shown: ExpressionMode
     @Environment(\.motion) private var motion
     /// The shared instance, held as `@State` so the view observes it — the same
     /// way every other surface that reads a preference does.
@@ -88,9 +114,15 @@ struct ExpressionPicker: View {
     private static let railSide: CGFloat = 28
 
     private var catalog: ExpressionCatalog {
-        switch mode {
-        case .emoji: reactingIn.map(model.reactionEmojiCatalog(in:)) ?? model.emojiCatalog
-        case .stickers: model.stickerCatalog
+        switch shown {
+        case .emoji:
+            model.withUsageSections(
+                reactingIn.map(model.reactionEmojiCatalog(in:)) ?? model.emojiCatalog,
+                stickers: false,
+                reacting: reactingIn != nil
+            )
+        case .stickers:
+            model.withUsageSections(model.stickerCatalog, stickers: true, reacting: false)
         case .gifs: ExpressionCatalog()
         }
     }
@@ -98,21 +130,54 @@ struct ExpressionPicker: View {
     private var showsRail: Bool { !catalog.sections.isEmpty }
 
     var body: some View {
-        Group {
-            if mode == .gifs {
-                GIFBoard(query: $query, onPick: onPickGIF).environment(model)
-            } else {
-                gridTab
+        VStack(spacing: 0) {
+            if tabs.count > 1 { tabStrip }
+            Group {
+                if shown == .gifs {
+                    GIFBoard(query: $query, onPick: onPickGIF).environment(model)
+                } else {
+                    gridTab
+                }
             }
+            .frame(maxHeight: .infinity)
+            // Each tab arrives with its own grid and its own place in it.
+            .id(shown)
+            .transition(.opacity)
         }
         .frame(width: Self.width, height: Self.height)
+        .animation(motion.standard, value: shown)
         // No background: the popover's own material IS the panel, and painting
         // over it is what turns liquid glass into a flat dark rectangle.
-        .task(id: mode) {
-            guard mode == .stickers else { return }
+        .task(id: shown) {
+            guard shown == .stickers else { return }
             await model.sessionController.loadDefaultStickerPacks()
             openInitialSection()
         }
+        // The account's stars and uses, read once per session.
+        .task { await model.sessionController.loadExpressionUsage() }
+    }
+
+    /// GIFs, Stickers, Emoji — the system's capsule strip, centred over the
+    /// panel. Outside the floating chrome on purpose: the strip brings its own
+    /// glass, and glass inside the chrome's container is glass on glass (§4).
+    private var tabStrip: some View {
+        SegmentedPicker(
+            options: tabs.map { .init($0, $0.rawValue) },
+            selection: Binding(
+                get: { shown },
+                set: { next in
+                    guard next != shown else { return }
+                    query = ""
+                    hover = nil
+                    topSection = 0
+                    jump = nil
+                    shown = next
+                }
+            )
+        )
+        .frame(maxWidth: .infinity)
+        .padding(.top, Spacing.base)
+        .padding(.bottom, Spacing.tight)
     }
 
     /// Jumps to `initialSectionID`, once the packs it names are in the catalog.
@@ -137,7 +202,7 @@ struct ExpressionPicker: View {
             } else {
                 ExpressionGridView(
                     sections: sections,
-                    mode: mode,
+                    mode: shown,
                     topInset: chromeHeight,
                     // Reduce Motion is resolved once at the root and read from
                     // the environment; the app's own preference sits beside it.
@@ -147,7 +212,9 @@ struct ExpressionPicker: View {
                     jump: query.isEmpty ? jump : nil,
                     onPick: isSuperReaction ? (onPickSuperReaction ?? onPick) : onPick,
                     onTopSectionChange: { topSection = $0 },
-                    onHover: { hover = $0 }
+                    onHover: { hover = $0 },
+                    isFavorite: { model.isFavorite($0) },
+                    onToggleFavorite: { model.toggleFavorite($0) }
                 )
             }
             chrome
@@ -221,6 +288,10 @@ struct ExpressionPicker: View {
         switch badge {
         case .glyph(let glyph):
             Text(glyph).font(.system(size: side * 0.8))
+        case .symbol(let name):
+            Image(systemName: name)
+                .font(.system(size: side * 0.62, weight: .semibold))
+                .foregroundStyle(Ink.secondary)
         case .image(let url, let monogram):
             RemoteImage(url: url, side: side) {
                 Text(monogram)
@@ -279,7 +350,7 @@ struct ExpressionPicker: View {
                     .foregroundStyle(Ink.tertiary)
 
                 TextField(
-                    isSuperReaction ? "Search Super Reactions" : mode.searchPlaceholder,
+                    isSuperReaction ? "Search Super Reactions" : shown.searchPlaceholder,
                     text: $query
                 )
                     .textFieldStyle(.plain)
@@ -300,7 +371,7 @@ struct ExpressionPicker: View {
             .chromeOverMedia()
 
             if onPickSuperReaction != nil { superReactionSwitch }
-            if mode == .emoji { skinTone }
+            if shown == .emoji { skinTone }
         }
     }
 
@@ -438,6 +509,11 @@ private struct ExpressionRail: View {
         case .glyph(let glyph):
             Text(glyph)
                 .font(.system(size: side * 0.66))
+                .frame(width: side, height: side)
+        case .symbol(let name):
+            Image(systemName: name)
+                .font(.system(size: side * 0.5, weight: .semibold))
+                .foregroundStyle(Ink.secondary)
                 .frame(width: side, height: side)
         case .image(let url, let monogram):
             // Static, never animated: a rail can hold a hundred servers, and

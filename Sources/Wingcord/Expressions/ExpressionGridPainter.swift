@@ -135,6 +135,32 @@ nonisolated enum ExpressionGridPainter {
     private static let badgeGap: CGFloat = 5
     private static let trailingPad: CGFloat = 9
 
+    /// An SF Symbol in the label's own ink, as a mask filled — the section
+    /// pill's words are that colour, and the mark belongs with them.
+    private static func drawSymbol(_ name: String, in frame: CGRect, context: CGContext) {
+        let configuration = NSImage.SymbolConfiguration(pointSize: frame.height * 0.78, weight: .semibold)
+        guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+        else { return }
+        var rect = CGRect(origin: .zero, size: symbol.size)
+        guard let mask = symbol.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return }
+        let size = symbol.size
+        let target = CGRect(
+            x: frame.midX - size.width / 2,
+            y: frame.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+        context.saveGState()
+        // The canvas is flipped; a mask is drawn the right way up.
+        context.translateBy(x: 0, y: target.maxY + target.minY)
+        context.scaleBy(x: 1, y: -1)
+        context.clip(to: target, mask: mask)
+        context.setFillColor(NSColor.labelColor.withAlphaComponent(0.78).cgColor)
+        context.fill(target)
+        context.restoreGState()
+    }
+
     private static func drawBadge(
         _ badge: ExpressionSection.Badge,
         in frame: CGRect,
@@ -145,6 +171,8 @@ nonisolated enum ExpressionGridPainter {
         switch badge {
         case .glyph(let glyph):
             drawGlyph(glyph, in: frame, context: context)
+        case .symbol(let name):
+            drawSymbol(name, in: frame, context: context)
         case .image(let url, let monogram):
             context.saveGState()
             // The rail draws a server as a squircle; a different shape here

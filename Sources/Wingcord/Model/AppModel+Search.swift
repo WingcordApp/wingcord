@@ -123,6 +123,8 @@ extension AppModel {
         var query = resolvedQuery(from: state.draft.content)
         query.sort = state.draft.sort
         query.order = state.draft.order
+        // A refined question stays on the tab it was asked from.
+        query.tab = state.draft.tab
         query.page = 1
         // **The column opens here and nowhere earlier**, and only for a question
         // that will actually be asked: Return on an empty field must not replace
@@ -265,6 +267,19 @@ extension AppModel {
         return parts.joined(separator: " ")
     }
 
+    /// Shows another tab of the answer on screen — its first page, asked at
+    /// once, as a sort is: there is nothing to type.
+    ///
+    /// Built from `submitted`, like paging: the tabs belong to the answer, and
+    /// switching one must not run edits nobody asked to run.
+    func selectSearchTab(_ tab: MessageSearchTab) {
+        guard let state = messageSearch, let submitted = state.submitted, submitted.tab != tab else { return }
+        messageSearch?.draft.tab = tab
+        var next = submitted.onPage(1)
+        next.tab = tab
+        sessionController.runSearch(next)
+    }
+
     func setSearchSort(_ sort: MessageSearchSort, order: MessageSearchOrder) {
         guard var state = messageSearch else { return }
         state.draft.sort = sort
@@ -322,7 +337,10 @@ extension AppModel {
             isDeepIndexing: state.page?.isDeepIndexing ?? false,
             isDirty: state.isDirty,
             hasAnswer: state.hasAnswer,
-            failure: state.failure
+            failure: state.failure,
+            // The tab pressed, at once — its answer follows.
+            tab: state.draft.tab,
+            tabCounts: state.page?.tabCounts ?? [:]
         )
     }
 
@@ -366,6 +384,9 @@ struct MessageSearchPresentation: Hashable, Sendable {
     var isDirty: Bool
     var hasAnswer: Bool
     var failure: String?
+    /// The tab on show, and every tab's total when the tabs route answered.
+    var tab: MessageSearchTab = .messages
+    var tabCounts: [MessageSearchTab: Int] = [:]
 
     /// One hit, with the channel it was written in.
     ///

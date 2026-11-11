@@ -549,6 +549,10 @@ final class AppModel {
     /// The account's plays as Discord scores them, once read — what a press
     /// is tracked into. Nil until the soundboard has been opened.
     @ObservationIgnored var soundFrecency: SoundFrecency?
+    /// The account's starred and most-used emoji and stickers, once read —
+    /// the pickers' Favorites and Frequently Used, and the message bar's quick
+    /// reactions. Nil until first read.
+    var expressionUsage: ExpressionUsage?
     /// The sound somebody just pressed, and who pressed it. Drawn as a chip
     /// over their tile for a beat, then cleared.
     var soundboardEffects: [UserID: String] = [:]

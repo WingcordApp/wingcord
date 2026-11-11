@@ -1085,6 +1085,11 @@ struct Composer: View {
             ExpressionPicker(
                 mode: mode,
                 initialSectionID: control == .sticker ? stickerSection : nil,
+                // The composer's own expression controls, as tabs in Discord's
+                // order — a channel that offers no stickers offers no tab.
+                tabs: [.gifs, .stickers, .emoji].filter { mode in
+                    controlOrder.contains { $0.expressionMode == mode }
+                },
                 onPick: { item in
                     onPick(item)
                     // A sticker sends and the picker's work is done; an emoji is

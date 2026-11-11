@@ -19,6 +19,11 @@ import WingcordCore
 /// blurs, and §4 forbids stacking them anyway.
 struct MessageActionBar: View {
     var items: [MessageActionKind]
+    /// The reader's three most-reacted emoji, ahead of the actions — Discord's
+    /// quick reactions. Each takes an action's slot, so the arithmetic that
+    /// places the pill and its popovers counts them as slots.
+    var quickReactions: [EmojiRef] = []
+    var react: (EmojiRef) -> Void = { _ in }
     var perform: (MessageActionKind) -> Void
 
     @Environment(\.motion) private var motion
@@ -26,6 +31,7 @@ struct MessageActionBar: View {
     /// a `@State` per button would be a view per button that invalidates
     /// independently.
     @State private var hovered: MessageActionKind?
+    @State private var hoveredReaction: ReactionEmojiKey?
 
     /// Shared with the overlay, which solves a button's box from them rather
     /// than measuring it — see `MessageActionBarOverlay.anchor(of:in:)`.
@@ -37,6 +43,38 @@ struct MessageActionBar: View {
     static let gap: CGFloat = 2
     static let padding: CGFloat = 4
 
+    /// One quick reaction: the emoji itself where a glyph would be, adding or
+    /// taking back the reader's own reaction.
+    private func quickReaction(_ emoji: EmojiRef) -> some View {
+        let key = emoji.reactionKey
+        let name = emoji.id == nil ? (UnicodeEmoji.shortcode(for: emoji.name) ?? emoji.name) : emoji.name
+        return Button { react(emoji) } label: {
+            Group {
+                if let id = emoji.id {
+                    RemoteImage(url: CDN.emoji(id: id, animated: false, side: 20), side: 20) { Color.clear }
+                        .frame(width: 20, height: 20)
+                } else {
+                    Text(emoji.name).font(.system(size: 17))
+                }
+            }
+            .frame(width: Self.glyphSide, height: Self.glyphSide)
+            .background {
+                if hoveredReaction == key { Circle().fill(Palette.hoverFill) }
+            }
+            .scaleEffect(hoveredReaction == key && !motion.reduceMotion ? 1.12 : 1)
+            .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .onHover { isInside in
+            let next = isInside ? key : (hoveredReaction == key ? nil : hoveredReaction)
+            guard next != hoveredReaction else { return }
+            hoveredReaction = next
+        }
+        .animation(motion.hover, value: hoveredReaction)
+        .help(":\(name):")
+        .accessibilityLabel(Text("React with \(name)"))
+    }
+
     /// The pill's width for `count` glyphs — solved, as a button's box is.
     static func width(for count: Int) -> CGFloat {
         CGFloat(count) * glyphSide + CGFloat(max(0, count - 1)) * gap + padding * 2
@@ -44,6 +82,9 @@ struct MessageActionBar: View {
 
     var body: some View {
         HStack(spacing: Self.gap) {
+            ForEach(quickReactions, id: \.reactionKey) { emoji in
+                quickReaction(emoji)
+            }
             ForEach(items) { kind in
                 Button { perform(kind) } label: {
                     Image(symbol: kind.symbolName)
@@ -150,12 +191,20 @@ struct MessageActionBarOverlay: View {
         // the transcript, or not visibly drawn at all.
         return GeometryReader { _ in
             if let current, !items.isEmpty {
-                let bar = MessageActionBar(items: items) { kind in
-                    perform(kind, on: current.messageID, items: items)
+                let quick = actions.contains(.addReaction) ? model.quickReactions(in: channelID) : []
+                let bar = MessageActionBar(
+                    items: items,
+                    quickReactions: quick,
+                    react: { emoji in
+                        model.toggleReaction(emoji, location: .hoverBar, on: current.messageID, in: channelID)
+                    }
+                ) { kind in
+                    perform(kind, on: current.messageID, items: items, leadingSlots: quick.count)
                 }
                 .fixedSize()
                 .onHover { isPointerOnBar = $0 }
-                if let anchor = current.pillAnchor, let leading = bubbleLeading(of: current, items: items) {
+                if let anchor = current.pillAnchor,
+                   let leading = bubbleLeading(of: current, slots: quick.count + items.count) {
                     // Beside a bubble, level with its first line, growing out
                     // of the side it hangs from.
                     bar
@@ -179,6 +228,8 @@ struct MessageActionBarOverlay: View {
             }
         }
         .animation(motion.hover, value: current?.messageID)
+        // The quick reactions' ranking, read once per session.
+        .task { await model.sessionController.loadExpressionUsage() }
         .onModifierKeysChanged(mask: .shift) { _, modifiers in
             let shifted = modifiers.contains(.shift)
             guard shifted != isShifted else { return }
@@ -204,14 +255,15 @@ struct MessageActionBarOverlay: View {
     private func perform(
         _ kind: MessageActionKind,
         on messageID: MessageID,
-        items: [MessageActionKind]
+        items: [MessageActionKind],
+        leadingSlots: Int
     ) {
         MessageActionRouter.perform(
             kind,
             messageID: messageID,
             channelID: channelID,
             model: model,
-            anchor: anchor(of: kind, in: items)
+            anchor: anchor(of: kind, in: items, leadingSlots: leadingSlots)
         )
     }
 
@@ -221,14 +273,16 @@ struct MessageActionBarOverlay: View {
     /// the same width, so a button's box is arithmetic from its position in the
     /// row — and arithmetic cannot go stale between the layout that placed it
     /// and the click that reads it, which a stored measurement can.
-    private func anchor(of kind: MessageActionKind, in items: [MessageActionKind]) -> CGRect {
+    private func anchor(of kind: MessageActionKind, in items: [MessageActionKind], leadingSlots: Int) -> CGRect {
         guard let hover = model.messageHover ?? held,
-              let index = items.firstIndex(of: kind)
+              let found = items.firstIndex(of: kind)
         else { return .zero }
+        let index = leadingSlots + found
+        let slots = leadingSlots + items.count
         let stride = MessageActionBar.glyphSide + MessageActionBar.gap
-        let leading = bubbleLeading(of: hover, items: items)
+        let leading = bubbleLeading(of: hover, slots: slots)
             ?? hover.rowFrame.maxX - TimelineMetrics.actionBarTrailingInset
-                - MessageActionBar.width(for: items.count)
+                - MessageActionBar.width(for: slots)
         let top = hover.pillAnchor.map { $0.midY - TimelineMetrics.actionBarHeight / 2 }
             ?? hover.rowFrame.minY - TimelineMetrics.actionBarRise
         return CGRect(
@@ -245,9 +299,9 @@ struct MessageActionBarOverlay: View {
     ///
     /// The row's trailing edge *is* the transcript's: the canvas lays every
     /// row out to its full width.
-    private func bubbleLeading(of hover: MessageHover, items: [MessageActionKind]) -> CGFloat? {
+    private func bubbleLeading(of hover: MessageHover, slots: Int) -> CGFloat? {
         guard let anchor = hover.pillAnchor else { return nil }
-        let width = MessageActionBar.width(for: items.count)
+        let width = MessageActionBar.width(for: slots)
         let inset = TimelineMetrics.actionBarTrailingInset
         let x = anchor.edge == .trailing ? anchor.x - width : anchor.x
         return min(max(x, hover.rowFrame.minX + inset), hover.rowFrame.maxX - inset - width)

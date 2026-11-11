@@ -1659,6 +1659,8 @@ public enum ReactionLocation: String, Sendable {
     case inlineButton = "Message Inline Button"
     /// The emoji picker a message's Add Reaction opens.
     case reactionPicker = "Message Reaction Picker"
+    /// A quick reaction on the bar over a hovered message.
+    case hoverBar = "Message Hover Bar"
     /// The reactors list, where a moderator takes somebody's reaction off —
     /// Discord's `MESSAGE`.
     case message = "Message"

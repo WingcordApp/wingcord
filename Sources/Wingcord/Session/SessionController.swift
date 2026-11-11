@@ -250,6 +250,15 @@ final class SessionController {
     /// The message search in flight, replaced rather than queued: an answer to
     /// a question the reader has moved past is worse than no answer.
     var searchTask: Task<Void, Never>?
+    /// Set when the tabs route refused a question this session, so every later
+    /// search goes straight to the classic one rather than failing first.
+    var searchTabsRefused = false
+    /// This client's emoji, reaction and sticker uses not yet written into the
+    /// account's frecency, and the write that will carry them.
+    var pendingExpressionUses = PendingExpressionUses()
+    var expressionUseWrite: Task<Void, Never>?
+    /// The re-read after the blob moved elsewhere, debounced.
+    var expressionUsageRefresh: Task<Void, Never>?
     /// The invite resolve behind the Add a Server field, replaced per keystroke.
     var inviteLookupTask: Task<Void, Never>?
     /// A clicked invite link being looked up, for its sheet.
@@ -1770,6 +1779,9 @@ final class SessionController {
             // own "thinking" placeholder for the same nonce.
             if let nonce = modal.nonce { model.pendingInteractions[nonce] = nil }
             model.interactionModal = InteractionModalState(modal: modal, answers: modal.initialAnswers)
+
+        case .frecencySettingsChanged:
+            refreshExpressionUsageSoon()
 
         case .userSettingsChanged(let folders, let preferences, let audioContext):
             // The rail rearranged in another client — or the echo of this

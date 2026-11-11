@@ -34,7 +34,7 @@ extension SessionController {
             for attempt in 0..<Self.searchIndexAttempts {
                 if Task.isCancelled { return }
                 do {
-                    let page = try await rest.searchMessages(query)
+                    let page = try await searchPage(query)
                     guard !Task.isCancelled, model.messageSearch?.scope == query.scope else { return }
                     // The authors arrive with the page and are merged rather
                     // than replacing: a hit's author is very often somebody in
@@ -70,6 +70,39 @@ extension SessionController {
     func cancelSearch() {
         searchTask?.cancel()
         searchTask = nil
+    }
+
+    /// One page of answers: every tab counted in one request, or — when the
+    /// tabs route refuses the question — the classic route, asked with the
+    /// tab's own `has` so Media still shows media.
+    ///
+    /// **The fallback is for a route that did not understand**, not for one
+    /// that said no: a 202 is waited out by the caller, and a refusal the
+    /// classic route would give too (no access, signed out, offline) is
+    /// reported as it is rather than asked twice.
+    private func searchPage(_ query: MessageSearchQuery) async throws -> MessageSearchPage {
+        // No token in the demo: its answer is worked out from what it holds.
+        if LaunchOptions.current.usesDemoFixtures {
+            return DemoSearch.page(for: query, in: model)
+        }
+        if !searchTabsRefused {
+            do {
+                return try await rest.searchMessageTabs(query)
+            } catch let indexing as DiscordREST.SearchIndexing {
+                throw indexing
+            } catch let failure as DiscordREST.Failure {
+                switch failure {
+                case .unauthorized, .forbidden, .transport:
+                    throw failure
+                default:
+                    Self.trace("search tabs refused, asking the classic route: \(Self.describe(failure))")
+                    searchTabsRefused = true
+                }
+            }
+        }
+        var classic = query
+        classic.has = Set(query.tabHas)
+        return try await rest.searchMessages(classic)
     }
 
     /// How many times a 202 is waited out before giving up. Three attempts at

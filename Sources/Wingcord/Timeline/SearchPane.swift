@@ -118,6 +118,16 @@ struct SearchPane: View {
                 .fixedSize()
             }
 
+            // The answer's tabs, each with its count from the same request.
+            if search.hasAnswer {
+                SearchTabStrip(
+                    selected: search.tab,
+                    counts: search.tabCounts,
+                    select: { model.selectSearchTab($0) }
+                )
+                .transition(.opacity)
+            }
+
             // What the list under it was searched with, each a ✕ away.
             let tokens = model.searchFilterTokens
             if !tokens.isEmpty {
@@ -452,6 +462,37 @@ struct SearchPagePill: View {
         .opacity(isEnabled ? 1 : 0.3)
         .help(forward ? "Next page" : "Previous page")
         .accessibilityLabel(Text(forward ? "Next page" : "Previous page"))
+    }
+}
+
+/// Messages, Media, Links and Files — the answer's tabs, each with its count.
+///
+/// **The system's capsule strip** (`SegmentedPicker`), a symbol and a number
+/// per segment and the tab's name on hover and to VoiceOver: four words and
+/// four counts do not fit the search column, four marks and four numbers do.
+/// The counts come with the page, from one request (`searchMessageTabs`); an
+/// answer from the classic route has none, and the marks stand alone.
+struct SearchTabStrip: View {
+    var selected: MessageSearchTab
+    var counts: [MessageSearchTab: Int]
+    var select: (MessageSearchTab) -> Void
+
+    var body: some View {
+        SegmentedPicker(
+            options: MessageSearchTab.allCases.map { tab in
+                .init(tab, tab.title, symbolName: tab.symbolName, label: counts[tab].map(Self.count))
+            },
+            selection: Binding(get: { selected }, set: { select($0) }),
+            fillsWidth: true
+        )
+        .accessibilityLabel("Result type")
+    }
+
+    /// 120, 8.4K, 1.2M — what fits a segment.
+    static func count(_ value: Int) -> String {
+        value < 10_000
+            ? value.formatted(.number)
+            : value.formatted(.number.notation(.compactName).precision(.fractionLength(0...1)))
     }
 }
 

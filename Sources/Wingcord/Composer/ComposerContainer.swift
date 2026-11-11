@@ -119,6 +119,8 @@ struct ComposerContainer: View {
             mentionChip: { [channelID] in model.composerChip(for: $0, in: channelID) },
             mentionChipRevision: model.composerChipRevision,
             onPick: { item in
+                // A use, as Discord counts it — Frequently Used moves at once.
+                model.notePicked(item)
                 // A post's sticker waits with the post: there's nowhere to send
                 // one to yet.
                 if post != nil, case .sticker(let id) = item.pick {

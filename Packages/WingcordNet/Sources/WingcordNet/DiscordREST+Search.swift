@@ -108,6 +108,96 @@ extension DiscordREST {
         }
     }
 
+    /// Searches every tab at once — `POST …/messages/search/tabs`, Discord's
+    /// `createRequestPayload` (`956467`): the tab on show with a full page,
+    /// the others with one message each for their counts, in one request.
+    ///
+    /// Each tab carries Discord's defaults (`sort_by: timestamp`, `sort_order:
+    /// desc`), then its own `has`, then the question's fields — so the
+    /// question's sort and its own `has` win — then `offset` and `limit`. A
+    /// guild's channel filter rides at the top as `channel_ids`.
+    ///
+    /// Throws `SearchIndexing` on a 202, as the classic route does.
+    public func searchMessageTabs(_ query: MessageSearchQuery) async throws -> MessageSearchPage {
+        let path: String
+        let route: String
+        switch query.scope {
+        case .guild(let guildID):
+            path = "/guilds/\(guildID.rawValue)/messages/search/tabs"
+            route = "guilds/{id}/messages/search/tabs"
+        case .channel(let channelID):
+            path = "/channels/\(channelID.rawValue)/messages/search/tabs"
+            route = "channels/{id}/messages/search/tabs"
+        }
+        let (data, status) = try await requestRaw(
+            method: "POST",
+            path: path,
+            route: route,
+            query: [],
+            body: Self.tabsBody(for: query)
+        )
+        if status == 202 {
+            let notice = try? Self.decoder.decode(SearchIndexingDTO.self, from: data)
+            throw SearchIndexing(
+                retryAfter: notice?.retry_after ?? 1,
+                documentsIndexed: notice?.documents_indexed
+            )
+        }
+        guard (200..<300).contains(status) else {
+            throw Self.apiFailure(status: status, data: data)
+        }
+        let answer: SearchTabsPageDTO
+        do {
+            answer = try Self.decoder.decode(SearchTabsPageDTO.self, from: data)
+        } catch {
+            throw Failure.decoding(String(describing: error))
+        }
+        // A tab missing from the answer is a route that did not understand the
+        // question — read as a failure, so the caller asks the classic route.
+        guard let shown = answer.tabs?[query.tab.rawValue] else {
+            throw Failure.decoding("search tabs: no \(query.tab.rawValue) tab in the answer")
+        }
+        var page = shown.domain
+        page.isDeepIndexing = answer.doing_deep_historical_index ?? page.isDeepIndexing
+        for (name, tab) in answer.tabs ?? [:] {
+            guard let kind = MessageSearchTab(rawValue: name) else { continue }
+            page.tabCounts[kind] = max(tab.total_results ?? 0, 0)
+        }
+        return page
+    }
+
+    /// The tabs request's body for a query — see `searchMessageTabs`.
+    static func tabsBody(for query: MessageSearchQuery) -> SearchTabsQueryBody {
+        let content = query.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bounds = query.dateBounds
+        var tabs: [String: SearchTabsQueryBody.Tab] = [:]
+        for tab in MessageSearchTab.allCases {
+            var asked = query
+            asked.tab = tab
+            let has = asked.tabHas.map(\.rawValue)
+            let isShown = tab == query.tab
+            tabs[tab.rawValue] = SearchTabsQueryBody.Tab(
+                sort_by: query.sort.rawValue,
+                sort_order: query.order.rawValue,
+                content: content.isEmpty ? nil : String(content.prefix(1024)),
+                author_id: query.authorIDs.isEmpty ? nil : query.authorIDs.prefix(100).map(\.description),
+                mentions: query.mentionIDs.isEmpty ? nil : query.mentionIDs.prefix(100).map(\.description),
+                has: has.isEmpty ? nil : has,
+                author_type: query.authorKinds.isEmpty ? nil : query.authorKinds.map(\.rawValue).sorted(),
+                pinned: query.isPinned,
+                min_id: bounds.after.map { MessageID.bound(for: $0).description },
+                max_id: bounds.before.map { MessageID.bound(for: $0).description },
+                // Only the tab on show pages; the others are asked for a count.
+                offset: isShown ? query.offset : 0,
+                limit: isShown ? MessageSearchQuery.pageSize : 1
+            )
+        }
+        let channels = query.scope.guildID != nil && !query.channelIDs.isEmpty
+            ? query.channelIDs.prefix(500).map(\.description)
+            : nil
+        return SearchTabsQueryBody(tabs: tabs, channel_ids: channels)
+    }
+
     /// The query string, built once so the two routes cannot drift.
     ///
     /// `URLQueryItem`s rather than a joined string: `content` is free text that
@@ -212,4 +302,40 @@ struct MessageSearchDTO: Decodable, Sendable {
             authors: authors
         )
     }
+}
+
+/// `POST …/messages/search/tabs`'s body for a search — see `searchMessageTabs`.
+struct SearchTabsQueryBody: Encodable, Sendable {
+    var tabs: [String: Tab]
+    var track_exact_total_hits = true
+    var channel_ids: [String]?
+
+    init(tabs: [String: Tab], channel_ids: [String]?) {
+        self.tabs = tabs
+        self.channel_ids = channel_ids
+    }
+
+    /// One tab: Discord's defaults, the tab's own `has`, the question's
+    /// fields and the page. Nil fields are left out, as Discord leaves out
+    /// what a question does not ask.
+    struct Tab: Encodable, Sendable, Equatable {
+        var sort_by: String
+        var sort_order: String
+        var content: String?
+        var author_id: [String]?
+        var mentions: [String]?
+        var has: [String]?
+        var author_type: [String]?
+        var pinned: Bool?
+        var min_id: String?
+        var max_id: String?
+        var offset: Int
+        var limit: Int
+    }
+}
+
+/// The tabs answer: one classic page per tab, the indexing flag at the top.
+struct SearchTabsPageDTO: Decodable, Sendable {
+    var tabs: [String: MessageSearchDTO]?
+    var doing_deep_historical_index: Bool?
 }

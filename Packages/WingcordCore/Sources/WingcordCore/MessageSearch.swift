@@ -93,6 +93,44 @@ public enum MessageSearchHas: String, Hashable, Sendable, CaseIterable {
 }
 
 /// Who sent it. Negatable on the wire the same way `has` is.
+/// Which slice of an answer is on show — Discord's search tabs (`768570`):
+/// the messages as asked, then the same question narrowed to media, links or
+/// files, each counted in one request (`POST …/messages/search/tabs`).
+public enum MessageSearchTab: String, Hashable, Sendable, CaseIterable {
+    case messages, media, links, files
+
+    public var title: String {
+        switch self {
+        case .messages: "Messages"
+        case .media: "Media"
+        case .links: "Links"
+        case .files: "Files"
+        }
+    }
+
+    public var symbolName: String {
+        switch self {
+        case .messages: "text.bubble"
+        case .media: "photo.on.rectangle"
+        case .links: "link"
+        case .files: "doc"
+        }
+    }
+
+    /// What the tab adds to the question — Discord's `su[B7[tab]]`:
+    /// `has: image, video` for media, `link`, `file`, and nothing for messages.
+    /// **The question's own `has` wins**, as Discord spreads it after the
+    /// tab's, so a search that already asks for links asks every tab for links.
+    public var has: [MessageSearchHas] {
+        switch self {
+        case .messages: []
+        case .media: [.image, .video]
+        case .links: [.link]
+        case .files: [.file]
+        }
+    }
+}
+
 public enum MessageSearchAuthorKind: String, Hashable, Sendable, CaseIterable {
     case user, bot, webhook
 
@@ -220,8 +258,18 @@ public struct MessageSearchQuery: Hashable, Sendable {
 
     public var sort: MessageSearchSort = .timestamp
     public var order: MessageSearchOrder = .descending
+    /// The tab on show. Part of the question — another tab is another page of
+    /// answers — but not a filter: no badge counts it and Clear keeps it.
+    public var tab: MessageSearchTab = .messages
     /// Which page, 1-based. Converted to `offset` at the boundary.
     public var page: Int = 1
+
+    /// The `has` values the tab's request sends: the question's own when it
+    /// has any, otherwise the tab's. Sorted, so one query is one request.
+    public var tabHas: [MessageSearchHas] {
+        let own = has.isEmpty ? Set(tab.has) : has
+        return own.sorted { $0.rawValue < $1.rawValue }
+    }
 
     public init(scope: MessageSearchScope) {
         self.scope = scope
@@ -323,6 +371,7 @@ public struct MessageSearchQuery: Hashable, Sendable {
         next.content = content
         next.sort = sort
         next.order = order
+        next.tab = tab
         return next
     }
 }
@@ -352,17 +401,22 @@ public struct MessageSearchPage: Hashable, Sendable {
     /// in no roster it holds — so without these the panel draws "Unknown" over
     /// a grey circle for most of its rows. The same reasoning as `MessagePage`.
     public var authors: [UserID: User]
+    /// Every tab's total from the same request — empty when the answer came
+    /// from the classic route, which counts only what it was asked.
+    public var tabCounts: [MessageSearchTab: Int]
 
     public init(
         messages: [Message] = [],
         totalResults: Int = 0,
         isDeepIndexing: Bool = false,
-        authors: [UserID: User] = [:]
+        authors: [UserID: User] = [:],
+        tabCounts: [MessageSearchTab: Int] = [:]
     ) {
         self.messages = messages
         self.totalResults = totalResults
         self.isDeepIndexing = isDeepIndexing
         self.authors = authors
+        self.tabCounts = tabCounts
     }
 
     /// How many pages the route will serve for this answer.

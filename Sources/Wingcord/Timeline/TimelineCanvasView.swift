@@ -999,7 +999,7 @@ final class TimelineCanvasView: NSView {
         guard !isScrolling, playsNameEffects,
               let hoveredRow, rows.indices.contains(hoveredRow),
               case .message(let row) = rows[hoveredRow].kind,
-              row.hasAuthorLine, let style = row.authorStyle
+              let style = row.hasAuthorLine ? row.authorStyle : row.systemName?.style
         else { return false }
         return DisplayNameEffectPainter.animates(style)
     }
@@ -1676,6 +1676,12 @@ final class TimelineCanvasView: NSView {
                 {
                     preparedName = styledAuthorName(for: message)
                     state.playsNameEffect = playsNameEffects
+                } else if state.isHovered, case .message(let message) = row.kind,
+                          let slot = message.systemName
+                {
+                    // A DM's system line, lit as Discord lights it there.
+                    preparedName = styledSystemName(slot)
+                    state.playsNameEffect = playsNameEffects
                 }
                 if state.isHovered, playsNameEffects {
                     state.nameGradientPhase = nameGradientPhase
@@ -1748,6 +1754,36 @@ final class TimelineCanvasView: NSView {
             // **UTF-16, not grapheme clusters.** Prism's tile is a count of
             // character slots and Discord counts them the way JavaScript does,
             // so an emoji in a name is worth two.
+            characterCount: key.text.utf16.count
+        )
+        styledName = (key, prepared)
+        return prepared
+    }
+
+    /// A hovered DM system line's name as outlines and ramps, through the same
+    /// one-entry cache as a run head's — one row is hovered either way.
+    private func styledSystemName(_ slot: SystemNameSlot) -> DisplayNameEffectPainter.Prepared? {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let nameStyle = slot.style.legible(on: DisplayNameStyle.ground(isDark: isDark))
+        let key = StyledNameKey(
+            text: slot.name,
+            font: slot.face,
+            tracking: slot.tracking,
+            style: nameStyle,
+            maximumWidth: slot.width + 8
+        )
+        if let styledName, styledName.key == key { return styledName.prepared }
+        guard let run = DisplayNameGlyphRun(
+            text: key.text,
+            font: slot.face,
+            tracking: key.tracking,
+            perGlyph: nameStyle.effect == .gummy,
+            maximumWidth: key.maximumWidth
+        ) else { return nil }
+        let prepared = DisplayNameEffectPainter.prepare(
+            run: run,
+            style: nameStyle,
+            pointSize: slot.face.pointSize,
             characterCount: key.text.utf16.count
         )
         styledName = (key, prepared)
