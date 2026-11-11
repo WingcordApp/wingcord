@@ -407,16 +407,21 @@ struct SearchPagePill: View {
         .padding(.horizontal, 3)
         .frame(height: Self.height)
         // How far through the pages this is: a hairline along the capsule's
-        // foot, which moves as the number does.
+        // foot, which moves as the number does. **On its own faint track**, so
+        // page 1 of 69 reads as the start of a line rather than a blue speck
+        // under the arrow.
         .overlay(alignment: .bottom) {
             GeometryReader { proxy in
-                Capsule()
-                    .fill(Palette.accent.opacity(0.85))
-                    .frame(
-                        width: max(6, proxy.size.width * CGFloat(currentPage) / CGFloat(max(1, pageCount))),
-                        height: 2
-                    )
-                    .frame(maxHeight: .infinity, alignment: .bottom)
+                let fraction = CGFloat(currentPage) / CGFloat(max(1, pageCount))
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Ink.quaternary)
+                    Capsule()
+                        .fill(Palette.accent)
+                        .frame(width: max(4, proxy.size.width * fraction))
+                }
+                .frame(height: 2)
+                .frame(maxHeight: .infinity, alignment: .bottom)
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 3)
@@ -527,13 +532,23 @@ private struct AccentBadgeInk: ShapeStyle {
     }
 }
 
-/// The flyout behind `…`.
-private struct SearchPageJump: View {
+/// "Go to Page", hung off the page pill's number.
+///
+/// **Inset for the popover's corners**: the glass is rounded far more than a
+/// panel, and content set 12 points in sat in the curve — the title in the
+/// corner and the row cut at both ends. The row was also wider than the
+/// popover (a 92-point field beside a Go button with a 112-point floor, in
+/// 240), so it spilled out of both sides. Now the field takes what the button
+/// leaves, the button hugs its word, and everything is 16 points in.
+struct SearchPageJump: View {
     var pageCount: Int
     var go: (Int) -> Void
 
     @State private var typed = ""
     @FocusState private var isFocused: Bool
+
+    static let width: CGFloat = 260
+    private static let fieldHeight: CGFloat = 36
 
     private var page: Int? {
         guard let value = Int(typed), value >= 1, value <= pageCount else { return nil }
@@ -541,45 +556,57 @@ private struct SearchPageJump: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.base) {
-            Text("Go to page")
-                .font(.system(.callout, weight: .semibold))
-                .foregroundStyle(Ink.primary)
+        VStack(alignment: .leading, spacing: Spacing.snug) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Go to Page")
+                    .font(.system(.headline))
+                    .foregroundStyle(Ink.primary)
+                Text("\(pageCount.formatted(.number)) pages of results")
+                    .font(.system(.caption))
+                    .foregroundStyle(Ink.secondary)
+            }
 
             HStack(spacing: Spacing.base) {
-                TextField("", text: $typed, prompt: Text("1–\(pageCount)"))
-                    .textFieldStyle(.plain)
-                    .font(.system(.body))
-                    .monospacedDigit()
-                    .focused($isFocused)
-                    .frame(width: 92)
-                    .padding(.horizontal, Spacing.base)
-                    .frame(height: Metrics.control + Spacing.tight)
-                    .background(
-                        Palette.surfaceRaised,
-                        in: .rect(cornerRadius: Radius.chip, style: .continuous)
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                            .strokeBorder(Ink.quaternary, lineWidth: 1)
-                    }
-                    // Digits only: the field takes a page number, and rejecting
-                    // the keystroke is clearer than accepting it and refusing
-                    // the jump.
-                    .onChange(of: typed) { _, value in
-                        let digits = value.filter(\.isNumber).prefix(4)
-                        if digits != value { typed = String(digits) }
-                    }
-                    .onSubmit { if let page { go(page) } }
+                HStack(spacing: Spacing.tight) {
+                    Image(systemName: "number")
+                        .font(.system(.callout, weight: .semibold))
+                        .foregroundStyle(Ink.secondary)
+                        .accessibilityHidden(true)
+                    TextField("Page", text: $typed, prompt: Text("1–\(pageCount.formatted(.number))"))
+                        .textFieldStyle(.plain)
+                        .labelsHidden()
+                        .font(.system(.body, weight: .medium))
+                        .monospacedDigit()
+                        .focused($isFocused)
+                        // Digits only: the field takes a page number, and
+                        // rejecting the keystroke is clearer than accepting it
+                        // and refusing the jump.
+                        .onChange(of: typed) { _, value in
+                            let digits = value.filter(\.isNumber).prefix(4)
+                            if digits != value { typed = String(digits) }
+                        }
+                        .onSubmit { if let page { go(page) } }
+                }
+                .padding(.horizontal, Spacing.snug)
+                .frame(maxWidth: .infinity, minHeight: Self.fieldHeight, maxHeight: Self.fieldHeight)
+                // The modal fields' own rounded ground, not a capsule: a
+                // capsule's stroked border draws a tick at each end.
+                .modalFieldGround(isFocused: isFocused)
+                .contentShape(.rect)
+                .onTapGesture { isFocused = true }
 
-                SurfaceFilledButton(title: "Go", systemImage: nil) {
+                Button("Go") {
                     if let page { go(page) }
                 }
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
+                .controlSize(.large)
+                .fixedSize()
                 .disabled(page == nil)
             }
         }
-        .padding(Spacing.snug)
-        .frame(width: 240)
+        .padding(Spacing.margin)
+        .frame(width: Self.width)
         // The material a popover paints behind its whole content is the one
         // §2 says cannot be suppressed, so nothing here adds a second.
         .presentationBackground(.clear)

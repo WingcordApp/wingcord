@@ -58,6 +58,34 @@ struct SearchRedesignRenderTests {
         withExtendedLifetime(window) {}
     }
 
+    @Test("Go to Page fits its popover, inset from the corners")
+    func pageJump() throws {
+        let jump = SearchPageJump(pageCount: 69, go: { _ in })
+            .background(Color(white: 0.16))
+            .environment(\.colorScheme, .dark)
+        let host = NSHostingView(rootView: jump)
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 260, height: 160),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = host
+        host.frame = CGRect(origin: .zero, size: host.fittingSize)
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        #expect(host.fittingSize.width == SearchPageJump.width)
+        // The title, its line, and the 36-point row, with 16 around: no more.
+        #expect(host.fittingSize.height < 130)
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        if let directory = ProcessInfo.processInfo.environment["WINGCORD_RENDER_DIR"] {
+            try rep.representation(using: .png, properties: [:])?
+                .write(to: URL(fileURLWithPath: directory).appendingPathComponent("search-page-jump.png"))
+        }
+        withExtendedLifetime(window) {}
+    }
+
     @Test("Add's flyout: a field over the people, the chosen ones ticked")
     func pickFlyout() throws {
         let people = [
