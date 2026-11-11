@@ -127,6 +127,21 @@ struct GameDTO: Decodable, Sendable {
     struct ReviewsDTO: Decodable, Sendable {
         var steam: SteamDTO?
         var opencritic: OpenCriticDTO?
+        var app_store: StoreDTO?
+        var google_play: StoreDTO?
+
+        /// A phone store's stars. Discord reads the count from `rating_count`
+        /// and falls back to `global_rating_count`.
+        struct StoreDTO: Decodable, Sendable {
+            var rating: Double?
+            var rating_count: Int?
+            var global_rating_count: Int?
+
+            var domain: GameReviews.StoreRating? {
+                guard let rating, let count = rating_count ?? global_rating_count else { return nil }
+                return GameReviews.StoreRating(rating: rating, count: count)
+            }
+        }
 
         struct SteamDTO: Decodable, Sendable {
             var rating: Double?
@@ -161,7 +176,12 @@ struct GameDTO: Decodable, Sendable {
                     tier: $0.tier.flatMap(OpenCriticTier.init(rawValue:))
                 )
             }
-            let reviews = GameReviews(steam: steamReviews, openCritic: criticReviews)
+            let reviews = GameReviews(
+                steam: steamReviews,
+                openCritic: criticReviews,
+                appStore: app_store?.domain,
+                googlePlay: google_play?.domain
+            )
             return reviews.isEmpty ? nil : reviews
         }
     }

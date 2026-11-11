@@ -10,6 +10,8 @@ struct CrosspostCardRequest: Identifiable, Hashable {
         case communityUpdates
         /// Another server's — its profile card, named from the publisher.
         case server(GuildID, name: String)
+        /// The server whose tag somebody wears beside their name.
+        case tag(GuildID, text: String, badgeURL: URL?)
     }
 
     var kind: Kind
@@ -19,6 +21,8 @@ struct CrosspostCardRequest: Identifiable, Hashable {
         switch kind {
         case .communityUpdates: "community-updates"
         case .server(let guildID, _): "server-\(guildID.rawValue)"
+        // The anchor too: the same tag on two messages is two places to open at.
+        case .tag(let guildID, _, _): "tag-\(guildID.rawValue)-\(anchor.minX)-\(anchor.minY)"
         }
     }
 }
@@ -44,6 +48,26 @@ extension AppModel {
     /// Discord's name for a crosspost's server while its profile is not in
     /// hand: the publishing webhook's, less its last word — "Wingcord
     /// #announcements" names "Wingcord".
+    /// Opens the card of the server whose tag `userID` wears — Discord's guild
+    /// profile from a tag in a message.
+    func openServerTag(of userID: UserID, anchor: CGRect) {
+        guard let user = users[userID], let cosmetics = cosmetics(of: user),
+              let guildID = cosmetics.primaryGuildID, let text = cosmetics.primaryGuildTag
+        else { return }
+        dismissMessageSurfaces()
+        crosspostCard = CrosspostCardRequest(
+            kind: .tag(
+                guildID,
+                text: text,
+                badgeURL: cosmetics.primaryGuildBadgeHash.flatMap {
+                    CDN.guildTagBadge(guildID: guildID, hash: $0)
+                }
+            ),
+            anchor: anchor
+        )
+        loadGuildProfile(guildID)
+    }
+
     static func publisherName(_ username: String) -> String {
         let words = username.split(separator: " ")
         return words.count > 1 ? words.dropLast().joined(separator: " ") : username
@@ -136,6 +160,24 @@ struct CrosspostCardPresenter: ViewModifier {
                 openGuild: { id in
                     model.crosspostCard = nil
                     model.openGuild(id)
+                },
+                retry: { model.retryGuildProfile(guildID) }
+            )
+            .appColorScheme()
+        case .tag(let guildID, let text, let badgeURL):
+            GuildProfileCard(
+                profile: model.guildProfilePresentation(of: guildID, tag: text, badgeURL: badgeURL),
+                openGuild: { id in
+                    model.crosspostCard = nil
+                    model.openGuild(id)
+                },
+                openGame: { id in
+                    model.crosspostCard = nil
+                    model.openGameProfile(id)
+                },
+                enterGuild: { id in
+                    model.crosspostCard = nil
+                    model.enterGuild(id)
                 },
                 retry: { model.retryGuildProfile(guildID) }
             )

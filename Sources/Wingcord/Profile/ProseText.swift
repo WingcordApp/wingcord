@@ -33,6 +33,14 @@ struct ProseText: View {
     var mentions: MentionContext?
     /// What a click on a custom emoji does. Nil makes them inert pictures.
     var onEmoji: ((EmojiRef) -> Void)?
+    /// Whether a click on an emoji opens its card here, pointing at the emoji.
+    ///
+    /// **The card used to be the surface's, and so was its anchor**: one
+    /// popover on the whole profile, which opened at the profile's edge however
+    /// far away the emoji was. The prose knows where the picture is, so the
+    /// prose presents — one presentation per block of prose, never one per
+    /// emoji. Takes the click instead of `onEmoji` where both are given.
+    var inspectsEmoji = false
     /// What a click on a link does. Nil draws links as ordinary accent text and
     /// takes no clicks, which is the honest answer on a surface with nothing to
     /// open them with — `INVARIANTS.md` §5.5.
@@ -45,6 +53,8 @@ struct ProseText: View {
     /// while the pointer is on the sidebar (`animateOnHoverOrFocusOnly`).
     /// Everywhere else the prose was opened to be read, and plays.
     var animates = true
+    /// The words' weight, for prose that is a title. Regular everywhere else.
+    var weight: NSFont.Weight = .regular
     /// Whether the words can be selected. **Off only inside something pressable**,
     /// an event card you click to open: there a press on plain words is the card's,
     /// while a link or a spoiler in them still answers for itself.
@@ -55,11 +65,23 @@ struct ProseText: View {
     /// Where a mention or a chip goes. Optional, because a preview surface draws
     /// prose with no session behind it.
     @Environment(AppModel.self) private var model: AppModel?
+    @State private var inspected: ProseInspectedEmoji?
+
+    /// A click on an emoji: the card here where this prose presents it, the
+    /// caller's closure otherwise.
+    private var emojiAction: ((EmojiRef, CGRect) -> Void)? {
+        if inspectsEmoji {
+            return { emoji, rect in inspected = ProseInspectedEmoji(emoji: emoji, rect: rect) }
+        }
+        guard let onEmoji else { return nil }
+        return { emoji, _ in onEmoji(emoji) }
+    }
 
     var body: some View {
         ProseCanvasHost(
             markdown: markdown,
             pointSize: NSFont.resolved(font).pointSize,
+            weight: weight,
             color: color,
             isLight: colorScheme == .light,
             emojiSide: emojiSide,
@@ -67,8 +89,10 @@ struct ProseText: View {
             plays: animates,
             mentions: mentions ?? MentionContext(),
             selectsText: isSelectable,
-            actions: ProseCanvasView.Actions(emoji: onEmoji, follow: follow)
+            actions: ProseCanvasView.Actions(emoji: emojiAction, follow: follow)
         )
+        // On the canvas itself, before any frame: the rect is in its space.
+        .modifier(ProseEmojiInspector(isOn: inspectsEmoji, inspected: $inspected))
         .frame(maxWidth: .infinity, alignment: .leading)
         // **An `NSView` has no baseline to offer**, so a row that lines up on first
         // baselines (an icon beside an event's place) would use its foot. The font's
@@ -117,6 +141,7 @@ struct ProseText: View {
 private struct ProseCanvasHost: NSViewRepresentable {
     var markdown: String
     var pointSize: CGFloat
+    var weight: NSFont.Weight
     var color: Color
     var isLight: Bool
     var emojiSide: CGFloat
@@ -141,7 +166,8 @@ private struct ProseCanvasHost: NSViewRepresentable {
                 isLight: isLight,
                 emojiSide: emojiSide,
                 lineLimit: lineLimit,
-                plays: plays && AnimationClock.playsAnimatedEmoji
+                plays: plays && AnimationClock.playsAnimatedEmoji,
+                weight: weight
             ),
             mentions: mentions,
             actions: actions,

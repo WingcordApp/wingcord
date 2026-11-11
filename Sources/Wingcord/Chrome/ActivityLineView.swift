@@ -14,6 +14,9 @@ struct ActivityLineView: View {
     var ink: Color = Ink.tertiary
     /// A custom status's emoji, at about the line's own height.
     var emojiSide: CGFloat = 11
+    /// Whether an animated status emoji moves: under the pointer, as Discord's
+    /// rows play theirs. A column of them all moving is the list §4.6 forbids.
+    var playsEmoji = false
 
     var body: some View {
         HStack(spacing: Spacing.tight) {
@@ -41,7 +44,7 @@ struct ActivityLineView: View {
                     .fixedSize()
             }
             if let emoji = line.statusEmoji {
-                ExpressionGlyph(emoji: emoji, side: emojiSide)
+                ExpressionGlyph(emoji: emoji, side: emojiSide, plays: playsEmoji)
                     .fixedSize()
             }
             if let statusText = line.statusText {

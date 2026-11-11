@@ -264,7 +264,8 @@ struct ProfileIdentityPanel: View {
                     font: .system(.subheadline),
                     color: InkColor.primary,
                     mentions: model.mentionContext(),
-                    onEmoji: openEmoji,
+                    // The card opens on the emoji, from the prose.
+                    inspectsEmoji: true,
                     onLink: openLink
                 )
             }

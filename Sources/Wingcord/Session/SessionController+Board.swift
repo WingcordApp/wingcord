@@ -88,7 +88,7 @@ extension SessionController {
         }
     }
 
-    private func loadWidgetApplications(ids: [ApplicationID]) async {
+    func loadWidgetApplications(ids: [ApplicationID]) async {
         let wanted = ids.filter { model.widgetApplications[$0] == nil }
         guard !wanted.isEmpty else { return }
         do {

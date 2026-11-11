@@ -371,6 +371,10 @@ final class TimelineCoordinator: NSObject {
             guard let self, let canvas = self.canvas, let channelID = self.channelID else { return }
             self.model.openCrosspostAuthor(messageID, in: channelID, anchor: canvas.anchorInHostingRoot(rect))
         }
+        canvas.onOpenServerTag = { [weak self] userID, rect in
+            guard let self, let canvas = self.canvas else { return }
+            self.model.openServerTag(of: userID, anchor: canvas.anchorInHostingRoot(rect))
+        }
         canvas.onOpenPersonMenu = { [weak self] userID, rect in
             guard let self, let canvas = self.canvas else { return }
             self.model.openUserMenu(
@@ -834,6 +838,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.onActivateMessage = nil
         canvas?.onOpenProfile = nil
         canvas?.onOpenCrosspostAuthor = nil
+        canvas?.onOpenServerTag = nil
         canvas?.onHeadAction = nil
         canvas?.onOpenEmoji = nil
         canvas?.onOpenSticker = nil

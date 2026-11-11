@@ -150,8 +150,8 @@ nonisolated enum DisplayNameEffectPainter {
         case .glow, .gradient:
             if style.colors.count >= 2 {
                 ramp = gradient(
-                    [Ink.color(style.colors[0]), Ink.color(style.colors[1])],
-                    at: DisplayNameEffectSpec.Gradient.stops
+                    style.colors.map(Ink.color),
+                    at: DisplayNameEffectSpec.Gradient.stops(count: style.colors.count)
                 )
             }
         case .toon:
@@ -175,7 +175,9 @@ nonisolated enum DisplayNameEffectPainter {
             // `--prism-cycle` is `characterCount * 1ch` — a count of character
             // *slots*, not a measured width, which is what makes the rainbow
             // read the same in a wide face and a narrow one.
-            tile = max(1, CGFloat(characterCount)) * run.zeroAdvance
+            tile = DisplayNameEffectSpec.Prism.tile(
+                characterCount: characterCount, zeroAdvance: run.zeroAdvance
+            )
             let repeats = max(2, Int((run.size.width / tile).rounded(.up)) + 1)
             span = tile * CGFloat(repeats)
 
@@ -264,6 +266,9 @@ nonisolated enum DisplayNameEffectPainter {
         context.translateBy(x: point.x, y: point.y + run.ascent)
         context.scaleBy(x: 1, y: -1)
         context.translateBy(x: 0, y: -run.descent)
+        // The name's emoji, last and untouched by the effect — Discord's
+        // `.emoji`, `z-index: 1`. A lit name used to lose every one it had.
+        defer { run.drawColorGlyphs(in: context) }
 
         guard let ink = prepared.ink else {
             // Solid with no colours: the account chose a face and left the
@@ -300,13 +305,13 @@ nonisolated enum DisplayNameEffectPainter {
         guard let ramp = prepared.ramp else {
             return fill(prepared.run.path, with: ink.main, context: context)
         }
-        let size = prepared.run.size
+        let axis = DisplayNameEffectSpec.Gradient.axis(in: prepared.run.size)
         clipped(to: prepared.run.path, context: context) {
-            // y-up: top-left to bottom-right, which is `to bottom right`.
+            // `to bottom right`, which is not corner to corner — see `axis`.
             context.drawLinearGradient(
                 ramp,
-                start: CGPoint(x: 0, y: size.height),
-                end: CGPoint(x: size.width, y: 0),
+                start: axis.start,
+                end: axis.end,
                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
             )
         }
@@ -452,14 +457,16 @@ nonisolated enum DisplayNameEffectPainter {
             context.translateBy(x: 0, y: offset(DisplayNameEffectSpec.Pop.shadow))
             context.addPath(path)
             context.clip()
-            // Bounds twice the box, centred on the sweep's travelling position,
-            // running top-right to bottom-left as `startPoint (1, 1)` does.
-            let x = travelled * size.width
-            let y = travelled * size.height
+            // A tile twice the box, centred on the sweep's travelling
+            // position, `to bottom left` across it — see `sweepAxis`.
+            let axis = DisplayNameEffectSpec.Pop.sweepAxis(
+                around: CGPoint(x: travelled * size.width, y: travelled * size.height),
+                box: size
+            )
             context.drawLinearGradient(
                 sweep,
-                start: CGPoint(x: x + size.width, y: y + size.height),
-                end: CGPoint(x: x - size.width, y: y - size.height),
+                start: axis.start,
+                end: axis.end,
                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
             )
             context.restoreGState()
@@ -491,10 +498,15 @@ nonisolated enum DisplayNameEffectPainter {
         context: CGContext
     ) {
         let spec = DisplayNameEffectSpec.Gummy.self
-        for (index, glyph) in prepared.run.glyphs.enumerated() {
-            // A space owns a box and no outline — nothing to fill, and the box
-            // is only there to keep the wave's phase across a two-word name.
-            guard !glyph.path.isEmpty, index < ink.letters.count else { continue }
+        // **Letters are counted, and a space is not one.** Discord gives a
+        // colour and a place in the wave to each letter it wraps, and it wraps
+        // neither a space nor an emoji — so the second word carries on from
+        // where the first left off, in colour and in time.
+        var index = -1
+        for glyph in prepared.run.glyphs {
+            guard !glyph.path.isEmpty else { continue }
+            index += 1
+            guard index < ink.letters.count else { continue }
             let letter = ink.letters[index]
             guard let time else {
                 fill(glyph.path, with: letter, context: context)

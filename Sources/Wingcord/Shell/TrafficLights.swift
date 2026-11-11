@@ -10,7 +10,12 @@ import SwiftUI
 /// is what puts them inside a floating sidebar the way macOS 26's own sidebars
 /// carry them.
 ///
-/// **Kept there by watching the close button's own frame.** AppKit lays the
+/// **Kept there by pinning each button** — `TrafficLightPin`, which makes
+/// AppKit's own placement land on the shell's — and, behind that, by watching
+/// the buttons' frames as this did before the pin: on a system where the pin
+/// cannot be made, the watching is what is left.
+///
+/// **Watched through the close button's own frame.** AppKit lays the
 /// title bar out again on a resize, on a change of key status and on leaving
 /// full screen, and puts the buttons back where it thinks they go each time.
 /// Answering the frame change synchronously moves them back inside the same
@@ -148,21 +153,36 @@ final class TrafficLightsProbe: NSView {
         observeButtons(of: window)
         isPlacing = true
         defer { isPlacing = false }
-        for (index, type) in Self.buttonTypes.enumerated() {
-            guard let button = window.standardWindowButton(type), let bar = button.superview else { continue }
-            // Placed in the window's space (y up from its foot) and brought
-            // into the button's own, so the answer holds whatever container
-            // AppKit puts each button in.
-            let target = NSPoint(
-                x: leading + CGFloat(index) * ShellMetrics.trafficLightSpacing,
-                y: window.frame.height - centerY
-            )
-            let inBar = bar.convert(target, from: nil)
-            let origin = NSPoint(
-                x: inBar.x.rounded(),
-                y: (inBar.y - button.frame.height / 2).rounded()
-            )
+        for type in Self.buttonTypes {
+            guard let button = window.standardWindowButton(type) else { continue }
+            // **Pinned, so AppKit's own layout lands here too** — see
+            // `TrafficLightPin`. Everything else in this file moves the buttons
+            // back after AppKit has moved them, which is a frame too late when
+            // the layout runs inside the commit; the pin has no "after".
+            TrafficLightPin.pin(button) { [weak self] button in self?.origin(of: button) }
+            guard let origin = origin(of: button) else { continue }
             if button.frame.origin != origin { button.setFrameOrigin(origin) }
         }
+    }
+
+    /// Where `button` belongs, in its superview's space — nil where the
+    /// system's own place is the right one.
+    private func origin(of button: NSButton) -> NSPoint? {
+        guard let window, button.window === window, let bar = button.superview,
+              !window.styleMask.contains(.fullScreen),
+              let index = Self.buttonTypes.firstIndex(where: { window.standardWindowButton($0) === button })
+        else { return nil }
+        // Placed in the window's space (y up from its foot) and brought into
+        // the button's own, so the answer holds whatever container AppKit puts
+        // each button in.
+        let target = NSPoint(
+            x: leading + CGFloat(index) * ShellMetrics.trafficLightSpacing,
+            y: window.frame.height - centerY
+        )
+        let inBar = bar.convert(target, from: nil)
+        return NSPoint(
+            x: inBar.x.rounded(),
+            y: (inBar.y - button.frame.height / 2).rounded()
+        )
     }
 }

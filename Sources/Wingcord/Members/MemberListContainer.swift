@@ -11,14 +11,14 @@ struct MemberListContainer: View {
     @Environment(AppModel.self) private var model
     @State private var presentation = PresentationRevision.shared
     @State private var hover: MemberRowHover?
-    @State private var isPointerOnActions = false
+    @State private var pointerOnActionsOf: UserID?
     @State private var voiceButtons: [MemberVoiceButton] = []
 
     /// The row that stays lit, whatever the pointer does: Discord's `.active`.
     private var pinnedUserID: UserID? {
         model.profileRequest?.userID
             ?? model.userMenu?.userID
-            ?? (isPointerOnActions ? hover?.userID : nil)
+            ?? pointerOnActionsOf
     }
 
     /// The words being looked for: nothing typed yet is the whole list.
@@ -69,7 +69,7 @@ struct MemberListContainer: View {
         // either. Just short of the first heading, whose words stay whole at rest.
         .mask { MemberListTopFade(clearHeight: max(0, topInset - 14)) }
         .overlay { MemberVoiceButtonsOverlay(buttons: voiceButtons) }
-        .overlay { MemberRowActionsOverlay(hover: hover, isPointerOnActions: $isPointerOnActions) }
+        .overlay { MemberRowActionsOverlay(hover: hover, pointerOnActionsOf: $pointerOnActionsOf) }
         .overlay(alignment: .top) {
             if searchRoster?.sections.isEmpty == true {
                 Text("No members match that search.")

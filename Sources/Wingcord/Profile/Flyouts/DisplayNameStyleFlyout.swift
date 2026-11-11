@@ -134,7 +134,7 @@ struct DisplayNameStyleFlyout: View {
     private var fontGrid: some View {
         section("Font") {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Spacing.base), count: 4), spacing: Spacing.base) {
-                ForEach(DisplayNameFont.allCases, id: \.self) { face in
+                ForEach(DisplayNameFont.offered, id: \.self) { face in
                     ChoiceTile(isSelected: font == face) {
                         font = face
                         Haptics.tick()

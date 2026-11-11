@@ -153,6 +153,42 @@ extension DemoFixtures {
             )
         }
 
+        // **The row that used to break**: a long name in a styled face, with
+        // emoji in it, a server tag beside it and a plate whose palette has no
+        // colour — a name that has to be cut to its row, keep its emoji under
+        // the effect and sit on a plate hung off the trailing edge. A navy
+        // gradient too, which is the pick Discord's contrast step moves most.
+        // And a headset, so the one online mark with no dot in it is on screen.
+        if let electro = who("Voltcast"), let user = model.users[electro] {
+            model.users[electro] = User(
+                id: user.id,
+                username: user.username,
+                displayName: "Voltcast the VIRTUOUS dragon 🐉✨",
+                avatarHash: user.avatarHash,
+                discriminator: user.discriminator,
+                flags: user.flags,
+                isBot: user.isBot,
+                isSystem: user.isSystem,
+                decoration: UserDecoration(
+                    nameplate: (user.decoration?.nameplate ?? model.users[me]?.decoration?.nameplate)
+                        .map { Nameplate(asset: $0.asset, palette: .none, label: $0.label) },
+                    displayNameStyle: DisplayNameStyle(
+                        font: .journal, effect: .gradient, colors: [0x1B_2A_8C, 0x5B_1F_A8]
+                    ),
+                    primaryGuildTag: "YOTE",
+                    primaryGuildID: guildID
+                )
+            )
+            model.presences[electro] = Presence(
+                userID: electro, status: .online, isOnVR: true,
+                activities: model.presences[electro]?.activities
+            )
+        }
+        // And somebody on their phone and nowhere else.
+        if let phone = who("vrm") {
+            model.presences[phone] = Presence(userID: phone, status: .online, isOnMobile: true)
+        }
+
         // Two rooms here that the reader isn't in, so Join Voice has somewhere to
         // go. **After `populateVoice`**, so the reader's own call stays where it is.
         let rooms = ["vc-lounge", "vc-ranked"].enumerated().map { offset, name in

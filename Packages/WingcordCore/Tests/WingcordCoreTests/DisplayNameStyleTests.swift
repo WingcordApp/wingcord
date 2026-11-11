@@ -127,8 +127,13 @@ struct DisplayNameStyleTests {
     func everyStyledFaceHasAFile() {
         for font in DisplayNameFont.allCases where font != .default {
             #expect(font.postScriptName != nil, "\(font) has no PostScript name")
-            #expect(font.fileName != nil, "\(font) has no file")
+            // In the bundle, or fetched from Discord: never neither, never both.
+            #expect((font.fileName != nil) != (font.remoteAsset != nil), "\(font) has no file")
         }
+        // Hexagon is worn and never offered, as in Discord's own pickers.
+        #expect(DisplayNameFont(rawValue: 17) == .hexagon)
+        #expect(!DisplayNameFont.offered.contains(.hexagon))
+        #expect(DisplayNameFont.offered.count == DisplayNameFont.allCases.count - 1)
         #expect(DisplayNameFont.default.postScriptName == nil)
         #expect(DisplayNameFont.default.fileName == nil)
     }

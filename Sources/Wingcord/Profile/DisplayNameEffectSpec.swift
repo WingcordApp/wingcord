@@ -74,6 +74,19 @@ nonisolated enum DisplayNameEffectSpec {
         static let lift: CGFloat = 0.08
         static let sweepStops: [CGFloat] = [0, 0.06, 0.20, 0.50, 0.56, 0.70, 1]
         static let sweepKeyTimes: [CGFloat] = [0, 0.5, 1]
+
+        /// The sweep's ramp, `to bottom left` across a tile twice the box,
+        /// centred on `centre` — in a space where y grows upwards. The same
+        /// corner rule as `Gradient.axis`, for the same reason.
+        static func sweepAxis(around centre: CGPoint, box: CGSize) -> (start: CGPoint, end: CGPoint) {
+            let (w, h) = (box.width, box.height)
+            guard w > 0, h > 0 else { return (centre, centre) }
+            let reach = w * h / (w * w + h * h)
+            return (
+                CGPoint(x: centre.x + reach * 2 * h, y: centre.y + reach * 2 * w),
+                CGPoint(x: centre.x - reach * 2 * h, y: centre.y - reach * 2 * w)
+            )
+        }
         static func outlineWidth(em: CGFloat) -> CGFloat { 1.2 + 0.04 * em }
     }
 
@@ -96,6 +109,45 @@ nonisolated enum DisplayNameEffectSpec {
         /// held across a tenth of the diagonal, so a short name still shows both
         /// rather than reading as one muddy midpoint.
         static let stops: [CGFloat] = [0.1, 0.9]
+
+        /// The same rule for any number of colours: `10 + 80 * i / (n - 1)` per
+        /// cent, which is `stops` for two. A style of one colour is a flat fill
+        /// (`c, c`).
+        static func stops(count: Int) -> [CGFloat] {
+            guard count > 1 else { return [0.1, 0.9] }
+            return (0..<count).map { 0.1 + 0.8 * CGFloat($0) / CGFloat(count - 1) }
+        }
+
+        /// Where CSS's `to bottom right` runs across a box `size`, in a space
+        /// where y grows UPWARDS.
+        ///
+        /// **Not corner to corner, except on a square.** A corner keyword turns
+        /// the line until its midpoint colour runs through the OTHER two
+        /// corners, so on a name four times as wide as it is tall the ramp runs
+        /// almost straight down. A gradient layer does this by itself — its
+        /// unit square is stretched with the box — and a painter drawing from
+        /// one corner to the other was running the ramp along the name instead,
+        /// which is a different picture of the same style.
+        static func axis(in size: CGSize) -> (start: CGPoint, end: CGPoint) {
+            let (w, h) = (size.width, size.height)
+            guard w > 0, h > 0 else { return (.zero, .zero) }
+            let reach = w * h / (w * w + h * h)
+            return (
+                CGPoint(x: w / 2 - reach * h, y: h / 2 + reach * w),
+                CGPoint(x: w / 2 + reach * h, y: h / 2 - reach * w)
+            )
+        }
+    }
+
+    // MARK: Prism
+
+    enum Prism {
+        /// `--prism-cycle: max(<length>ch, 38px)` — a tile is a character slot
+        /// per UTF-16 unit of the name, and never under 38 points, so a
+        /// two-letter name still shows the whole rainbow.
+        static func tile(characterCount: Int, zeroAdvance: CGFloat) -> CGFloat {
+            max(CGFloat(max(1, characterCount)) * zeroAdvance, 38)
+        }
     }
 }
 

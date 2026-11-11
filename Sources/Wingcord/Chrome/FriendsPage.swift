@@ -123,6 +123,7 @@ struct FriendsPage: View {
                 avatarURL: user.flatMap { model.avatarURL(for: $0, side: 36) },
                 monogram: user?.monogram ?? "?",
                 status: status,
+                client: presence?.client ?? .desktop,
                 line: line,
                 relationship: relationship
             ))
@@ -185,6 +186,7 @@ private struct FriendRow: View {
         var avatarURL: URL?
         var monogram: String
         var status: PresenceStatus
+        var client: PresenceClient = .desktop
         var line: String
         var relationship: Relationship
     }
@@ -199,7 +201,7 @@ private struct FriendRow: View {
             AvatarView(url: row.avatarURL, monogram: row.monogram, side: 36)
                 .overlay(alignment: .bottomTrailing) {
                     if row.relationship == .friend {
-                        PresenceDot(status: row.status, side: 12)
+                        PresenceDot(status: row.status, side: 12, client: row.client)
                             .offset(x: 2, y: 2)
                     }
                 }

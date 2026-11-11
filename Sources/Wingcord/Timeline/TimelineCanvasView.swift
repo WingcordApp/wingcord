@@ -556,6 +556,8 @@ final class TimelineCanvasView: NSView {
     /// A crosspost's author was clicked: the server that published it, not a
     /// person — Discord's server card, or its Community Updates card.
     var onOpenCrosspostAuthor: ((MessageID, CGRect) -> Void)?
+    /// A press on the server tag beside a name: whose tag, and the chip's rect.
+    var onOpenServerTag: ((UserID, CGRect) -> Void)?
     /// A control in a direct message's head — Add Friend, Block, the servers
     /// in common — with its rect in the SwiftUI root's space.
     var onHeadAction: ((HeadAction, CGRect) -> Void)?
@@ -1715,7 +1717,10 @@ final class TimelineCanvasView: NSView {
     /// a gradient, sixty times a second, for a name that cannot change while
     /// somebody is pointing at it.
     private func styledAuthorName(for row: MessageRow) -> DisplayNameEffectPainter.Prepared? {
-        guard let nameStyle = row.authorStyle else { return nil }
+        guard let worn = row.authorStyle else { return nil }
+        // Discord's contrast step, as the profile's copy of the name takes it.
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let nameStyle = worn.legible(on: DisplayNameStyle.ground(isDark: isDark))
         let font = row.authorFace ?? style.authorFont
         let key = StyledNameKey(
             text: row.authorName,
@@ -1948,6 +1953,8 @@ final class TimelineCanvasView: NSView {
             onOpenProfile?(userID, rect)
         case .crosspostAuthor(let rect):
             onOpenCrosspostAuthor?(row.id, rect)
+        case .serverTag(let userID, let rect):
+            onOpenServerTag?(userID, rect)
         case .card(let action, _, let rect):
             onCardAction?(row.id, action, anchorInHostingRoot(rect))
         case .component(let url, let customID, _):
@@ -2297,6 +2304,9 @@ final class TimelineCanvasView: NSView {
         case person(UserID, CGRect)
         /// A crosspost's name or face: its publisher's card.
         case crosspostAuthor(CGRect)
+        /// The server tag beside a name: that server's card, as Discord's tag
+        /// opens its guild profile.
+        case serverTag(UserID, CGRect)
         /// A control on a drawn card: what it does, its origin in row space
         /// for the painter to light, and its rect in this view's space.
         case card(DrawnCardAction, origin: CGPoint, rect: CGRect)
@@ -2653,6 +2663,9 @@ final class TimelineCanvasView: NSView {
         // The face, then the name. Both open the same card, and both are things
         // a reader points at when they want to know who somebody is — or, for
         // a crosspost, what published it.
+        if row.tag != nil, row.hasAuthorLine, row.tagRect.contains(local) {
+            return .serverTag(row.authorID, row.tagRect.offsetBy(dx: frame.minX, dy: frame.minY))
+        }
         if let avatarRect = row.avatarRect, avatarRect.contains(local) {
             let rect = avatarRect.offsetBy(dx: frame.minX, dy: frame.minY)
             return row.isCrosspost ? .crosspostAuthor(rect) : .person(row.authorID, rect)
@@ -2769,6 +2782,8 @@ final class TimelineCanvasView: NSView {
             case .person, .crosspostAuthor:
                 // The name, not the face: only the words underline.
                 authorName = row.hasAuthorLine && row.authorRect.contains(local)
+                cursor = .pointingHand
+            case .serverTag:
                 cursor = .pointingHand
             case .component(let url, let customID, let origin):
                 component = origin

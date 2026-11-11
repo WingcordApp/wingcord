@@ -61,6 +61,22 @@ nonisolated struct DisplayNameGlyphRun {
     /// The advance of "0" in this face at this size — CSS's `1ch`, and the unit
     /// Prism's tile is counted in.
     let zeroAdvance: CGFloat
+    /// The emoji in the name, which no effect paints.
+    ///
+    /// **An emoji has no outline, so it was never in `path`, and a styled name
+    /// lost every one it had.** Discord sets them apart the same way: each is an
+    /// element of its own over the effect (`.emoji`, `z-index: 1`), outside the
+    /// clipped fill and outside Gummy's letters. Both renderers draw these last,
+    /// as they are.
+    let colorGlyphs: [ColorGlyph]
+
+    /// One glyph a font draws in its own colours.
+    struct ColorGlyph {
+        let font: CTFont
+        let glyph: CGGlyph
+        /// Its origin on the baseline, in the run's space.
+        let origin: CGPoint
+    }
 
     /// Lays out `text`, or returns nil when there is nothing to draw.
     ///
@@ -136,6 +152,7 @@ nonisolated struct DisplayNameGlyphRun {
 
         let whole = CGMutablePath()
         var letters: [Glyph] = []
+        var colored: [ColorGlyph] = []
         if perGlyph { letters.reserveCapacity(text.count) }
 
         for (index, line) in lines.enumerated() {
@@ -149,13 +166,16 @@ nonisolated struct DisplayNameGlyphRun {
                 lineBottom: bottom,
                 lineHeight: lineHeight,
                 perGlyph: perGlyph,
-                into: whole
+                into: whole,
+                colored: &colored
             )
         }
 
-        guard !whole.isEmpty else { return nil }
+        // A name of nothing but emoji has no outline and is still a name.
+        guard !whole.isEmpty || !colored.isEmpty else { return nil }
         path = whole
         glyphs = letters
+        colorGlyphs = colored
 
         var zero: CGGlyph = 0
         var advance = CGSize.zero
@@ -269,7 +289,8 @@ nonisolated struct DisplayNameGlyphRun {
         lineBottom: CGFloat,
         lineHeight: CGFloat,
         perGlyph: Bool,
-        into whole: CGMutablePath
+        into whole: CGMutablePath,
+        colored: inout [ColorGlyph]
     ) -> [Glyph] {
         var letters: [Glyph] = []
         for run in CTLineGetGlyphRuns(line) as? [CTRun] ?? [] {
@@ -293,6 +314,20 @@ nonisolated struct DisplayNameGlyphRun {
             CTRunGetPositions(run, CFRange(), &positions)
             CTRunGetAdvances(run, CFRange(), &advances)
 
+            // An emoji run: bitmaps, kept apart from the letters. **Not a letter
+            // for Gummy either** — Discord counts neither its colour nor its
+            // place in the wave.
+            if CTFontGetSymbolicTraits(runFont).contains(.traitColorGlyphs) {
+                for index in 0..<count {
+                    colored.append(ColorGlyph(
+                        font: runFont,
+                        glyph: glyphs[index],
+                        origin: CGPoint(x: positions[index].x, y: positions[index].y + baseline)
+                    ))
+                }
+                continue
+            }
+
             for index in 0..<count {
                 let origin = CGPoint(x: positions[index].x, y: positions[index].y + baseline)
                 var placement = CGAffineTransform(translationX: origin.x, y: origin.y)
@@ -313,5 +348,16 @@ nonisolated struct DisplayNameGlyphRun {
             }
         }
         return letters
+    }
+}
+
+nonisolated extension DisplayNameGlyphRun {
+    /// Draws the name's emoji into a y-up context whose origin is the run's.
+    func drawColorGlyphs(in context: CGContext) {
+        for entry in colorGlyphs {
+            var glyph = entry.glyph
+            var origin = entry.origin
+            CTFontDrawGlyphs(entry.font, &glyph, &origin, 1, context)
+        }
     }
 }

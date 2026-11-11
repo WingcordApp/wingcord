@@ -99,6 +99,54 @@ struct MemberListAnchorTests {
         withExtendedLifetime((coordinator, window)) {}
     }
 
+    // MARK: The buttons on a row
+
+    @Test("A pinned row's buttons follow it through a scroll, and the list is scrolling while it moves")
+    func pinnedRowFollowsTheScroll() async throws {
+        // A report goes out on the next turn of the main queue, which a nested
+        // run loop inside this job never reaches: wait the way the app does.
+        func reported() async { try? await Task.sleep(for: .milliseconds(40)) }
+        let (coordinator, scrollView, window) = mounted()
+        var reports: [MemberRowHover?] = []
+        coordinator.noteHover = { reports.append($0) }
+        coordinator.setShowsRowActions(true)
+        coordinator.update(roster: roster(leading: 10, loaded: 150...250), presentationRevision: 0, topInset: 0)
+        settle()
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 200 * MemberRowGeometry.rowHeight))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        try? await Task.sleep(for: .milliseconds(300))
+
+        // The pointer is on member 1205's buttons: that row stays lit.
+        coordinator.setPinnedUser(UserID(rawValue: 1205))
+        await reported()
+        let pinned = try #require(reports.last ?? nil)
+        #expect(pinned.userID == UserID(rawValue: 1205))
+        let canvas = try #require(
+            scrollView.documentView?.subviews.compactMap { $0 as? MemberListCanvas }.first
+        )
+        #expect(!canvas.isScrolling)
+
+        // Three rows further: no gesture, no notification, only the rows moving.
+        let step = 3 * MemberRowGeometry.rowHeight
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 200 * MemberRowGeometry.rowHeight + step))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        // Moving counts as scrolling as soon as the move is heard of…
+        await reported()
+        #expect(canvas.isScrolling)
+        await reported()
+        // …the buttons went up with their row, to the point…
+        let followed = try #require(reports.last ?? nil)
+        #expect(followed.userID == UserID(rawValue: 1205))
+        #expect(
+            abs((pinned.rowFrame.minY - followed.rowFrame.minY) - step) < 0.5,
+            "moved \(pinned.rowFrame.minY - followed.rowFrame.minY), reports \(reports.count)"
+        )
+        // …and a tenth of a second after the last move the list is at rest.
+        try? await Task.sleep(for: .milliseconds(350))
+        #expect(!canvas.isScrolling)
+        withExtendedLifetime((coordinator, window)) {}
+    }
+
     @Test("At the top, rows arriving above are shown, not skipped")
     func topIsNotHeld() throws {
         let (coordinator, scrollView, window) = mounted()

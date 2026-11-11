@@ -177,6 +177,10 @@ nonisolated struct MemberEntry: Hashable, Sendable, Identifiable {
     var displayNameFont: DisplayNameFont?
     var status: PresenceStatus
     var isOnMobile: Bool
+    /// Online in a headset — Discord's `isVROnline`.
+    var isOnVR = false
+    /// The device an online mark is drawn as.
+    var client: PresenceClient { PresenceClient(isOnMobile: isOnMobile, isOnVR: isOnVR) }
     /// The line beneath the name — Discord's friends sidebar's (`MemberRowLine`).
     /// Nil collapses the row to one line.
     var line: MemberRowLine?

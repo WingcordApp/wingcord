@@ -946,7 +946,14 @@ nonisolated enum MemberRowPainter {
                 context: context
             )
         } else if hole != nil {
-            drawPresenceDot(entry.status, on: frame, context: context)
+            if let client = deviceMark(of: entry),
+               let mark = PresenceMarkArt.path(for: client, in: markRect(for: client, on: frame)) {
+                context.addPath(mark)
+                context.setFillColor(NSColor(entry.status.tint).cgColor)
+                context.fillPath(using: .evenOdd)
+            } else {
+                drawPresenceDot(entry.status, on: frame, context: context)
+            }
         }
     }
 
@@ -966,7 +973,31 @@ nonisolated enum MemberRowPainter {
             return CGPath(roundedRect: ring, cornerWidth: ring.height / 2, cornerHeight: ring.height / 2, transform: nil)
         }
         guard entry.status != .offline, entry.status != .unknown else { return nil }
+        // A phone or a headset cuts its own shape, as Discord's mask does.
+        if let client = deviceMark(of: entry) {
+            return PresenceMarkArt.silhouette(
+                for: client, in: markRect(for: client, on: frame), gap: statusCut
+            )
+        }
         return CGPath(ellipseIn: dotRect(on: frame).insetBy(dx: -statusCut, dy: -statusCut), transform: nil)
+    }
+
+    /// The phone or the headset, for somebody online on one — Discord's two
+    /// online masks. Every other status is the same mark wherever it is set.
+    private static func deviceMark(of entry: MemberEntry) -> PresenceClient? {
+        entry.status == .online && entry.client != .desktop ? entry.client : nil
+    }
+
+    /// Where a device mark sits: the dot's own corner, grown up for a phone and
+    /// to the leading side for a headset, so the foot and the trailing edge
+    /// stay where the dot's were.
+    private static func markRect(for client: PresenceClient, on avatarFrame: CGRect) -> CGRect {
+        let dot = dotRect(on: avatarFrame)
+        let size = PresenceMarkArt.size(for: client, side: dotSide)
+        return CGRect(
+            x: dot.maxX - size.width, y: dot.maxY - size.height,
+            width: size.width, height: size.height
+        )
     }
 
     /// How much air there is between a status and the face it's on.

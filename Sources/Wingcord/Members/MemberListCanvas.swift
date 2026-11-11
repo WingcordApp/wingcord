@@ -36,13 +36,42 @@ final class MemberListCanvas: NSView {
 
     var isScrolling = false {
         didSet {
-            guard isScrolling != oldValue, isScrolling, hoveredRow != nil else { return }
+            guard isScrolling != oldValue else { return }
+            guard isScrolling else {
+                // **The list has stopped under a pointer that never moved**, so
+                // no event will say which row it is on now. Asked, once.
+                rehoverFromPointer()
+                return
+            }
+            guard hoveredRow != nil else { return }
             let previous = hoveredRow
             hoveredRow = nil
             invalidateRow(previous)
             updatePlatePlayback()
             scheduleHoverReport()
         }
+    }
+
+    /// The rows moved under the column: a pinned row's buttons go with it.
+    ///
+    /// The buttons are placed from a frame this view reports in the scroll
+    /// view's space, which is only true for as long as nothing scrolls. A row
+    /// that stays lit through a scroll — the one whose buttons the pointer is
+    /// on — has to say where it is again every time it moves.
+    func viewportDidMove() {
+        guard pinnedRow != nil else { return }
+        scheduleHoverReport()
+    }
+
+    /// Lights the row the pointer is resting on, from where the pointer is.
+    private func rehoverFromPointer() {
+        guard let window, !isCovered else { return }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard visibleRect.contains(point) else {
+            clearHover()
+            return
+        }
+        updateHover(at: point)
     }
 
     /// Whether a row under the pointer carries the glass buttons. A role's popout
@@ -780,7 +809,11 @@ final class MemberListCanvas: NSView {
             refreshDance()
         }
         guard !isScrolling, !isCovered else { return }
-        let point = convert(event.locationInWindow, from: nil)
+        updateHover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    /// What the pointer at `point` is on: a card, a room, a row.
+    private func updateHover(at point: CGPoint) {
         // The Activity section first: it sits above the roster's rows.
         let card = bounds.contains(point) && point.y < activityHeight
             ? activity?.cardIndex(at: point.y)

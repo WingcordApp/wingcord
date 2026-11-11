@@ -105,6 +105,17 @@ final class MemberListCoordinator: NSObject {
     private var scrollEndedObserver: NSObjectProtocol?
     private var prefetchTask: Task<Void, Never>?
     private var liveScrollTimeout: Task<Void, Never>?
+    /// Whether a scroll gesture (or its momentum) is in progress, by the scroll
+    /// view's own account.
+    private var isLiveScrolling = false
+    /// Where the viewport last was, when it last moved, and the task that
+    /// waits for it to stop. See `noteViewportMotion`.
+    private var lastViewportOrigin = CGPoint(x: CGFloat.nan, y: CGFloat.nan)
+    private var lastViewportMove: CFTimeInterval = 0
+    /// Where this coordinator last put the viewport itself, until the move it
+    /// made has been seen. See `noteViewportMotion`.
+    private var ownMove: CGPoint?
+    private var motionSettle: Task<Void, Never>?
     private var rowReport: Task<Void, Never>?
     private var isTornDown = false
 
@@ -228,14 +239,22 @@ final class MemberListCoordinator: NSObject {
             object: scrollView,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.setScrolling(true) }
+            MainActor.assumeIsolated {
+                self?.isLiveScrolling = true
+                self?.setScrolling(true)
+            }
         }
         scrollEndedObserver = center.addObserver(
             forName: NSScrollView.didEndLiveScrollNotification,
             object: scrollView,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.setScrolling(false) }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.isLiveScrolling = false
+                // Still travelling: the settle task ends it when it stops.
+                if self.motionSettle == nil { self.setScrolling(false) }
+            }
         }
     }
 
@@ -263,6 +282,8 @@ final class MemberListCoordinator: NSObject {
         prefetchTask = nil
         impressionTask?.cancel()
         impressionTask = nil
+        motionSettle?.cancel()
+        motionSettle = nil
         liveScrollTimeout?.cancel()
         liveScrollTimeout = nil
         rowReport?.cancel()
@@ -355,6 +376,7 @@ final class MemberListCoordinator: NSObject {
         }
         defer {
             if let restoring, let scrollView {
+                ownMove = NSPoint(x: 0, y: restoring)
                 scrollView.contentView.scroll(to: NSPoint(x: 0, y: restoring))
                 scrollView.reflectScrolledClipView(scrollView.contentView)
                 positionCanvas()
@@ -444,6 +466,7 @@ final class MemberListCoordinator: NSObject {
             let top = -scrollView.contentInsets.top
             let bottom = max(top, documentView.frame.height + scrollView.contentInsets.bottom - clip.bounds.height)
             if clip.bounds.minY > bottom {
+                ownMove = NSPoint(x: 0, y: bottom)
                 clip.scroll(to: NSPoint(x: 0, y: bottom))
                 scrollView.reflectScrolledClipView(clip)
                 positionCanvas()
@@ -526,6 +549,7 @@ final class MemberListCoordinator: NSObject {
         let shift = moved[moved.count / 2]
         guard abs(shift) >= 0.5 else { return }
         let bottom = max(top, documentView.frame.height + scrollView.contentInsets.bottom - clip.bounds.height)
+        ownMove = NSPoint(x: 0, y: min(bottom, max(top, clip.bounds.minY + shift)))
         clip.scroll(to: NSPoint(x: 0, y: min(bottom, max(top, clip.bounds.minY + shift))))
         scrollView.reflectScrolledClipView(clip)
     }
@@ -549,6 +573,7 @@ final class MemberListCoordinator: NSObject {
         )
         if documentView?.frame.size != size { documentView?.setFrameSize(size) }
         if scrollingToTop {
+            ownMove = NSPoint(x: 0, y: -scrollView.contentInsets.top)
             scrollView.contentView.scroll(to: NSPoint(x: 0, y: -scrollView.contentInsets.top))
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
@@ -557,8 +582,51 @@ final class MemberListCoordinator: NSObject {
         scheduleRowReport()
     }
 
+    /// The rows have moved: the list is scrolling for as long as they keep
+    /// moving, whoever is moving them.
+    ///
+    /// **Movement, not the gesture's own notifications, is what "scrolling"
+    /// means here.** Live-scroll notifications bracket a gesture and its
+    /// momentum, but a long flick outlasts the three seconds they are trusted
+    /// for, a scroll bar drag and a jump send none, and the moment hover comes
+    /// back while the rows are still travelling its buttons are placed on a row
+    /// that is no longer there. So the scroll ends a tenth of a second after
+    /// the last row moved, and not before.
+    private func noteViewportMotion(origin: CGPoint) {
+        guard origin != lastViewportOrigin else { return }
+        // The first place the list is ever in is not a move to it.
+        let isFirst = lastViewportOrigin.y.isNaN
+        lastViewportOrigin = origin
+        canvas?.viewportDidMove()
+        // **A move this coordinator made is not somebody scrolling.** Holding
+        // the names still while rows arrive above them moves the viewport by
+        // exactly as much as the rows moved, so what is under the pointer has
+        // not changed — and in a busy server that happens every few seconds.
+        if isFirst { return }
+        if let own = ownMove, own == origin {
+            ownMove = nil
+            return
+        }
+        lastViewportMove = CACurrentMediaTime()
+        guard motionSettle == nil else { return }
+        setScrolling(true)
+        motionSettle = Task { [weak self] in
+            while true {
+                try? await Task.sleep(for: .milliseconds(60))
+                guard !Task.isCancelled, let self, !self.isTornDown else { return }
+                if CACurrentMediaTime() - self.lastViewportMove >= 0.1 { break }
+            }
+            guard let self else { return }
+            self.motionSettle = nil
+            if !self.isLiveScrolling { self.setScrolling(false) }
+        }
+    }
+
     private func viewportDidChange() {
         guard !isTornDown, let scrollView, let canvas else { return }
+        // First, whatever else this turns out to be: a change of width or a
+        // first layout returns early below, and the rows may have moved too.
+        noteViewportMotion(origin: scrollView.contentView.bounds.origin)
         let width = scrollView.contentView.bounds.width
         // The bootstrap case and the resize case are the same case: the width
         // the rows were laid out against is no longer the width on screen.
@@ -630,7 +698,13 @@ final class MemberListCoordinator: NSObject {
             liveScrollTimeout = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(3))
                 guard !Task.isCancelled else { return }
-                await MainActor.run { self?.setScrolling(false) }
+                await MainActor.run {
+                    guard let self else { return }
+                    // A gesture whose end never arrived. Not while the rows
+                    // are still moving, which the settle task answers for.
+                    self.isLiveScrolling = false
+                    if self.motionSettle == nil { self.setScrolling(false) }
+                }
             }
         } else {
             liveScrollTimeout?.cancel()

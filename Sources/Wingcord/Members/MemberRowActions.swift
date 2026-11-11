@@ -10,9 +10,16 @@ import WingcordCore
 /// view's own space, and this sits on it.
 struct MemberRowActionsOverlay: View {
     var hover: MemberRowHover?
-    /// Whether the pointer is on the buttons: what keeps the row lit once it has
-    /// left the row for them.
-    @Binding var isPointerOnActions: Bool
+    /// Whose buttons the pointer is on: what keeps that row lit once the pointer
+    /// has left it for them.
+    ///
+    /// **A person, not a flag.** The buttons are taken away while the list
+    /// scrolls, and a view taken away under the pointer is never told the
+    /// pointer left — so a flag stayed up, and the next row to be pointed at was
+    /// pinned as though its buttons were being held: the buttons then stood on
+    /// one row while the pointer was on another, and jumped between them. A
+    /// name can only pin the row it names, and it is cleared when its buttons go.
+    @Binding var pointerOnActionsOf: UserID?
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -42,7 +49,16 @@ struct MemberRowActionsOverlay: View {
                     }
                 }
                 .fixedSize()
-                .onHover { isPointerOnActions = $0 }
+                .onHover { inside in
+                    if inside {
+                        pointerOnActionsOf = hover.userID
+                    } else if pointerOnActionsOf == hover.userID {
+                        pointerOnActionsOf = nil
+                    }
+                }
+                .onDisappear {
+                    if pointerOnActionsOf == hover.userID { pointerOnActionsOf = nil }
+                }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.trailing, Self.trailing)
                 .offset(y: hover.rowFrame.midY - Self.side / 2)

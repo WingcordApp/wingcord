@@ -38,6 +38,11 @@ struct SidebarChannelRow: View {
     /// where a flag already true would leave the first timer to end the second
     /// play early.
     @State private var playToken = 0
+    /// How long the play `playToken` started runs: a whole cycle from a press,
+    /// what is left of the current one when the pointer leaves.
+    @State private var playLength: Double = DisplayNameEffectLayers.cycle
+    /// When the pointer arrived, which is when the effect under it began.
+    @State private var hoverBegan: Date?
 
     var body: some View {
             VStack(alignment: .leading, spacing: Spacing.tight) {
@@ -138,13 +143,16 @@ struct SidebarChannelRow: View {
             .onHover { hovering in
                 guard isHovering != hovering else { return }
                 isHovering = hovering
+                noteNameHover(hovering)
             }
             // Only where there is a menu to raise. See `openMenu`.
             .modifier(SecondaryClickModifier(openMenu: openMenu))
             .animation(motion.fadeQuick, value: isHovering)
             // Being chosen plays the name's effect once. See `playToken`.
             .onChange(of: isSelected) { _, selected in
-                if selected, channel.nameStyle?.isPlain == false { playToken &+= 1 }
+                guard selected, let style = channel.nameStyle, !style.isPlain else { return }
+                playLength = style.cycle
+                playToken &+= 1
             }
             // **The effect plays once and then stops.** A style is something
             // its owner chose and worth seeing; a column of them all looping at
@@ -152,7 +160,7 @@ struct SidebarChannelRow: View {
             // is still.
             .task(id: playToken) {
             guard playToken > 0 else { return }
-            try? await Task.sleep(for: .seconds(DisplayNameEffectLayers.cycle))
+            try? await Task.sleep(for: .seconds(playLength))
             guard !Task.isCancelled else { return }
             playToken = 0
         }
@@ -164,6 +172,26 @@ struct SidebarChannelRow: View {
             }
             if let openChat { Button("Open the chat", action: openChat) }
         }
+    }
+
+    /// The pointer arriving on a styled name, or leaving it.
+    ///
+    /// **Leaving the open conversation's row lets the effect finish the turn it
+    /// is on, and then it stops** — Discord's row loops only under the pointer
+    /// (`loop: hovered`), and an animation that stops looping runs to the end
+    /// of its cycle. Leaving any other row drops the effect at once, with the
+    /// colours, as Discord's does.
+    private func noteNameHover(_ hovering: Bool) {
+        guard let style = channel.nameStyle, !style.isPlain else { return }
+        if hovering {
+            hoverBegan = .now
+            return
+        }
+        guard isSelected, let began = hoverBegan else { return }
+        let cycle = style.cycle
+        let into = Date.now.timeIntervalSince(began).truncatingRemainder(dividingBy: cycle)
+        playLength = max(0.05, cycle - into)
+        playToken &+= 1
     }
 
     /// How full the room is, and how long it has been going.
@@ -267,7 +295,12 @@ struct SidebarChannelRow: View {
                         pointSize: Typeface.directMessageNameSize,
                         // Moving while the pointer is on it, and once on a
                         // press. Reduce Motion still wins inside.
-                        animates: isHovering || playToken > 0
+                        animates: isHovering || playToken > 0,
+                        // **Discord's row, state for state**: the face alone at
+                        // rest, the colours under the pointer and on the open
+                        // conversation.
+                        showsEffect: isHovering || isSelected || playToken > 0,
+                        plainOpacity: 0.9
                     )
                     .lineLimit(1)
                     if let tag = channel.tag {
@@ -300,7 +333,7 @@ struct SidebarChannelRow: View {
                     }
                     .foregroundStyle(channel.isUnread ? Ink.primary : Ink.secondary)
                 } else if let line = channel.activityLine {
-                    ActivityLineView(line: line)
+                    ActivityLineView(line: line, playsEmoji: isHovering)
                 }
             }
         } else {
@@ -353,7 +386,7 @@ struct SidebarChannelRow: View {
 /// ground — at the size a sidebar row can hold. Drawn in SwiftUI because this
 /// surface is composed; `MemberRowPainter` draws the same thing on a canvas, and
 /// the two agree because they are handed the same two fields.
-private struct SidebarTagChip: View {
+struct SidebarTagChip: View {
     var text: String
     var badgeURL: URL?
 
@@ -442,6 +475,12 @@ private struct SidebarNameplate: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
+            // **The box, whatever the palette.** The wash below used to be what
+            // held this open, and a plate with no colour has no wash: the stack
+            // shrank to the strip's own width and the row centred it, so the
+            // art stopped a hundred points short of the trailing edge. The now
+            // bar's plate learned the same thing first — see `NowBarPlate`.
+            Color.clear
             if let value = palette.colorValue {
                 LinearGradient(
                     stops: [
@@ -510,7 +549,8 @@ private struct SidebarRowLeading: View {
                     if channel.isTyping {
                         TypingPill(tint: status.tint, height: 10).offset(x: 3, y: 1)
                     } else {
-                        PresenceDot(status: status, side: 10).offset(x: 1, y: 1)
+                        PresenceDot(status: status, side: 10, client: channel.statusClient)
+                            .offset(x: 1, y: 1)
                     }
                 }
             }

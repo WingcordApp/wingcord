@@ -169,7 +169,10 @@ private struct OverlayPersonRow: View {
                     side: Metrics.avatarRow
                 )
                 .overlay(alignment: .bottomTrailing) {
-                    PresenceDot(status: person.status, side: 10, isOnMobile: person.isOnMobile)
+                    PresenceDot(
+                        status: person.status, side: 10,
+                        client: person.isOnMobile ? .mobile : .desktop
+                    )
                         .offset(x: 2, y: 2)
                 }
 

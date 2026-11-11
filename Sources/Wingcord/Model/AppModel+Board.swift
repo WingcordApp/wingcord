@@ -414,12 +414,27 @@ extension AppModel {
     /// status — has no record, and opening the page for one anyway was a
     /// spinner that never ended.
     func gameProfileOpener(for applicationID: ApplicationID?) -> (() -> Void)? {
-        guard let applicationID, let game = games[applicationID], !game.isProfileDisabled
-        else { return nil }
-        return { [weak self] in self?.openGameProfile(applicationID) }
+        guard let applicationID else { return nil }
+        let gameID = canonicalGameID(for: applicationID)
+        guard let game = games[gameID], !game.isProfileDisabled else { return nil }
+        return { [weak self] in self?.openGameProfile(gameID) }
+    }
+
+    /// The game an application is about — Discord's `getCanonicalGameId`.
+    ///
+    /// **An activity's application is not always the game.** A title played on
+    /// a PlayStation or an Xbox arrives under the application the console's
+    /// integration published it as, and that one is no game: `/games` has
+    /// nothing for it, and its record names the real game in `linked_games`.
+    /// Looking the activity's own id up and stopping there is why a console
+    /// game's card had nothing to click.
+    func canonicalGameID(for applicationID: ApplicationID) -> ApplicationID {
+        if games[applicationID] != nil { return applicationID }
+        return widgetApplications[applicationID]?.primaryGameID ?? applicationID
     }
 
     func openGameProfile(_ gameID: ApplicationID) {
+        let gameID = canonicalGameID(for: gameID)
         gameProfileRequest = GameProfileRequest(gameID: gameID)
         sessionController.loadGameProfile(gameID)
     }

@@ -410,7 +410,7 @@ extension AppModel {
     /// Everything in the table but the people: the channels, the roles, the
     /// servers and the games. Memoized on what those move with, none of which
     /// is a message arriving.
-    private func mentionContextWithoutPeople(guildID: GuildID?) -> MentionContext {
+    func mentionContextWithoutPeople(guildID: GuildID?) -> MentionContext {
         let key = MentionMemoKey(
             guildID: guildID,
             identityRevision: 0,

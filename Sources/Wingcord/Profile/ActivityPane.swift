@@ -58,6 +58,14 @@ struct CurrentActivityCard: View {
     /// Rich Presence builder's wells too (`EditablePresenceCard`).
     static let artworkSide: CGFloat = 60
     static let badgeSide: CGFloat = 22
+    /// The art's box: square, or Discord's one exception — a poster for
+    /// Crunchyroll, two wide by three tall (`.aspectRatio.crunchyroll`), since
+    /// what it publishes is a show's key art and a square cuts its title off.
+    private var artworkSize: CGSize {
+        activity.isCrunchyroll
+            ? CGSize(width: Self.artworkSide, height: Self.artworkSide * 1.5)
+            : CGSize(width: Self.artworkSide, height: Self.artworkSide)
+    }
     /// Concentric with the card around it: its 24-point corner less the
     /// 16-point margin the card sits in. Discord's own is 8.
     static let corner = Radius.row
@@ -140,8 +148,10 @@ struct CurrentActivityCard: View {
                 // **The application's own icon where the presence has no
                 // artwork.** Rich presence art is optional and plenty of games
                 // publish none — Roblox publishes a name and nothing else.
-                url: activity.largeArtworkURL(side: Self.artworkSide) ?? applicationIconURL,
-                side: Self.artworkSide,
+                // Asked for at the box's longer side, so a poster is not a
+                // square's worth of pixels stretched down it.
+                url: activity.largeArtworkURL(side: artworkSize.height) ?? applicationIconURL,
+                side: artworkSize.height,
                 bucket: .artwork
             ) {
                 ZStack {
@@ -152,24 +162,15 @@ struct CurrentActivityCard: View {
                 }
             }
             .aspectRatio(contentMode: .fill)
-            .frame(width: Self.artworkSide, height: Self.artworkSide)
+            .frame(width: artworkSize.width, height: artworkSize.height)
             .clipShape(.rect(cornerRadius: Self.corner, style: .continuous))
 
             if let small = activity.smallArtworkURL(side: Self.badgeSide) {
-                RemoteImage(url: small, side: Self.badgeSide, bucket: .thumbnail) {
-                    Circle().fill(Palette.surfaceRaised)
-                }
-                .frame(width: Self.badgeSide, height: Self.badgeSide)
-                .clipShape(.circle)
-                // The ring is what separates the badge from the art under it.
-                // Without it a dark mark on dark box art disappears.
-                .overlay { Circle().strokeBorder(Palette.canvas, lineWidth: 2) }
-                .offset(x: 6, y: 6)
-                .help(activity.smallText ?? "")
-                .accessibilityLabel(Text(activity.smallText ?? "Publisher"))
+                ActivityArtBadge(url: small, side: Self.badgeSide, label: activity.smallText)
+                    .offset(x: 6, y: 6)
             }
         }
-        .frame(width: Self.artworkSide, height: Self.artworkSide)
+        .frame(width: artworkSize.width, height: artworkSize.height)
         .help(activity.largeText ?? "")
     }
 

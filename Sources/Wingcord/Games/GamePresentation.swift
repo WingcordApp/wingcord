@@ -41,6 +41,9 @@ struct GamePresentation: Equatable, Sendable {
     var accountLink: GameAccountLink?
     var community: GameCommunityCard?
     var reviews: GameReviews?
+    /// The App Store and Play Store lines, each with its page — see
+    /// `Game.mobileStoreReviews`.
+    var mobileReviews: [MobileStoreReview] = []
     /// The game's Steam page, which the Reviews card's Steam lines open — and
     /// which decides whether there are any.
     var steamURL: URL?
@@ -73,6 +76,7 @@ struct GamePresentation: Equatable, Sendable {
             && lhs.accountLink == rhs.accountLink
             && lhs.community == rhs.community
             && lhs.reviews == rhs.reviews
+            && lhs.mobileReviews == rhs.mobileReviews
             && lhs.steamURL == rhs.steamURL
             && lhs.openCriticURL == rhs.openCriticURL
             && lhs.announcements == rhs.announcements
@@ -157,17 +161,55 @@ struct GameCommunityCard: Hashable, Sendable {
     var isJoined: Bool
 }
 
-/// One post from the game's own server, digested down to a card.
+/// One post from the game's own server, digested down to a card — Discord's
+/// own digest (`pp` in `05ea9e44…`), field for field.
 ///
-/// **A digest, not a rendering.** The transcript paints components v2 into a
-/// canvas of absolutely-placed slots; a horizontally-scrolling shelf card is not
-/// that surface and does not want a container's accent rule or its buttons. What
-/// a card needs is the first picture, the words, when it was posted and how many
-/// people reacted — and every one of those is reachable without the canvas.
+/// **A digest of the post, rendered.** The words stay markdown, and the card
+/// draws them with the app's prose renderer: bold, links, mentions and emoji
+/// as they were written. What is digested is the shape: the post's opening
+/// heading becomes the card's title, its first picture (a gallery's, an
+/// attachment's, a video's first frame, an embed's) becomes the card's
+/// picture, and a poll or a link's embed gets the card of its own Discord gives
+/// it.
 struct GameAnnouncementCard: Hashable, Sendable, Identifiable {
     var id: MessageID
-    var imageURL: URL?
-    var text: String
+    /// The post's own heading, when its first line is one (`#` to `###`).
+    var title: String?
+    /// Everything after the title, as markdown.
+    var body: String
+    var media: Media?
     var postedAt: Date
     var reactionCount: Int
+    var poll: PollDigest?
+    /// Where the words came from, when they are a link's embed rather than the
+    /// post's own — Discord's `embedSource`.
+    var source: Source?
+    /// The words read aloud: the title and the body with their marks folded.
+    var spokenText: String
+
+    /// The card's picture, already sized for it.
+    struct Media: Hashable, Sendable {
+        var url: URL
+        /// Width over height of the asset itself. The card's frame is 16∶9
+        /// whatever this is; it is what the request to the media proxy asks
+        /// for, so the proxy neither crops nor stretches.
+        var aspect: Double
+    }
+
+    struct PollDigest: Hashable, Sendable {
+        var question: String
+        /// The first three, as Discord's card shows.
+        var answers: [String]
+        /// How many more there are.
+        var more: Int
+        var expiresAt: Date?
+        var isClosed: Bool
+    }
+
+    struct Source: Hashable, Sendable {
+        var url: String?
+        var authorName: String?
+        var authorIconURL: URL?
+        var colorValue: UInt32?
+    }
 }

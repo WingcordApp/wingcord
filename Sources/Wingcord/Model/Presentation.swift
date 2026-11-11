@@ -415,6 +415,8 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     var monogram: String?
     /// Drawn on the avatar. Nil for a group DM, which has no single presence.
     var status: PresenceStatus?
+    /// The device an online mark is drawn as — a phone or a headset.
+    var statusClient: PresenceClient = .desktop
     /// Whether the other person is typing to the reader — the dots that take
     /// the presence dot's place, in its colour.
     var isTyping = false
@@ -621,6 +623,12 @@ struct NowBarPresentation: Hashable, Sendable {
     /// The same artwork moving, played under the pointer.
     var nameplateAnimatedURL: URL?
     var nameplatePalette: NameplatePalette = .none
+    /// The reader's own display name style — drawn still, and moving under the
+    /// pointer, as Discord's account panel draws it.
+    var nameStyle: DisplayNameStyle?
+    /// The server tag the reader wears, and its badge.
+    var tag: String?
+    var tagBadgeURL: URL?
 }
 
 /// Everything the detail column needs to decide what it is showing.

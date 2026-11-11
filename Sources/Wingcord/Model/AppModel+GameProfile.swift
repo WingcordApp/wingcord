@@ -32,6 +32,7 @@ extension AppModel {
             accountLink: accountLink(for: gameID),
             community: communityCard(for: gameID, game: game),
             reviews: game.reviews,
+            mobileReviews: game.mobileStoreReviews,
             steamURL: game.steamStoreURL,
             openCriticURL: game.openCriticURL,
             announcements: (announcements?.messages ?? []).compactMap(Self.announcementCard),
@@ -185,16 +186,25 @@ extension AppModel {
         )
     }
 
-    /// One announcement, digested.
+    /// One announcement, digested — Discord's `pp` (`05ea9e44…`), step for step.
     ///
-    /// Walks the message's component tree for the first picture and for the
-    /// words, and falls back to the plain `content` and the attachments for a
-    /// post that predates components v2. Nil for a post with neither: a card
-    /// carrying a date and nothing else says less than no card.
+    /// **The words**: a components post's text displays, joined line by line; a
+    /// plain post's content — or, when the content is nothing but a link, the
+    /// link's embed, as `# title` and its description. **The title** is the
+    /// first line when it is a heading. **The picture** is the first one of: a
+    /// gallery's first item, an image attachment, a video attachment's first
+    /// frame, an embed's video thumbnail, image or thumbnail. A forward is
+    /// digested from what it carries. Nil for a post that has nothing to show.
     static func announcementCard(_ message: Message) -> GameAnnouncementCard? {
-        var image: URL?
-        var text: [String] = []
+        let forwarded = message.forwarded
+        let content = forwarded?.content ?? message.content
+        let attachments = forwarded?.attachments ?? message.attachments
+        let embeds = forwarded?.embeds ?? message.embeds
+        let components = forwarded == nil ? message.displayComponents : []
 
+        var texts: [String] = []
+        var galleryMedia: Embed.Media?
+        var sectionThumbnail: Embed.Media?
         func walk(_ nodes: [DisplayComponent]) {
             for node in nodes {
                 switch node {
@@ -202,45 +212,160 @@ extension AppModel {
                     walk(children)
                 case .section(let children, let thumbnail):
                     walk(children)
-                    if image == nil, let thumbnail { image = Self.mediaURL(thumbnail) }
+                    if sectionThumbnail == nil { sectionThumbnail = thumbnail }
                 case .text(let value):
-                    if !value.isEmpty { text.append(value) }
+                    if !value.isEmpty { texts.append(value) }
                 case .gallery(let items):
-                    if image == nil, let first = items.first { image = Self.mediaURL(first) }
-                // A separator has nothing to say in a digest, and a row of
+                    if galleryMedia == nil { galleryMedia = items.first(where: { !$0.isSpoiler }) }
+                // A separator has nothing to say on a card, and a row of
                 // buttons is a control this card is not.
                 case .separator, .row:
                     continue
                 }
             }
         }
-        walk(message.displayComponents)
+        walk(components)
 
-        if text.isEmpty, !message.content.isEmpty { text.append(message.content) }
-        if image == nil {
-            image = message.attachments.first(where: \.isImage)
-                .flatMap { URL(string: $0.proxyURL.isEmpty ? $0.url : $0.proxyURL) }
-                ?? message.embeds.compactMap { $0.image ?? $0.thumbnail }.first
-                    .flatMap(Self.mediaURL)
+        // The words.
+        var words: String
+        var wordsFromEmbed = false
+        if !components.isEmpty {
+            words = texts.joined(separator: "\n")
+        } else {
+            words = content
+            let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isLoneLink = trimmed.wholeMatch(of: /https?:\/\/\S+/) != nil
+            if trimmed.isEmpty || isLoneLink, let embed = embeds.first {
+                let parts = [embed.title.map { "# \($0)" }, embed.description].compactMap { $0 }
+                if !parts.isEmpty {
+                    words = parts.joined(separator: "\n")
+                    wordsFromEmbed = true
+                }
+            }
         }
 
-        let joined = text.joined(separator: "\n\n")
-        guard !joined.isEmpty || image != nil else { return nil }
+        // The title, when the first line is a heading.
+        var title: String?
+        var body = words
+        let firstBreak = words.firstIndex(of: "\n")
+        let firstLine = firstBreak.map { String(words[..<$0]) } ?? words
+        if let heading = firstLine.wholeMatch(of: /#{1,3}\s+(.+)/) {
+            title = String(heading.1).trimmingCharacters(in: .whitespaces)
+            body = firstBreak.map { String(words[words.index(after: $0)...]) } ?? ""
+            body = String(body.drop(while: \.isWhitespace))
+        }
+
+        let media = announcementMedia(
+            gallery: galleryMedia,
+            attachments: attachments,
+            embeds: embeds,
+            sectionThumbnail: sectionThumbnail
+        )
+        let poll = message.poll.map { poll in
+            GameAnnouncementCard.PollDigest(
+                question: poll.question,
+                answers: poll.answers.prefix(3).map(\.text),
+                more: max(0, poll.answers.count - 3),
+                expiresAt: poll.expiresAt,
+                isClosed: poll.isClosed
+            )
+        }
+        let source: GameAnnouncementCard.Source? = {
+            guard wordsFromEmbed, let embed = embeds.first else { return nil }
+            let found = GameAnnouncementCard.Source(
+                url: embed.url,
+                authorName: embed.author?.name,
+                authorIconURL: (embed.author?.iconURL).flatMap(URL.init(string:)),
+                colorValue: embed.colorValue
+            )
+            return found.url == nil && found.authorName == nil && embed.footer == nil
+                && embed.providerName == nil ? nil : found
+        }()
+
+        guard title != nil || !body.isEmpty || media != nil || poll != nil else { return nil }
+        let spoken = [title.map(excerpt), body.isEmpty ? nil : excerpt(body), poll?.question]
+            .compactMap { $0 }
+            .joined(separator: ". ")
         return GameAnnouncementCard(
             id: message.id,
-            imageURL: image,
-            // **The markdown is reduced rather than rendered.** These posts
-            // are headed with `##` and studded with links; a shelf card three
-            // hundred points wide has no room for a heading scale, and leaving
-            // the marks in prints "## Map Tools Update" on the card.
-            text: Self.excerpt(joined),
+            title: title,
+            body: body,
+            media: media,
             postedAt: message.sentAt,
-            reactionCount: message.reactions.reduce(0) { $0 + $1.count }
+            reactionCount: message.reactions.reduce(0) { $0 + $1.count },
+            poll: poll,
+            source: source,
+            spokenText: spoken
         )
     }
 
-    private static func mediaURL(_ media: Embed.Media) -> URL? {
-        URL(string: media.proxyURL ?? media.url)
+    /// The card's picture, in Discord's order of preference.
+    private static func announcementMedia(
+        gallery: Embed.Media?,
+        attachments: [Attachment],
+        embeds: [Embed],
+        sectionThumbnail: Embed.Media?
+    ) -> GameAnnouncementCard.Media? {
+        if let gallery {
+            return cardMedia(gallery.proxyURL ?? gallery.url, width: gallery.width, height: gallery.height)
+        }
+        if let image = attachments.first(where: { $0.isImage && !$0.isSpoiler }) {
+            return cardMedia(image.proxyURL.isEmpty ? image.url : image.proxyURL, width: image.width, height: image.height)
+        }
+        // **A video is shown by its first frame**, which the media proxy cuts
+        // when it is asked for a picture format — the request Discord makes for
+        // this card. Without this a post whose picture is a video had none.
+        if let video = attachments.first(where: { $0.isVideo && !$0.isSpoiler }), !video.proxyURL.isEmpty {
+            return cardMedia(video.proxyURL, width: video.width, height: video.height)
+        }
+        if let embed = embeds.first(where: { $0.video != nil && $0.thumbnail != nil }), let thumb = embed.thumbnail {
+            return cardMedia(thumb.proxyURL ?? thumb.url, width: thumb.width, height: thumb.height)
+        }
+        if let image = embeds.lazy.compactMap(\.image).first {
+            return cardMedia(image.proxyURL ?? image.url, width: image.width, height: image.height)
+        }
+        if let thumb = embeds.lazy.compactMap(\.thumbnail).first {
+            return cardMedia(thumb.proxyURL ?? thumb.url, width: thumb.width, height: thumb.height)
+        }
+        if let sectionThumbnail {
+            return cardMedia(
+                sectionThumbnail.proxyURL ?? sectionThumbnail.url,
+                width: sectionThumbnail.width, height: sectionThumbnail.height
+            )
+        }
+        return nil
+    }
+
+    /// The width a card's picture is fetched at: Discord's 364 points, at two
+    /// pixels a point.
+    static let announcementPictureWidth = 728
+
+    /// A picture asked of the media proxy at the card's size, as WebP — Discord's
+    /// `nB`. Only Discord's own hosts are given the parameters; anything else is
+    /// fetched as it is.
+    static func cardMedia(_ raw: String, width: Int?, height: Int?) -> GameAnnouncementCard.Media? {
+        guard var parts = URLComponents(string: raw), let host = parts.host else { return nil }
+        var aspect = 16.0 / 9
+        if let width, let height, width > 0, height > 0 { aspect = Double(width) / Double(height) }
+        if host == "media.discordapp.net" || host.hasSuffix(".discordapp.net") {
+            let wide = announcementPictureWidth
+            var items = parts.queryItems ?? []
+            items.removeAll { ["format", "width", "height"].contains($0.name) }
+            items += [
+                URLQueryItem(name: "format", value: "webp"),
+                URLQueryItem(name: "width", value: String(wide)),
+                URLQueryItem(name: "height", value: String(Int((Double(wide) / aspect).rounded()))),
+            ]
+            parts.queryItems = items
+        }
+        guard let url = parts.url else { return nil }
+        return GameAnnouncementCard.Media(url: url, aspect: aspect)
+    }
+
+    /// A mention table for one server — the announcements' own — so a role
+    /// mention in a post names the role where this session knows the server.
+    func mentionContext(inGuild guildID: GuildID?) -> MentionContext {
+        mentionContextWithoutPeople(guildID: guildID)
     }
 
     /// Markdown reduced to the words a card can carry.

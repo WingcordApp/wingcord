@@ -206,130 +206,6 @@ struct GameMediaStage: View {
 
 // MARK: - Announcements
 
-/// Recent posts from the game's own server.
-struct GameAnnouncementsShelf: View {
-    var announcements: [GameAnnouncementCard]
-    /// Opens the whole channel. **Always available now**: the reader does not
-    /// have to be in the server, because opening it starts a preview — see
-    /// `AppModel.openAnnouncement`.
-    var openChannel: (() -> Void)?
-    /// Opens one post where it was made.
-    var openMessage: ((MessageID) -> Void)?
-
-    private static let cardWidth: CGFloat = 220
-    private static let cardHeight: CGFloat = 240
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.base) {
-            HStack {
-                Text("Community Announcements")
-                    .font(.system(.headline))
-                    .foregroundStyle(InkColor.primary)
-                Spacer(minLength: Spacing.base)
-                if let openChannel {
-                    Button(action: openChannel) {
-                        HStack(spacing: 3) {
-                            Text("View All")
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 9, weight: .bold))
-                        }
-                        .font(.system(.caption, weight: .medium))
-                        .foregroundStyle(InkColor.secondary)
-                        .padding(.horizontal, Spacing.base)
-                        .padding(.vertical, 4)
-                        .contentShape(.capsule)
-                    }
-                    .buttonStyle(.plain)
-                    .interactiveChrome()
-                }
-            }
-
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: Spacing.snug) {
-                    ForEach(announcements) { announcement in
-                        AnnouncementCard(
-                            announcement: announcement,
-                            open: openMessage.map { open in { open(announcement.id) } }
-                        )
-                        .frame(width: Self.cardWidth, height: Self.cardHeight)
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-            .scrollIndicators(.never)
-        }
-    }
-}
-
-private struct AnnouncementCard: View {
-    var announcement: GameAnnouncementCard
-    /// Nil only where the post carries no channel to open, which the digest
-    /// route has never yet answered without. A card with no destination is drawn
-    /// as a card, not as a dead button — §5.5.
-    var open: (() -> Void)?
-
-    var body: some View {
-        if let open {
-            Button(action: open) { card }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityHint(Text("Opens this post in the game's server"))
-        } else {
-            card
-        }
-    }
-
-    private var card: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let url = announcement.imageURL {
-                Color.clear
-                    .frame(height: 96)
-                    .background {
-                        RemoteImage(url: url, side: 440, bucket: .artwork) {
-                            Palette.surfaceRaised
-                        }
-                        .aspectRatio(contentMode: .fill)
-                    }
-                    .clipped()
-            }
-            VStack(alignment: .leading, spacing: Spacing.base) {
-                // **No `.fixedSize`, and that is what keeps the date on the
-                // card.** A fixed size takes the text's ideal height whatever it
-                // was offered, so a nine-line post grew past a 240-point card
-                // and pushed its own footer over the edge. Given the height it
-                // actually has, a `Text` fills it and truncates.
-                Text(announcement.text)
-                    .font(.system(.caption))
-                    .foregroundStyle(InkColor.secondary)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 0)
-                HStack(spacing: Spacing.base) {
-                    Text(announcement.postedAt, format: .dateTime.month(.wide).day().year())
-                        .font(.system(size: 10))
-                        .foregroundStyle(InkColor.tertiary)
-                    if announcement.reactionCount > 0 {
-                        HStack(spacing: 3) {
-                            Image(systemName: "face.smiling")
-                                .font(.system(size: 9))
-                            Text(announcement.reactionCount, format: .number)
-                                .font(.system(size: 10).monospacedDigit())
-                        }
-                        .foregroundStyle(InkColor.tertiary)
-                    }
-                }
-            }
-            .padding(Spacing.snug)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.thinMaterial, in: .rect(cornerRadius: Radius.glass))
-        .clipShape(.rect(cornerRadius: Radius.glass, style: .continuous))
-        .accessibilityElement(children: .combine)
-    }
-}
-
-// MARK: - Similar games
-
 struct GameSimilarShelf: View {
     var games: [BoardGame]
 
@@ -671,6 +547,9 @@ struct GameReviewsSection: View {
     /// The game's Steam page — the lines open it, so without one there are none.
     var steamURL: URL?
     var openCriticURL: URL?
+    /// The App Store's and Play Store's lines, after Steam's and before
+    /// OpenCritic's — Discord's order.
+    var mobileReviews: [MobileStoreReview] = []
 
     private var steamRows: [GameReviews.SteamRow] {
         reviews.steamRows(hasStorePage: steamURL != nil)
@@ -682,7 +561,7 @@ struct GameReviewsSection: View {
 
     var body: some View {
         let rows = steamRows
-        if !rows.isEmpty || openCritic != nil {
+        if !rows.isEmpty || openCritic != nil || !mobileReviews.isEmpty {
             AsideSection(title: "Reviews") {
                 VStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
@@ -692,8 +571,14 @@ struct GameReviewsSection: View {
                                 .help(row.sentence)
                         }
                     }
+                    ForEach(Array(mobileReviews.enumerated()), id: \.element.id) { index, review in
+                        if index > 0 || !rows.isEmpty { divider }
+                        GameReviewLine(url: review.url, label: "Open \(review.store.title)") {
+                            storeLine(review)
+                        }
+                    }
                     if let openCritic, let openCriticURL {
-                        if !rows.isEmpty { divider }
+                        if !rows.isEmpty || !mobileReviews.isEmpty { divider }
                         GameReviewLine(url: openCriticURL, label: "Open OpenCritic page") {
                             openCriticLine(openCritic)
                         }
@@ -735,6 +620,33 @@ struct GameReviewsSection: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("Steam, \(row.title): \(row.verdict.title). \(row.sentence)"))
+    }
+
+    /// A phone store's line: its mark and name, then the average out of five
+    /// and how many rated — Discord's `l5`.
+    private func storeLine(_ review: MobileStoreReview) -> some View {
+        HStack(spacing: Spacing.tight) {
+            BrandGlyph(service: review.store == .appStore ? "appstore" : "googleplay")
+                .fill(InkColor.primary)
+                .frame(width: 18, height: 18)
+                .accessibilityHidden(true)
+            Text(review.store.title)
+                .font(.system(.body, weight: .medium))
+                .foregroundStyle(InkColor.primary)
+            Spacer(minLength: Spacing.base)
+            Text(review.ratingText)
+                .font(.system(.subheadline, weight: .semibold))
+                .foregroundStyle(InkColor.primary)
+                .monospacedDigit()
+            Text(review.countText)
+                .font(.system(.subheadline, weight: .medium))
+                .foregroundStyle(InkColor.secondary)
+                .monospacedDigit()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(
+            "\(review.store.title): \(review.ratingText), \(review.count.formatted(.number)) ratings"
+        ))
     }
 
     private func openCriticLine(_ critic: GameReviews.OpenCriticReviews) -> some View {

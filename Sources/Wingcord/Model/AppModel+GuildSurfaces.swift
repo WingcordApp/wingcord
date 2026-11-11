@@ -298,6 +298,20 @@ extension AppModel {
         return .none
     }
 
+    /// Opens one of a server's own pages, from that server's channel list.
+    ///
+    /// **The list says which server, and that server is selected first.** The
+    /// sidebar's Servers page keeps the last server's channels on it after the
+    /// reader has gone Home — the Messages and Servers switch only moves the
+    /// pages — so its rows can be clicked while no server is selected at all.
+    /// A server page is drawn only for the selected server, and a row clicked
+    /// from that state lit up and opened nothing: Alex's "I can select them in
+    /// the channel list, but nothing happens".
+    func openSurface(_ surface: GuildSurface, inGuild guildID: GuildID?) {
+        if let guildID, guildID != selectedGuildID { selectGuild(guildID) }
+        openSurface(surface)
+    }
+
     /// Opens one of the server's own pages.
     func openSurface(_ surface: GuildSurface) {
         guard openGuildSurface != surface else { return }

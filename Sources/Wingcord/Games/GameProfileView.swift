@@ -200,7 +200,9 @@ struct GameProfileView: View {
             GameAnnouncementsShelf(
                 announcements: game.announcements,
                 openChannel: viewAllAction,
-                openMessage: openAnnouncementAction
+                openMessage: openAnnouncementAction,
+                mentions: model.mentionContext(inGuild: game.announcementsChannel?.guildID),
+                openLink: { model.openLink($0) }
             )
         }
     }
@@ -261,7 +263,8 @@ struct GameProfileView: View {
             GameReviewsSection(
                 reviews: game.reviews ?? GameReviews(),
                 steamURL: game.steamURL,
-                openCriticURL: game.openCriticURL
+                openCriticURL: game.openCriticURL,
+                mobileReviews: game.mobileReviews
             )
             if !game.details.isEmpty || !game.links.isEmpty {
                 GameDetailsSection(rows: game.details, links: game.links)

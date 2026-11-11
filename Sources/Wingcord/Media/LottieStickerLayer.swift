@@ -26,9 +26,21 @@ enum LottieStickerLayer {
         // rasterises its vectors at `screenScale`, which starts at 1.
         layer.contentsScale = scale
         layer.screenScale = scale
-        // The automatic engine may swap roots once it has inspected the file,
-        // and the replacement is laid out afresh.
-        layer.animationLayerDidLoad = { layer, _ in fit(layer) }
+        // **The automatic engine may swap roots once it has inspected the
+        // file, and the replacement arrives unfitted.** A sticker the Core
+        // Animation engine cannot play — a gradient fill with a trim path, as
+        // Doggo Replies' "Thanks" has — is rebuilt on the Main Thread engine
+        // the first time it is displayed, and the new root is the composition
+        // at its own 320 points, centred on the layer's corner: a sticker six
+        // times its cell, most of it outside it.
+        //
+        // `animationLayerDidLoad` cannot fix that: Lottie calls it BEFORE it
+        // has stored or added the new root (`makeAnimationLayer`), so a fit
+        // from there finds no root and does nothing — which is what this did.
+        // What Lottie does next is ask the layer to lay itself out, and that is
+        // the moment the root exists: the layout manager fits it, in the same
+        // commit the swap happens in.
+        layer.layoutManager = LottieStickerFitter.shared
         return layer
     }
 
@@ -50,6 +62,21 @@ enum LottieStickerLayer {
         root.position = CGPoint(x: bounds.midX, y: bounds.midY)
         root.transform = CATransform3DMakeScale(scale, scale, 1)
         CATransaction.commit()
+    }
+}
+
+/// Fits a sticker's composition whenever its layer is laid out — which is
+/// whenever its bounds change, and whenever Lottie has replaced the root.
+final class LottieStickerFitter: NSObject, CALayoutManager {
+    static let shared = LottieStickerFitter()
+
+    nonisolated func layoutSublayers(of layer: CALayer) {
+        guard Thread.isMainThread else { return }
+        nonisolated(unsafe) let layer = layer
+        MainActor.assumeIsolated {
+            guard let sticker = layer as? LottieAnimationLayer else { return }
+            LottieStickerLayer.fit(sticker)
+        }
     }
 }
 

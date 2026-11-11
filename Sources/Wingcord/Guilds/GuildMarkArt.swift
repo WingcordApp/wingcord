@@ -24,6 +24,9 @@ nonisolated enum GuildMarkArt {
     /// ones that follow the theme: white with a dark glyph on a dark theme,
     /// the reverse on a light one (`107773`'s dark and light pairs).
     static func draw(_ mark: GuildMark, in rect: CGRect, context: CGContext, isLight: Bool) {
+        if mark.kind == .discoverable {
+            return drawWebBadge(in: rect, context: context, isLight: isLight)
+        }
         guard let rosette = placed("guild.rosette", rosettePath, side: rosetteSide, in: rect) else { return }
         let (fill, ink) = colors(for: mark, isLight: isLight)
 
@@ -59,6 +62,31 @@ nonisolated enum GuildMarkArt {
         }
     }
 
+    /// A discoverable server's mark, which is one drawing and not a rosette with
+    /// a glyph in it: Discord's `ExperimentalWebBadgeIcon` (`682697`), a
+    /// scalloped disc with a wire globe.
+    ///
+    /// **Never the boost gradient, and never the earth.** Discord's table has no
+    /// entry for a discoverable server at all (`554783`: `[DISCOVERABLE]: {}`),
+    /// so it takes neither a glyph nor a boosted ground — it draws this, in the
+    /// theme's inverted badge pair: white with black lines on the dark themes,
+    /// the reverse on the light one.
+    private static func drawWebBadge(in rect: CGRect, context: CGContext, isLight: Bool) {
+        let ground = isLight ? black : white
+        let ink = isLight ? white : black
+        if let disc = placed("guild.web.disc", webDisc, side: 24, in: rect) {
+            context.addPath(disc)
+            context.setFillColor(ground)
+            context.fillPath()
+        }
+        context.setFillColor(ink)
+        for (key, outline) in webGlobe {
+            guard let line = placed(key, outline, side: 24, in: rect) else { continue }
+            context.addPath(line)
+            context.fillPath()
+        }
+    }
+
     /// The boost gem in the flyout's footer: three white layers at 55, 80 and
     /// 100 per cent, on a 17 x 22 grid.
     static func drawBoostGem(in rect: CGRect, context: CGContext) {
@@ -85,6 +113,8 @@ nonisolated enum GuildMarkArt {
     private static let brand = CGColor(srgbRed: 0x58 / 255, green: 0x65 / 255, blue: 0xF2 / 255, alpha: 1)
     private static let neutral = CGColor(srgbRed: 0x4E / 255, green: 0x50 / 255, blue: 0x58 / 255, alpha: 1)
     private static let white = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+    /// `BADGE_INVERTED_TEXT` on the dark themes, and the ground on the light.
+    private static let black = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
 
     /// `PREMIUM_GUILD_BADGE_V2_BACKGROUND`: `PREMIUM_TIER_2_PURPLE` to
     /// `PREMIUM_TIER_2_PINK`.
@@ -151,6 +181,34 @@ nonisolated enum GuildMarkArt {
         var transform = CGAffineTransform(translationX: rect.minX, y: rect.minY).scaledBy(x: scale, y: scale)
         return parsed.copy(using: &transform)
     }
+
+    /// `ExperimentalWebBadgeIcon`'s disc, on its own 24 grid.
+    private static let webDisc = """
+        M24 12 C24 13.2 22.05 14.1 21.75 15.15 C21.45 16.2 22.35 18.15 21.75 19.05 C21.15 19.95 \
+        18.9 19.5 18 20.25 C17.1 21 16.8 22.95 15.75 23.4 C14.7 23.85 13.2 22.2 12 22.2 C10.8 22.2 \
+        9.3 23.7 8.25 23.4 C7.2 23.1 6.9 20.85 6 20.25 C5.1 19.65 3 19.95 2.25 19.05 C1.5 18.15 \
+        2.55 16.35 2.25 15.15 C1.95 13.95 0 13.2 0 12 C0 10.8 1.95 9.9 2.25 8.85 C2.55 7.8 1.65 \
+        5.85 2.25 4.95 C2.85 4.05 5.1 4.5 6 3.75 C6.9 3 7.2 1.05 8.25 0.6 C9.3 0.15 10.8 1.8 12 1.8 \
+        C13.2 1.8 14.7 0.3 15.75 0.6 C16.8 0.9 17.1 3 18 3.75 C18.9 4.5 21 4.05 21.75 4.95 C22.5 \
+        5.85 21.45 7.65 21.75 8.85 C22.05 10.05 24 10.8 24 12 Z
+        """
+
+    /// Its globe: the rim, one meridian and the equator, each a filled outline.
+    private static let webGlobe: [(key: String, outline: String)] = [
+        ("guild.web.rim", """
+            M17.69 12 C17.69 8.857 15.143 6.31 12 6.31 C8.857 6.31 6.31 8.857 6.31 12 C6.31 15.143 \
+            8.857 17.69 12 17.69 L12 19 C8.134 19 5 15.866 5 12 C5 8.134 8.134 5 12 5 C15.866 5 19 \
+            8.134 19 12 C19 15.866 15.866 19 12 19 L12 17.69 C15.143 17.69 17.69 15.143 17.69 12 Z
+            """),
+        ("guild.web.meridian", """
+            M13.87 12 C13.87 10.21 13.54 8.65 13.06 7.6 C12.52 6.41 12.05 6.3 12 6.3 C11.95 6.3 11.48 \
+            6.4 10.95 7.58 C10.377 8.978 10.098 10.479 10.13 11.99 C10.13 13.78 10.46 15.34 10.95 \
+            16.39 C11.48 17.57 11.95 17.68 12 17.68 L12 19 C10.24 19 8.82 15.87 8.82 12 C8.82 8.13 \
+            10.24 5 12 5 C13.76 5 15.18 8.13 15.18 12 C15.18 15.87 13.76 19 12 19 L12 17.69 C12.05 \
+            17.69 12.52 17.59 13.06 16.41 C13.54 15.35 13.86 13.79 13.86 12 Z
+            """),
+        ("guild.web.equator", "M17.73 11.32 L17.73 12.64 L6.27 12.64 L6.27 11.32 L17.73 11.32 Z"),
+    ]
 
     private static let rosetteSide: CGFloat = 16
 

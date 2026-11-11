@@ -77,22 +77,29 @@ public enum PresenceStatus: String, Hashable, Sendable, Codable, CaseIterable {
 public struct Presence: Hashable, Sendable {
     public var userID: UserID
     public var status: PresenceStatus
-    /// Whether any of the person's sessions is a phone. Drawn as the phone glyph
-    /// instead of a dot.
+    /// Whether the person is online on a phone and nowhere bigger — Discord's
+    /// `isMobileOnline`. Drawn as the phone glyph instead of a dot.
     public var isOnMobile: Bool
+    /// Whether the person is online in a headset — Discord's `isVROnline`.
+    public var isOnVR: Bool
     public var activities: PresenceActivities?
 
     public init(
         userID: UserID,
         status: PresenceStatus,
         isOnMobile: Bool = false,
+        isOnVR: Bool = false,
         activities: PresenceActivities? = nil
     ) {
         self.userID = userID
         self.status = status
         self.isOnMobile = isOnMobile
+        self.isOnVR = isOnVR
         self.activities = activities
     }
+
+    /// What the online mark is drawn as.
+    public var client: PresenceClient { PresenceClient(isOnMobile: isOnMobile, isOnVR: isOnVR) }
 
     /// The custom status line, if the person has set one.
     public var customStatus: Activity? {
@@ -419,5 +426,22 @@ public struct Activity: Hashable, Sendable {
         case .unknown:
             name.isEmpty ? nil : name
         }
+    }
+}
+
+/// The device an ONLINE mark is drawn as — Discord's three online masks.
+///
+/// **Only online has them.** Idle on a phone is the ordinary crescent, as it is
+/// on Discord: the mask is chosen from the status first and the device second.
+public enum PresenceClient: Hashable, Sendable {
+    case desktop
+    /// A phone, half again as tall as the dot.
+    case mobile
+    /// A headset, half again as wide.
+    case vr
+
+    /// The headset wins over the phone, as Discord's mask choice does.
+    public init(isOnMobile: Bool, isOnVR: Bool) {
+        self = isOnVR ? .vr : (isOnMobile ? .mobile : .desktop)
     }
 }

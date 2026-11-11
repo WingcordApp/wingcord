@@ -34,6 +34,16 @@ struct StyledDisplayName: View {
     /// surface runs the one under the pointer and parks the rest on their first
     /// keyframe. Default `true`, so every existing call site is unchanged.
     var animates: Bool = true
+    /// Whether the effect is drawn at all, or only the face.
+    ///
+    /// **Discord's three states are two switches**: `PLAIN` is this off — the
+    /// chosen face in ordinary ink — `STATIC` is this on with `animates` off,
+    /// and `ANIMATED` is both. A list shows faces and lights the row under the
+    /// pointer; a profile shows everything.
+    var showsEffect: Bool = true
+    /// How strongly a heavy face is drawn while its effect is off — Discord's
+    /// `boldFontOpacity`, which its DM list sets to nine tenths.
+    var plainOpacity: Double = 1
     /// The widest the name may come out.
     ///
     /// **Only the styled branch needs it, and only because it is a drawn
@@ -56,12 +66,22 @@ struct StyledDisplayName: View {
     var underlined = false
 
     @Environment(\.motion) private var motion
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// What is drawn: the style, or its face alone where the effect is off.
+    private var worn: DisplayNameStyle? {
+        guard let style else { return nil }
+        return showsEffect ? style : style.faceOnly
+    }
 
     var body: some View {
-        if let style, !style.isPlain {
+        if let style = worn, !style.isPlain {
             StyledDisplayNameSurface(
                 text: text,
-                style: style,
+                // Discord's contrast step, against the surface this is on: a
+                // dark pick is lightened on a dark card and a pale one darkened
+                // on a light one. See `DisplayNameStyle.legible(on:)`.
+                style: style.legible(on: DisplayNameStyle.ground(isDark: colorScheme == .dark)),
                 pointSize: pointSize
                     ?? NSFont.preferredFont(forTextStyle: textStyle.nsTextStyle).pointSize,
                 maximumWidth: maximumWidth,
@@ -69,8 +89,9 @@ struct StyledDisplayName: View {
                 // Reduce Motion parks each effect on its own first keyframe
                 // rather than hiding it: the style is part of how someone
                 // chose to be named, and the preference is about movement.
-                animates: animates && !motion.reduceMotion
+                animates: animates && showsEffect && !motion.reduceMotion
             )
+            .opacity(!showsEffect && style.font.isHeavy ? plainOpacity : 1)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(text))
         } else {
@@ -157,8 +178,13 @@ private struct StyledDisplayNameSurface: NSViewRepresentable {
         context: Context
     ) -> CGSize? {
         let natural = nsView.contentSize
-        guard let width = proposal.width, width.isFinite, width > 0 else { return natural }
-        return CGSize(width: min(natural.width, width), height: natural.height)
+        guard let width = proposal.width, width.isFinite else { return natural }
+        // **A proposal of nothing is a stack asking how small this can go**,
+        // and answering with the whole name told it "no smaller": the row then
+        // gave the name everything and squeezed nothing. The floor is a couple
+        // of letters and the ellipsis, which is the least a cut name can be.
+        let floor = min(natural.width, pointSize * 2)
+        return CGSize(width: min(natural.width, max(width, floor)), height: natural.height)
     }
 }
 
@@ -188,7 +214,17 @@ final class StyledDisplayNameView: NSView {
 
     /// The layout box, which is the text's own. Effects bleed outside it the
     /// same way Discord's negative margins let them.
+    ///
+    /// **The name's NATURAL size, whatever it is drawn at.** This is what the
+    /// representable answers a proposal with, so it must not shrink when the
+    /// name is truncated to a narrow row — a view that reported its truncated
+    /// width would never be offered the room back.
     private(set) var contentSize: CGSize = .zero
+    /// The size of what is on screen: `contentSize`, or less across when the
+    /// name was cut to the row.
+    private var drawnSize: CGSize = .zero
+    /// The width the name was last cut to, nil while it is drawn whole.
+    private var fittedWidth: CGFloat?
 
     override var isFlipped: Bool { false }
 
@@ -219,6 +255,18 @@ final class StyledDisplayNameView: NSView {
             name: NSApplication.didBecomeActiveNotification,
             object: nil
         )
+        center.addObserver(
+            self,
+            selector: #selector(faceDidLoad),
+            name: DisplayNameFontRegistry.didLoadFace,
+            object: nil
+        )
+    }
+
+    /// A fetched face has arrived: a name drawn in the fallback is shaped again.
+    @objc private func faceDidLoad() {
+        guard configuration?.style.font.remoteAsset != nil else { return }
+        rebuild()
     }
 
     @available(*, unavailable)
@@ -240,10 +288,12 @@ final class StyledDisplayNameView: NSView {
         rebuild()
     }
 
-    private func rebuild() {
+    private func rebuild(duringLayout: Bool = false) {
         content?.removeFromSuperlayer()
         content = nil
         contentSize = .zero
+        drawnSize = .zero
+        fittedWidth = nil
 
         guard let configuration else { return invalidateIntrinsicContentSize() }
         let face = DisplayNameFontRegistry.font(
@@ -251,14 +301,33 @@ final class StyledDisplayNameView: NSView {
             size: configuration.pointSize
         ) ?? NSFont.systemFont(ofSize: configuration.pointSize, weight: .bold)
 
-        guard let run = DisplayNameGlyphRun(
-            text: configuration.text,
-            font: face,
-            tracking: configuration.style.font.letterSpacing * configuration.pointSize,
-            perGlyph: configuration.style.effect == .gummy,
-            maximumWidth: configuration.maximumWidth,
-            maximumLines: configuration.maximumLines
-        ) else { return invalidateIntrinsicContentSize() }
+        func shape(within width: CGFloat?) -> DisplayNameGlyphRun? {
+            DisplayNameGlyphRun(
+                text: configuration.text,
+                font: face,
+                tracking: configuration.style.font.letterSpacing * configuration.pointSize,
+                perGlyph: configuration.style.effect == .gummy,
+                maximumWidth: width,
+                maximumLines: configuration.maximumLines
+            )
+        }
+        guard let natural = shape(within: configuration.maximumWidth)
+        else { return invalidateIntrinsicContentSize() }
+
+        // **Cut to the row it was given, not centred across it.** A row hands
+        // a long name less than it asked for, and the layers used to be laid
+        // out at full width in the middle of that: over the face on one side
+        // and the server tag on the other. One line only — a wrapped name's
+        // height is something its parent was told, and cutting it here would
+        // change that behind its back.
+        var run = natural
+        let room = bounds.width
+        if configuration.maximumLines == 1, room > 0, room < natural.size.width - 0.5 {
+            // Recorded whether or not the cut came back, so a width too narrow
+            // for anything is asked for once and not on every layout.
+            fittedWidth = room
+            if let cut = shape(within: room) { run = cut }
+        }
 
         let built = DisplayNameEffectLayers.build(
             run: run,
@@ -278,11 +347,15 @@ final class StyledDisplayNameView: NSView {
             built.position = CGPoint(x: 0, y: 1)
         }
 
-        contentSize = run.size
+        contentSize = natural.size
+        drawnSize = run.size
         content = built
         layer?.addSublayer(built)
         applyContentsScale(to: built)
         if isPaused { setPaused(true) }
+        // From `layout` the natural size has not changed and the pass that
+        // asked is still running: neither needs asking for again.
+        guard !duringLayout else { return }
         invalidateIntrinsicContentSize()
         needsLayout = true
     }
@@ -291,6 +364,12 @@ final class StyledDisplayNameView: NSView {
 
     override func layout() {
         super.layout()
+        // The room changed: cut the name again, or give it back what it lost.
+        if configuration?.maximumLines == 1, bounds.width > 0 {
+            let needsCut = bounds.width < contentSize.width - 0.5
+            let wanted: CGFloat? = needsCut ? bounds.width : nil
+            if wanted != fittedWidth { rebuild(duringLayout: true) }
+        }
         guard let content else { return }
         // Centred rather than pinned, so a proposal that does not match the
         // intrinsic size leaves the name in the middle of it instead of
@@ -299,8 +378,9 @@ final class StyledDisplayNameView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         content.position = CGPoint(
-            x: ((bounds.width - contentSize.width) / 2).rounded(),
-            y: ((bounds.height - contentSize.height) / 2).rounded() + lift
+            // A name cut to the row starts at its leading edge.
+            x: fittedWidth == nil ? ((bounds.width - drawnSize.width) / 2).rounded() : 0,
+            y: ((bounds.height - drawnSize.height) / 2).rounded() + lift
         )
         CATransaction.commit()
     }

@@ -174,7 +174,8 @@ struct ChannelSidebarContainer: View {
                 model.isVoiceChatShown = true
             },
             toggleCategory: { model.toggleCategory($0) },
-            openSurface: { model.openSurface($0) },
+            // With the list's own server: see `openSurface(_:inGuild:)`.
+            openSurface: { [guildID] in model.openSurface($0, inGuild: guildID) },
             openMessageRequests: { model.openMessageRequests() },
             openFriends: { model.openFriends() },
             openEvents: { model.openEvents(inGuild: $0, event: $1) },

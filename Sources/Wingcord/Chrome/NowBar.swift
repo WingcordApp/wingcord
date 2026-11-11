@@ -113,10 +113,22 @@ struct NowBar: View, Equatable {
                 }
 
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(presentation.displayName)
-                        .font(.system(.body, weight: .semibold))
-                        .foregroundStyle(Ink.primary)
+                    HStack(spacing: Spacing.tight) {
+                        // The reader's own style: there to see, and moving
+                        // under the pointer — Discord's account panel
+                        // (`hovered ? ANIMATED : STATIC`).
+                        StyledDisplayName(
+                            text: presentation.displayName,
+                            style: presentation.nameStyle,
+                            textStyle: .body,
+                            weight: .semibold,
+                            animates: isHoveringIdentity
+                        )
                         .lineLimit(1)
+                        if let tag = presentation.tag {
+                            SidebarTagChip(text: tag, badgeURL: presentation.tagBadgeURL)
+                        }
+                    }
                     subtitle
                 }
             }
@@ -168,7 +180,7 @@ struct NowBar: View, Equatable {
                             .foregroundStyle(Ink.tertiary)
                     }
                     if let line = presentation.activityLine {
-                        ActivityLineView(line: line, ink: Ink.secondary)
+                        ActivityLineView(line: line, ink: Ink.secondary, playsEmoji: isHoveringIdentity)
                     } else {
                         Text(presentation.status.label)
                             .font(Typeface.rowSubtitle)
@@ -230,7 +242,9 @@ private struct NowBarSettingsButton: View {
 struct PresenceDot: View {
     var status: PresenceStatus
     var side: CGFloat
-    var isOnMobile: Bool = false
+    /// The device an online mark is drawn as: a phone or a headset where the
+    /// person is on one and nowhere else. Nothing but online reads it.
+    var client: PresenceClient = .desktop
     /// The opaque disc behind the dot, which separates it from whatever it
     /// overlaps.
     ///
@@ -241,7 +255,41 @@ struct PresenceDot: View {
     /// through it is the card's own ground.
     var hasPlate: Bool = true
 
+    /// The phone or the headset, for somebody online on one.
+    private var deviceMark: PresenceClient? {
+        status == .online && client != .desktop ? client : nil
+    }
+
     var body: some View {
+        if let deviceMark {
+            device(deviceMark)
+        } else {
+            dot
+        }
+    }
+
+    /// Discord's own two masks, at the size its avatar gives them: the phone
+    /// half again as tall as the dot, the headset half again as wide.
+    private func device(_ client: PresenceClient) -> some View {
+        let size = PresenceMarkArt.size(for: client, side: side)
+        let gap = hasPlate ? side * 0.16 : 0
+        return Canvas { context, canvas in
+            let box = CGRect(origin: .zero, size: canvas).insetBy(dx: gap, dy: gap)
+            if hasPlate {
+                context.fill(
+                    Path(PresenceMarkArt.silhouette(for: client, in: box, gap: gap)),
+                    with: .color(Color(nsColor: .windowBackgroundColor))
+                )
+            }
+            if let mark = PresenceMarkArt.path(for: client, in: box) {
+                context.fill(Path(mark), with: .color(status.tint), style: FillStyle(eoFill: true))
+            }
+        }
+        .frame(width: size.width + gap * 2, height: size.height + gap * 2)
+        .accessibilityHidden(true)
+    }
+
+    private var dot: some View {
         Group {
             switch status {
             case .idle:

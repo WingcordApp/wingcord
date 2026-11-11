@@ -2701,6 +2701,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             sentence,
             authorID: message.authorID,
             colorValue: author?.colorValue,
+            nameFace: author?.nameFace,
+            nameTracking: author?.nameTracking ?? 0,
             time: input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
             style: input.style
         )
@@ -2823,9 +2825,19 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         _ sentence: SystemSentence?,
         authorID: UserID,
         colorValue: UInt32?,
+        nameFace: NSFont? = nil,
+        nameTracking: CGFloat = 0,
         time: String,
         style: MessageTextStyle
     ) -> MessageText {
+        // **The member's own face, in a welcome as in a message.** Discord sets
+        // the name in a system line through the same font class a message
+        // header takes (`447215`), so somebody who chose a face is greeted in
+        // it. The face arrives at the header's size and is set at this line's.
+        let nameFont = nameFace.map {
+            NSFont(descriptor: $0.fontDescriptor, size: style.boldFont.pointSize) ?? $0
+        } ?? style.boldFont
+        let nameKern = nameFace.map { nameTracking * style.boldFont.pointSize / max(1, $0.pointSize) } ?? 0
         let body: [NSAttributedString.Key: Any] = [
             .font: style.bodyFont,
             .foregroundColor: style.secondaryColor,
@@ -2841,11 +2853,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         output.append(NSAttributedString(string: sentence.prefix, attributes: body))
         if !sentence.name.isEmpty {
             let start = output.length
-            output.append(NSAttributedString(string: sentence.name, attributes: [
-                .font: style.boldFont,
+            var named: [NSAttributedString.Key: Any] = [
+                .font: nameFont,
                 .foregroundColor: colorValue.map { NSColor(Color(hex: $0)) }
                     ?? style.primaryColor,
-            ]))
+            ]
+            if nameKern != 0 { named[.kern] = nameKern }
+            output.append(NSAttributedString(string: sentence.name, attributes: named))
             links.append(.init(
                 range: NSRange(location: start, length: output.length - start),
                 target: .user(authorID)

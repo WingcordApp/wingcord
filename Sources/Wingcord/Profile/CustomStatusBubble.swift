@@ -265,7 +265,10 @@ struct CustomStatusBubble: View {
     private var bubble: some View {
         HStack(spacing: layout.contentGap) {
             if let emoji {
-                ExpressionGlyph(emoji: emoji, side: emojiSide)
+                // **It plays here.** A profile shows one status and its emoji
+                // is half of what was written; the default is still, for the
+                // lists, and this bubble was inheriting it.
+                ExpressionGlyph(emoji: emoji, side: emojiSide, plays: true)
             }
             if let placeholder, text?.isEmpty != false, emoji == nil {
                 // The plus is the affordance: an empty bubble with grey words in

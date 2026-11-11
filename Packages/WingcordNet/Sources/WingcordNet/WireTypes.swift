@@ -1625,6 +1625,7 @@ struct PresenceDTO: Decodable, Sendable {
         var desktop: String?
         var mobile: String?
         var web: String?
+        var vr: String?
     }
 
     var domain: Presence? {
@@ -1633,12 +1634,14 @@ struct PresenceDTO: Decodable, Sendable {
         return Presence(
             userID: userID,
             status: PresenceStatus(rawValue: status ?? "offline") ?? .offline,
-            // A phone glyph rather than a dot, and only when the phone is the
-            // ONLY session — someone at their desk with a phone in their pocket
-            // is at their desk.
-            isOnMobile: client_status?.mobile != nil
-                && client_status?.desktop == nil
-                && client_status?.web == nil,
+            // Discord's own two tests (`isMobileOnline`, `isVROnline`): online
+            // on the phone and not online at a desk or in a headset — someone
+            // at their desk with a phone in their pocket is at their desk. The
+            // browser is not asked about, there as here.
+            isOnMobile: client_status?.mobile == "online"
+                && client_status?.desktop != "online"
+                && client_status?.vr != "online",
+            isOnVR: client_status?.vr == "online",
             activities: list.isEmpty ? nil : PresenceActivities(list: list)
         )
     }

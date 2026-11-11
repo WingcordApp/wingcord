@@ -43,7 +43,20 @@ extension SessionController {
     private func loadActivityGames(_ activities: [Activity]) {
         let ids = activities.compactMap { $0.kind == .playing ? $0.applicationID : nil }
         guard !ids.isEmpty else { return }
-        Task { [weak self] in await self?.loadGames(ids: ids) }
+        Task { [weak self] in
+            guard let self else { return }
+            await loadGames(ids: ids)
+            // **The hop Discord makes for a console title** — see
+            // `AppModel.canonicalGameID`. An application `/games` did not
+            // answer for may name its game in `linked_games`; its record says
+            // so, and the game it names is then asked for like any other. An
+            // editor or a bot has a record with no game in it, which is kept,
+            // so each costs one request for the session and not one a profile.
+            let unanswered = ids.filter { model.games[$0] == nil }
+            guard !unanswered.isEmpty else { return }
+            await loadWidgetApplications(ids: unanswered)
+            await loadGames(ids: unanswered.compactMap { model.widgetApplications[$0]?.primaryGameID })
+        }
     }
 
     /// Resolves the marks for the games people in voice channels are playing.

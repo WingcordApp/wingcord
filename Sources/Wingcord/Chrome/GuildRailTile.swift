@@ -194,9 +194,11 @@ struct HomeRailTile: View {
             ZStack(alignment: .leading) {
                 RailIndicator(isSelected: isSelected, hasUnread: hasUnread)
 
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .font(.system(size: side * 0.38))
-                    .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(Ink.secondary))
+                // Wingcord's own mark: the three feathers off the app icon,
+                // where a pair of chat bubbles used to say "a chat app".
+                WingsShape()
+                    .fill(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(Ink.secondary))
+                    .frame(width: side * 0.58, height: side * 0.58)
                     .frame(width: side, height: side)
                     .background(Palette.surfaceRaised)
                     .clipShape(.rect(

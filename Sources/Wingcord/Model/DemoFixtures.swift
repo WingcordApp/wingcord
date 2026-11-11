@@ -654,7 +654,34 @@ enum DemoFixtures {
                         content: "## Season 2 is live\nNew map, new mode, and the "
                             + "reworked gunplay everyone has been asking for. "
                             + "<@&1151759657363320838> "
-                            + "[battlefield.com/season-2](<https://www.ea.com/games/battlefield>)"
+                            + "[battlefield.com/season-2](<https://www.ea.com/games/battlefield>)",
+                        // A picture, so the card's top is seen: Steam's own
+                        // header art, public like every asset the demo shows.
+                        payload: MessagePayload(embeds: [Embed(
+                            kind: "image",
+                            image: Embed.Media(
+                                url: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/2807960/c12d12ce3c7d217398d3fcad77427bfc9d57c570/header.jpg",
+                                width: 460,
+                                height: 215
+                            )
+                        )])
+                    ),
+                    // A poll, which Discord gives a card of its own.
+                    Message(
+                        id: MessageID(rawValue: 1_543_900_000_000_000_000),
+                        channelID: announcementChannel,
+                        authorID: userIDs[1],
+                        payload: MessagePayload(poll: Poll(
+                            question: "Which map should come back first?",
+                            answers: [
+                                .init(id: 1, text: "Operation Locker"),
+                                .init(id: 2, text: "Caspian Border"),
+                                .init(id: 3, text: "Golmud Railway"),
+                                .init(id: 4, text: "Siege of Shanghai"),
+                                .init(id: 5, text: "Damavand Peak"),
+                            ],
+                            expiresAt: Date.now.addingTimeInterval(86_400 * 2)
+                        ))
                     ),
                     Message(
                         id: MessageID(rawValue: 1_542_500_000_000_000_000),

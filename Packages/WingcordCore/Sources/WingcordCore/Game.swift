@@ -629,13 +629,38 @@ public enum GameCompanyRole: Hashable, Sendable {
 public struct GameReviews: Hashable, Sendable {
     public var steam: SteamReviews?
     public var openCritic: OpenCriticReviews?
+    /// The phone stores' average and how many rated — `reviews.app_store` and
+    /// `reviews.google_play`, which Discord reads beside Steam's (`d()` in its
+    /// game record: `rating`, and `rating_count ?? global_rating_count`).
+    public var appStore: StoreRating?
+    public var googlePlay: StoreRating?
 
-    public init(steam: SteamReviews? = nil, openCritic: OpenCriticReviews? = nil) {
+    public init(
+        steam: SteamReviews? = nil,
+        openCritic: OpenCriticReviews? = nil,
+        appStore: StoreRating? = nil,
+        googlePlay: StoreRating? = nil
+    ) {
         self.steam = steam
         self.openCritic = openCritic
+        self.appStore = appStore
+        self.googlePlay = googlePlay
     }
 
-    public var isEmpty: Bool { steam == nil && openCritic == nil }
+    public var isEmpty: Bool {
+        steam == nil && openCritic == nil && appStore == nil && googlePlay == nil
+    }
+
+    /// One store's stars: an average out of five, and how many gave one.
+    public struct StoreRating: Hashable, Sendable {
+        public var rating: Double
+        public var count: Int
+
+        public init(rating: Double, count: Int) {
+            self.rating = rating
+            self.count = count
+        }
+    }
 
     /// Steam's three aggregates, of which a game may send one or all three.
     public struct SteamReviews: Hashable, Sendable {
@@ -977,5 +1002,111 @@ public struct GameTrailer: Hashable, Sendable, Identifiable {
         self.width = width
         self.height = height
         self.mimeType = mimeType
+    }
+}
+
+
+// MARK: - The phone stores' reviews
+
+/// A phone store a game's Reviews card can name.
+public enum MobileStore: String, Hashable, Sendable, CaseIterable {
+    case appStore
+    case googlePlay
+
+    /// Discord's own words for them.
+    public var title: String {
+        switch self {
+        case .appStore: "App Store"
+        case .googlePlay: "Play Store"
+        }
+    }
+
+    /// Discord's `n0`: which `websites` categories may name the page, the hosts
+    /// a page there has to be on, the `third_party_skus` distributor that
+    /// carries the store's own id, and how that id becomes an address.
+    var categories: [GameLinkCategory] {
+        switch self {
+        case .appStore: [.iphone, .ipad]
+        case .googlePlay: [.android]
+        }
+    }
+
+    var hosts: [String] {
+        switch self {
+        case .appStore: ["apps.apple.com", "itunes.apple.com"]
+        case .googlePlay: ["play.google.com"]
+        }
+    }
+
+    var distributor: String {
+        switch self {
+        case .appStore: "apple_app_store"
+        case .googlePlay: "google_play"
+        }
+    }
+
+    func url(forStoreID id: String) -> URL? {
+        switch self {
+        case .appStore:
+            return URL(string: "https://apps.apple.com/app/id\(id)")
+        case .googlePlay:
+            var parts = URLComponents(string: "https://play.google.com/store/apps/details")
+            parts?.queryItems = [URLQueryItem(name: "id", value: id)]
+            return parts?.url
+        }
+    }
+}
+
+/// One phone store's line on a game's Reviews card.
+public struct MobileStoreReview: Hashable, Sendable, Identifiable {
+    public var store: MobileStore
+    public var rating: Double
+    public var count: Int
+    /// The store's page for the game, which the line opens.
+    public var url: URL
+
+    public var id: MobileStore { store }
+
+    /// "4.5 / 5" — one decimal, always (Discord's `zdL4/T` over a one-digit
+    /// `Intl.NumberFormat`).
+    public var ratingText: String {
+        "\(rating.formatted(.number.precision(.fractionLength(1)))) / 5"
+    }
+
+    /// "(20,565,034)".
+    public var countText: String { "(\(count.formatted(.number)))" }
+}
+
+public extension Game {
+    /// The App Store and Play Store lines — Discord's `mobileStoreReviews`.
+    ///
+    /// **A line needs a rating, a count and a page**, as Discord's does: the
+    /// page is the first `websites` link in the store's categories whose host
+    /// is the store's own, and otherwise the store's id from
+    /// `third_party_skus`; a store with neither is left out, since the line is
+    /// a link to it.
+    var mobileStoreReviews: [MobileStoreReview] {
+        MobileStore.allCases.compactMap { store in
+            let rating = switch store {
+            case .appStore: reviews?.appStore
+            case .googlePlay: reviews?.googlePlay
+            }
+            guard let rating, let url = storePage(for: store) else { return nil }
+            return MobileStoreReview(store: store, rating: rating.rating, count: rating.count, url: url)
+        }
+    }
+
+    private func storePage(for store: MobileStore) -> URL? {
+        for category in store.categories {
+            if let site = websites.first(where: { site in
+                site.category == category
+                    && ["http", "https"].contains(site.url.scheme?.lowercased() ?? "")
+                    && store.hosts.contains(site.url.host()?.lowercased() ?? "")
+            }) {
+                return site.url
+            }
+        }
+        return thirdPartySkus.first { $0.distributor == store.distributor }
+            .flatMap { store.url(forStoreID: $0.id) }
     }
 }

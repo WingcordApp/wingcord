@@ -26,8 +26,8 @@ struct SearchFiltersSheet: View {
     @Environment(\.motion) private var motion
     @State private var draft: MessageSearchQuery
 
-    private static let width: CGFloat = 460
-    private static let maximumHeight: CGFloat = 620
+    private static let width: CGFloat = 480
+    private static let maximumHeight: CGFloat = 700
 
     init(
         query: MessageSearchQuery,
@@ -46,43 +46,46 @@ struct SearchFiltersSheet: View {
         _draft = State(initialValue: query)
     }
 
+    /// **Grouped into cards, as a settings pane is** (`INVARIANTS.md`, "a
+    /// settings pane is cards and plain words"): who, where, what it holds,
+    /// when, and the two rarer questions. Each card's rows carry what is chosen
+    /// as chips beside the control that chooses it, so the sheet reads as the
+    /// search it will run.
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             ScrollView {
-                VStack(alignment: .leading, spacing: Spacing.group) {
-                    SearchFilterPicker(
-                        title: "From",
-                        detail: "Sent by any of the selected people",
-                        placeholder: "Anyone",
-                        options: people,
-                        selection: Set(draft.authorIDs.map(\.rawValue)),
-                        toggle: { toggle($0, in: \.authorIDs) }
-                    )
+                VStack(alignment: .leading, spacing: 14) {
+                    SearchFilterCard {
+                        peopleRow("From", detail: "Sent by any of these people", path: \.authorIDs)
+                        SearchFilterDivider()
+                        peopleRow("Mentions", detail: "Mentions any of these people", path: \.mentionIDs)
+                    }
                     if draft.scope.guildID != nil {
-                        SearchFilterPicker(
-                            title: "In",
-                            detail: "Sent in any of the selected channels",
-                            placeholder: "Any channel",
-                            options: channels,
-                            selection: Set(draft.channelIDs.map(\.rawValue)),
-                            toggle: { toggleChannel($0) }
+                        SearchFilterCard { channelRow }
+                    }
+                    SearchFilterCard {
+                        SearchFilterTitle(title: "Has", detail: "Includes any of these kinds of content")
+                        SearchToggleFlow(
+                            options: MessageSearchHas.allCases.map {
+                                .init(id: $0.rawValue, title: $0.title, symbolName: $0.symbolName)
+                            },
+                            selection: Set(draft.has.map(\.rawValue)),
+                            toggle: { raw in
+                                guard let value = MessageSearchHas(rawValue: raw) else { return }
+                                if draft.has.contains(value) { draft.has.remove(value) } else { draft.has.insert(value) }
+                            }
                         )
                     }
-                    hasField
-                    SearchFilterPicker(
-                        title: "Mentions",
-                        detail: "Mentions any of the selected people",
-                        placeholder: "Anyone",
-                        options: people,
-                        selection: Set(draft.mentionIDs.map(\.rawValue)),
-                        toggle: { toggle($0, in: \.mentionIDs) }
-                    )
-                    dateField
-                    authorTypeField
-                    pinnedField
+                    SearchFilterCard { dateField }
+                    SearchFilterCard {
+                        authorTypeField
+                        SearchFilterDivider()
+                        pinnedField
+                    }
                 }
                 .padding(.horizontal, Spacing.group)
+                .padding(.top, 2)
                 .padding(.bottom, Spacing.group)
             }
             .scrollBounceBehavior(.basedOnSize)
@@ -90,28 +93,47 @@ struct SearchFiltersSheet: View {
         }
         .frame(width: Self.width)
         .frame(maxHeight: Self.maximumHeight)
-        .animation(motion.standard, value: draft.dates.count)
+        .animation(motion.standard, value: draft)
     }
 
     private var header: some View {
         ModalHeader(title: "Filters", close: dismiss)
     }
 
-    // MARK: Has
+    // MARK: People and channels
 
-    private var hasField: some View {
-        SearchFilterSection(title: "Has", detail: "Includes any of the selected kinds of data") {
-            SearchChipFlow(
-                options: MessageSearchHas.allCases.map {
-                    .init(id: $0.rawValue, title: $0.title, symbolName: $0.symbolName)
-                },
-                selection: Set(draft.has.map(\.rawValue)),
-                toggle: { raw in
-                    guard let value = MessageSearchHas(rawValue: raw) else { return }
-                    if draft.has.contains(value) { draft.has.remove(value) } else { draft.has.insert(value) }
-                }
-            )
+    private func peopleRow(
+        _ title: String,
+        detail: String,
+        path: WritableKeyPath<MessageSearchQuery, [UserID]>
+    ) -> some View {
+        let chosen = draft[keyPath: path].map { id in
+            people.first { $0.id == id.rawValue }
+                ?? SearchFilterOption(id: id.rawValue, title: "Someone", monogram: "?")
         }
+        return SearchPickRow(
+            title: title,
+            detail: detail,
+            options: people,
+            chosen: chosen,
+            emptyMenu: "Nobody here yet",
+            toggle: { toggle($0, in: path) }
+        )
+    }
+
+    private var channelRow: some View {
+        let chosen = draft.channelIDs.map { id in
+            channels.first { $0.id == id.rawValue }
+                ?? SearchFilterOption(id: id.rawValue, title: "A channel", symbolName: "number")
+        }
+        return SearchPickRow(
+            title: "In",
+            detail: "Sent in any of these channels",
+            options: channels,
+            chosen: chosen,
+            emptyMenu: "No channels to search",
+            toggle: { toggleChannel($0) }
+        )
     }
 
     // MARK: Date
@@ -119,40 +141,39 @@ struct SearchFiltersSheet: View {
     /// **A list, because the sheet has "Add date"** — and every row narrows one
     /// window. See `MessageSearchQuery.dateBounds`.
     private var dateField: some View {
-        SearchFilterSection(title: "Date", detail: "When the message was sent") {
-            VStack(alignment: .leading, spacing: Spacing.base) {
-                ForEach(Array(draft.dates.enumerated()), id: \.offset) { index, clause in
-                    HStack(spacing: Spacing.base) {
-                        Picker("", selection: kindBinding(at: index)) {
-                            Text("Before").tag(0)
-                            Text("After").tag(1)
-                            Text("During").tag(2)
-                        }
-                        .labelsHidden()
-                        .fixedSize()
-
-                        DatePicker("", selection: dayBinding(at: index), displayedComponents: .date)
-                            .labelsHidden()
-
-                        Spacer(minLength: 0)
-
-                        Button {
-                            draft.dates.remove(at: index)
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.system(.caption))
-                                .foregroundStyle(Ink.tertiary)
-                                .frame(width: Metrics.control, height: Metrics.control)
-                                .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Remove this date")
-                    }
-                }
-
-                SurfaceQuietButton(title: "Add date", systemImage: "plus") {
+        VStack(alignment: .leading, spacing: Spacing.base) {
+            HStack(alignment: .firstTextBaseline) {
+                SearchFilterTitle(title: "Date", detail: "When the message was sent")
+                Spacer(minLength: Spacing.base)
+                SearchCapsuleButton(title: "Add Date", symbolName: "plus") {
                     draft.dates.append(.during(Calendar.current.startOfDay(for: .now)))
                 }
+            }
+            ForEach(Array(draft.dates.enumerated()), id: \.offset) { index, _ in
+                HStack(spacing: Spacing.base) {
+                    SegmentedPicker(
+                        options: [.init(0, "Before"), .init(2, "During"), .init(1, "After")],
+                        selection: kindBinding(at: index)
+                    )
+                    .fixedSize()
+                    DatePicker("", selection: dayBinding(at: index), displayedComponents: .date)
+                        .labelsHidden()
+                        .datePickerStyle(.field)
+                    Spacer(minLength: 0)
+                    Button {
+                        draft.dates.remove(at: index)
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                            .font(.system(.title3))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(Ink.secondary)
+                            .contentShape(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove this date")
+                    .accessibilityLabel("Remove this date")
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }
@@ -191,8 +212,9 @@ struct SearchFiltersSheet: View {
     // MARK: Author type and pinned
 
     private var authorTypeField: some View {
-        SearchFilterSection(title: "Author Type", detail: "Sent by any of the selected kinds of author") {
-            SearchChipFlow(
+        VStack(alignment: .leading, spacing: Spacing.base) {
+            SearchFilterTitle(title: "Author Type", detail: "Sent by any of these kinds of author")
+            SearchToggleFlow(
                 options: MessageSearchAuthorKind.allCases.map {
                     .init(id: $0.rawValue, title: $0.title, symbolName: $0.symbolName)
                 },
@@ -211,20 +233,19 @@ struct SearchFiltersSheet: View {
 
     /// Three states, not two: **unset is not the same as false.** "Not pinned"
     /// is a real filter and so is "either", and a two-way switch cannot say the
-    /// difference.
+    /// difference — so it is the system's segmented control, with "Any".
     private var pinnedField: some View {
-        SearchFilterSection(title: "Pinned", detail: "Whether the message is pinned") {
-            SearchChipFlow(
-                options: [
-                    .init(id: "true", title: "Pinned", symbolName: "pin.fill"),
-                    .init(id: "false", title: "Not pinned", symbolName: "pin.slash"),
-                ],
-                selection: draft.isPinned.map { [$0 ? "true" : "false"] } ?? [],
-                toggle: { raw in
-                    let value = raw == "true"
-                    draft.isPinned = draft.isPinned == value ? nil : value
-                }
+        HStack(alignment: .center, spacing: Spacing.base) {
+            SearchFilterTitle(title: "Pinned", detail: "Whether the message is pinned")
+            Spacer(minLength: Spacing.base)
+            SegmentedPicker(
+                options: [.init(-1, "Any"), .init(1, "Pinned"), .init(0, "Not Pinned")],
+                selection: Binding(
+                    get: { draft.isPinned.map { $0 ? 1 : 0 } ?? -1 },
+                    set: { draft.isPinned = $0 < 0 ? nil : $0 == 1 }
+                )
             )
+            .fixedSize()
         }
     }
 
@@ -276,7 +297,7 @@ struct SearchFiltersSheet: View {
 
 // MARK: - Parts
 
-/// One row of the sheet, with its heading.
+/// One person or channel the sheet can offer.
 struct SearchFilterOption: Hashable, Sendable, Identifiable {
     var id: UInt64
     var title: String
@@ -286,91 +307,160 @@ struct SearchFilterOption: Hashable, Sendable, Identifiable {
     var symbolName: String?
 }
 
-private struct SearchFilterSection<Content: View>: View {
-    var title: String
-    var detail: String
+/// A group of the sheet's rows, on the sheet's own glass.
+private struct SearchFilterCard<Content: View>: View {
     @ViewBuilder var content: Content
 
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 14, style: .continuous) }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.base) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(.body, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
-                Text(detail)
-                    .font(.system(.caption))
-                    .foregroundStyle(Ink.tertiary)
-            }
+        VStack(alignment: .leading, spacing: Spacing.snug) {
             content
         }
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.hoverFill, in: shape)
+        .overlay { shape.strokeBorder(Palette.edge) }
     }
 }
 
-/// A menu of people or channels, with what is chosen shown as chips.
-private struct SearchFilterPicker: View {
+private struct SearchFilterDivider: View {
+    var body: some View {
+        Rectangle().fill(Palette.edge).frame(height: 1)
+    }
+}
+
+/// A row's name and what it asks, in plain words.
+private struct SearchFilterTitle: View {
     var title: String
     var detail: String
-    var placeholder: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(.body, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+            Text(detail)
+                .font(.system(.caption))
+                .foregroundStyle(Ink.secondary)
+        }
+    }
+}
+
+/// People or channels: the row's name, an "Add" menu, and what is chosen as
+/// chips with a ✕ each.
+private struct SearchPickRow: View {
+    var title: String
+    var detail: String
     var options: [SearchFilterOption]
-    var selection: Set<UInt64>
+    var chosen: [SearchFilterOption]
+    var emptyMenu: String
     var toggle: (UInt64) -> Void
 
     var body: some View {
-        SearchFilterSection(title: title, detail: detail) {
-            Menu {
-                if options.isEmpty {
-                    Text("Nobody here yet")
-                } else {
-                    ForEach(options) { option in
-                        Button {
-                            toggle(option.id)
-                        } label: {
-                            if selection.contains(option.id) {
-                                Label(option.title, systemImage: "checkmark")
-                            } else {
-                                Text(option.title)
+        VStack(alignment: .leading, spacing: Spacing.base) {
+            HStack(alignment: .center, spacing: Spacing.base) {
+                SearchFilterTitle(title: title, detail: detail)
+                Spacer(minLength: Spacing.base)
+                Menu {
+                    if options.isEmpty {
+                        Text(emptyMenu)
+                    } else {
+                        ForEach(options) { option in
+                            Button {
+                                toggle(option.id)
+                            } label: {
+                                if chosen.contains(where: { $0.id == option.id }) {
+                                    Label(option.title, systemImage: "checkmark")
+                                } else {
+                                    Text(option.title)
+                                }
                             }
                         }
                     }
+                } label: {
+                    Label("Add", systemImage: "plus")
+                        .font(.system(.subheadline, weight: .semibold))
+                        .foregroundStyle(Ink.primary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 28)
+                        .contentShape(.capsule)
                 }
-            } label: {
-                HStack(spacing: Spacing.tight) {
-                    Text(label)
-                        .font(.system(.callout))
-                        .foregroundStyle(selection.isEmpty ? Ink.tertiary : Ink.primary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.down")
-                        .font(.system(.caption))
-                        .foregroundStyle(Ink.tertiary)
-                }
-                .padding(.horizontal, Spacing.snug)
-                .frame(height: Metrics.control + Spacing.base)
-                .background(
-                    Palette.surfaceRaised,
-                    in: .rect(cornerRadius: Radius.chip, style: .continuous)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                        .strokeBorder(Ink.quaternary, lineWidth: 1)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .plainChip(in: .capsule)
+                .accessibilityLabel(Text("Add to \(title)"))
+            }
+            if !chosen.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(chosen) { option in
+                        SearchChosenChip(option: option, remove: { toggle(option.id) })
+                            .transition(.scale(scale: 0.85).combined(with: .opacity))
+                    }
                 }
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
         }
-    }
-
-    private var label: String {
-        let chosen = options.filter { selection.contains($0.id) }
-        guard !chosen.isEmpty else { return placeholder }
-        if chosen.count == 1 { return chosen[0].title }
-        return "\(chosen[0].title) and \(chosen.count - 1) more"
     }
 }
 
-/// A wrapping row of toggle chips.
-private struct SearchChipFlow: View {
+private struct SearchChosenChip: View {
+    var option: SearchFilterOption
+    var remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let avatarURL = option.avatarURL {
+                AvatarView(url: avatarURL, monogram: option.monogram ?? "?", side: 18)
+            } else if let symbolName = option.symbolName {
+                Image(symbol: symbolName)
+                    .font(.system(.caption, weight: .semibold))
+                    .foregroundStyle(Palette.accent)
+            }
+            Text(option.title)
+                .font(.system(.subheadline, weight: .medium))
+                .foregroundStyle(Ink.primary)
+                .lineLimit(1)
+            Button(action: remove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Ink.secondary)
+                    .frame(width: 16, height: 16)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Remove \(option.title)"))
+        }
+        .padding(.leading, option.avatarURL == nil ? 9 : 4)
+        .padding(.trailing, 4)
+        .frame(height: 26)
+        .background(Palette.accent.opacity(0.18), in: .capsule)
+    }
+}
+
+/// A small capsule action inside a card.
+private struct SearchCapsuleButton: View {
+    var title: String
+    var symbolName: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: symbolName)
+                .font(.system(.subheadline, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+                .padding(.horizontal, 12)
+                .frame(height: 28)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .plainChip(in: .capsule)
+    }
+}
+
+/// A wrapping row of toggle capsules: the kind's symbol, turned into a tick
+/// when it is on, in the accent.
+private struct SearchToggleFlow: View {
     struct Option: Hashable, Identifiable {
         var id: String
         var title: String
@@ -381,43 +471,33 @@ private struct SearchChipFlow: View {
     var selection: Set<String>
     var toggle: (String) -> Void
 
+    @Environment(\.motion) private var motion
+
     var body: some View {
-        // A grid rather than a hand-rolled flow: the chips are a fixed set of
-        // short labels, and an adaptive grid wraps them without measuring.
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 118), spacing: Spacing.base)],
-            alignment: .leading,
-            spacing: Spacing.base
-        ) {
+        FlowLayout(spacing: 6) {
             ForEach(options) { option in
                 let isOn = selection.contains(option.id)
                 Button { toggle(option.id) } label: {
-                    HStack(spacing: Spacing.tight) {
-                        Image(symbol: option.symbolName)
-                            .font(.system(.caption))
+                    HStack(spacing: 5) {
+                        Image(symbol: isOn ? "checkmark" : option.symbolName)
+                            .font(.system(.caption, weight: .semibold))
+                            .contentTransition(.symbolEffect(.replace))
                         Text(option.title)
-                            .font(.system(.callout))
+                            .font(.system(.subheadline, weight: .medium))
                             .lineLimit(1)
-                        Spacer(minLength: 0)
                     }
-                    .foregroundStyle(isOn ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary))
-                    .padding(.horizontal, Spacing.snug)
-                    .frame(height: Metrics.control + Spacing.tight)
+                    .foregroundStyle(isOn ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.primary))
+                    .padding(.horizontal, 11)
+                    .frame(height: 28)
+                    // Filled, never stroked: a one-point rule round a capsule
+                    // this small draws a tick at each end.
                     .background {
-                        RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                            .fill(isOn ? Palette.accent.opacity(0.16) : Palette.hoverFill)
+                        Capsule().fill(isOn ? Palette.accent.opacity(0.2) : Palette.hoverFill)
                     }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                            .strokeBorder(
-                                isOn ? AnyShapeStyle(Palette.accent.opacity(0.55))
-                                     : AnyShapeStyle(Ink.quaternary),
-                                lineWidth: 1
-                            )
-                    }
-                    .contentShape(.rect(cornerRadius: Radius.chip))
+                    .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
+                .animation(motion.hover, value: isOn)
                 .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
             }
         }

@@ -29,6 +29,10 @@ public enum DisplayNameFont: Int, Hashable, Sendable, Codable, CaseIterable {
     case mainframe = 14
     case headbang = 15
     case journal = 16
+    /// Discord's `HEXAGON`, id 17 — Pricedown. Worn, never offered: it is in
+    /// none of Discord's pickers' lists (`750656`), only on the accounts a
+    /// promotion gave it to.
+    case hexagon = 17
 
     /// What the picker calls it, and what a hover tooltip says.
     ///
@@ -49,8 +53,13 @@ public enum DisplayNameFont: Int, Hashable, Sendable, Codable, CaseIterable {
         case .mainframe: "Mainframe"
         case .headbang: "Headbang"
         case .journal: "Journal"
+        case .hexagon: "Hexagon"
         }
     }
+
+    /// The faces a reader may choose, in Discord's own order — every one but
+    /// Hexagon, which no picker of Discord's lists.
+    public static let offered: [DisplayNameFont] = allCases.filter { $0 != .hexagon }
 
     /// The PostScript name inside the bundled file. Nil for `.default`, which
     /// resolves to the system face.
@@ -68,7 +77,18 @@ public enum DisplayNameFont: Int, Hashable, Sendable, Codable, CaseIterable {
         case .mainframe: "Orbitron-Bold"
         case .headbang: "NewRocker-Regular"
         case .journal: "Kalam-Bold"
+        case .hexagon: "Pricedown-Bold"
         }
+    }
+
+    /// The file on Discord's CDN, for a face that is not bundled.
+    ///
+    /// **Fetched, not shipped**: Pricedown is a commercial face that Discord
+    /// licensed for its own client, so the app carries no copy of it and reads
+    /// the one Discord serves — `/assets/{this}` — the first time somebody
+    /// wearing it is drawn. Nil for every face in the bundle.
+    public var remoteAsset: String? {
+        self == .hexagon ? "a7bafac436428e6c.woff2" : nil
     }
 
     /// The file this face ships in, without its extension.
@@ -78,7 +98,7 @@ public enum DisplayNameFont: Int, Hashable, Sendable, Codable, CaseIterable {
     /// registration looks one up and lookup uses the other.
     public var fileName: String? {
         switch self {
-        case .default: nil
+        case .default, .hexagon: nil
         case .medieval: "Neo-castel"
         default: postScriptName
         }
@@ -95,7 +115,7 @@ public enum DisplayNameFont: Int, Hashable, Sendable, Codable, CaseIterable {
         case .tempo, .mainframe: 0.03
         case .medieval, .eightBit: 0.02
         case .modern, .vampyre: 0.01
-        case .default, .jellybean, .monkeyBars, .headbang, .journal: 0
+        case .default, .jellybean, .monkeyBars, .headbang, .journal, .hexagon: 0
         }
     }
 
@@ -105,6 +125,11 @@ public enum DisplayNameFont: Int, Hashable, Sendable, Codable, CaseIterable {
     /// and leaves them alone under Blink. macOS is the same text stack Safari
     /// draws with, so the WebKit branch is the one that applies here — the
     /// correction is for how Core Text places these faces, not for a browser.
+    /// The two heavy faces Discord draws at nine tenths where the effect is off
+    /// (`boldFontOpacity`, Cherry Bomb and Chicle): at full ink they shout over
+    /// the plain names beside them.
+    public var isHeavy: Bool { self == .sakura || self == .jellybean }
+
     public var liftsBaseline: Bool {
         switch self {
         case .sakura, .medieval: true
@@ -239,6 +264,19 @@ public struct DisplayNameStyle: Hashable, Sendable, Codable {
     public var isPlain: Bool {
         font == .default && effect == .solid && colors.isEmpty
     }
+
+    /// The face alone: this style with its effect and colours taken off.
+    ///
+    /// Discord's `PLAIN` — how a name is drawn where its effect is not shown,
+    /// which is most places most of the time: a row in the DM list nobody is
+    /// pointing at, a message nobody is hovering.
+    public var faceOnly: DisplayNameStyle {
+        DisplayNameStyle(font: font, effect: .solid, colors: [])
+    }
+
+    /// How long one play of this style's effect is, in seconds: two for
+    /// Prism's scroll, four for the rest.
+    public var cycle: Double { effect == .prism ? 2 : 4 }
 
     /// The palette every derived shade comes from, or nil when the account chose
     /// no colour. Resolved once by the caller and never inside a draw.

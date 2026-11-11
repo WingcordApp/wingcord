@@ -67,7 +67,9 @@ enum DisplayNameFontRegistry {
                 return installed
             }
             guard register(face), let loaded = NSFont(name: postScriptName, size: size) else {
-                state[face] = .unavailable
+                // A face on its way is not a face that is missing: asked again
+                // when it lands.
+                if face.remoteAsset == nil || !fetching.contains(face) { state[face] = .unavailable }
                 return nil
             }
             state[face] = .available
@@ -76,7 +78,59 @@ enum DisplayNameFontRegistry {
         }
     }
 
+    /// Posted when a fetched face has landed, so a name already on screen in
+    /// the fallback can be shaped again in the real one.
+    static let didLoadFace = Notification.Name("WingcordDisplayNameFaceDidLoad")
+
+    /// Faces being fetched now, so a roster of people wearing one asks once.
+    private static var fetching: Set<DisplayNameFont> = []
+
+    /// Where a fetched face is kept between launches.
+    private static func cacheURL(for asset: String) -> URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("DisplayNameFaces", isDirectory: true)
+            .appendingPathComponent(asset)
+    }
+
+    /// A face Discord serves rather than one this app ships — see
+    /// `DisplayNameFont.remoteAsset`. From the cache when it has been fetched
+    /// before; otherwise asked for once, and the caller draws the fallback
+    /// until `didLoadFace` says to look again.
+    private static func registerRemote(_ face: DisplayNameFont, asset: String) -> Bool {
+        guard let file = cacheURL(for: asset) else { return false }
+        if FileManager.default.fileExists(atPath: file.path) {
+            return CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil)
+        }
+        guard fetching.insert(face).inserted,
+              let remote = URL(string: "https://discord.com/assets/\(asset)")
+        else { return false }
+        Task {
+            let landed = await fetch(remote, to: file)
+            fetching.remove(face)
+            // **A failure is remembered for the session**, or every name drawn
+            // while the network is down is another request. A success is
+            // forgotten instead, so the next ask registers the file now there.
+            state[face] = landed ? nil : .unavailable
+            if landed { NotificationCenter.default.post(name: didLoadFace, object: nil) }
+        }
+        return false
+    }
+
+    /// Downloads one face and keeps it, if Core Text reads it as a font.
+    private static func fetch(_ remote: URL, to file: URL) async -> Bool {
+        guard let (data, response) = try? await URLSession.shared.data(from: remote),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let found = CTFontManagerCreateFontDescriptorsFromData(data as CFData) as? [CTFontDescriptor],
+              !found.isEmpty
+        else { return false }
+        try? FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        return (try? data.write(to: file, options: .atomic)) != nil
+    }
+
     private static func register(_ face: DisplayNameFont) -> Bool {
+        if let asset = face.remoteAsset { return registerRemote(face, asset: asset) }
         guard
             let fileName = face.fileName,
             let url = Bundle.module.url(

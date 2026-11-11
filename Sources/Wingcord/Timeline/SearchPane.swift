@@ -46,12 +46,13 @@ struct SearchPane: View {
                     // the two would drift.
                     .floatingBottomBar {
                         if search.pageCount > 1 {
-                            SearchPageBar(
+                            SearchPagePill(
                                 currentPage: search.currentPage,
                                 pageCount: search.pageCount,
                                 isLoading: search.isLoading,
                                 go: { model.goToSearchPage($0) }
                             )
+                            .padding(.bottom, Spacing.snug)
                         }
                     }
             }
@@ -80,6 +81,8 @@ struct SearchPane: View {
                 Text(resultsTitle(search))
                     .font(.system(.headline))
                     .foregroundStyle(Ink.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .contentTransition(.numericText())
 
                 if search.isLoading {
@@ -87,24 +90,39 @@ struct SearchPane: View {
                 }
                 Spacer(minLength: 0)
 
-                SearchFiltersButton(
-                    count: search.activeFilterCount,
-                    open: { model.isSearchFiltersShown = true }
-                )
+                // One glass group, the header controls' own arrangement: the
+                // three things the reader can do to a list of results.
+                GlassEffectContainer(spacing: Spacing.tight) {
+                    HStack(spacing: Spacing.tight) {
+                        SearchFiltersButton(
+                            count: search.activeFilterCount,
+                            open: { model.isSearchFiltersShown = true }
+                        )
+                        SearchSortMenu(
+                            sort: search.sort,
+                            order: search.order,
+                            choose: { model.setSearchSort($0, order: $1) }
+                        )
+                        // **The panel's only visible way out.** Everything else
+                        // here is opened from a control that can be pressed again
+                        // to close it; this one is raised by typing in a toolbar
+                        // field, so without this the column is a one-way door.
+                        // Escape reaches it two other ways: clearing the field,
+                        // and `onExitCommand` below when the focus is in the list.
+                        SearchCloseButton { model.closeSearch() }
+                    }
+                }
+                // **Never squeezed**: the column is narrow, and a control that
+                // gives up width wraps its label ("Filt / ers"). The title
+                // truncates instead.
+                .fixedSize()
+            }
 
-                SearchSortMenu(
-                    sort: search.sort,
-                    order: search.order,
-                    choose: { model.setSearchSort($0, order: $1) }
-                )
-
-                // **The panel's only visible way out.** Everything else here is
-                // opened from a control that can be pressed again to close it;
-                // this one is raised by typing in a toolbar field, so without
-                // this the column is a one-way door — which is exactly how it
-                // read. Escape reaches it two other ways: clearing the field,
-                // and `onExitCommand` below when the focus is in the list.
-                SearchCloseButton { model.closeSearch() }
+            // What the list under it was searched with, each a ✕ away.
+            let tokens = model.searchFilterTokens
+            if !tokens.isEmpty {
+                SearchTokenRow(tokens: tokens, remove: { model.removeSearchFilter($0) })
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             // Said out loud rather than left to look like a thin server: the
@@ -305,12 +323,17 @@ private struct SearchSortMenu: View {
                 Image(systemName: "arrow.up.arrow.down")
                     .font(.system(.caption, weight: .semibold))
                 Text(label)
-                    .font(.system(.caption, weight: .medium))
+                    .font(.system(.subheadline, weight: .medium))
             }
-            .foregroundStyle(Ink.secondary)
+            .foregroundStyle(Ink.primary)
+            .padding(.horizontal, Spacing.snug)
+            .frame(height: SearchPaneMetrics.control)
+            .contentShape(.capsule)
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
+        .interactiveChrome(in: .capsule)
         .accessibilityLabel("Sort results")
     }
 
@@ -325,152 +348,179 @@ private struct SearchSortMenu: View {
 
 // MARK: - Paging
 
-/// `‹ Back  1 2 … 400  Next ›`, floating.
+/// The panel's controls' one height.
+enum SearchPaneMetrics {
+    static let control: CGFloat = 30
+}
+
+/// `‹  3 of 69  ›` — one glass capsule floating over the foot of the results.
 ///
-/// **Glass, because it is the one thing here with content moving under it** —
-/// the results scroll beneath the bar, which is the composition `INVARIANTS.md`
-/// §4 reserves the material for. One body per control group, merged in a
-/// `GlassEffectContainer`, exactly as the Channels & Roles bar is built.
-///
-/// **The current page is a region inside the numbers' own material, not a second
-/// glass body** — §4 rule 2 — and it travels with `matchedGeometryEffect`, the
-/// same idiom the segmented control uses.
-///
-/// **`…` is a control, not punctuation.** With four hundred pages the elision is
-/// most of the range, so the thing it hides is exactly what somebody wants: it
-/// opens a flyout that takes a page number. Discord draws the same `…` and makes
-/// page 200 a hundred and ninety-eight clicks away.
-private struct SearchPageBar: View {
+/// **Replaces a row of numbered pages that could not fit its column**: at the
+/// search column's width "1 2 … 69" wrapped its last number onto two lines
+/// (Alex's report, 2026-11-10). A page number in words never outgrows its
+/// capsule, the arrows step one page, and the number itself opens "Go to page"
+/// — where four hundred pages are four keystrokes away rather than a strip of
+/// buttons to aim at.
+struct SearchPagePill: View {
     var currentPage: Int
     var pageCount: Int
     var isLoading: Bool
     var go: (Int) -> Void
 
     @Environment(\.motion) private var motion
-    @Namespace private var pill
     @State private var isJumpShown = false
 
+    private static let height: CGFloat = 36
+
     var body: some View {
-        GlassEffectContainer(spacing: Spacing.base) {
-            HStack(spacing: Spacing.base) {
-                step("Back", symbol: "chevron.left", to: currentPage - 1, isEnabled: currentPage > 1)
-                numbers
-                step("Next", symbol: "chevron.right", to: currentPage + 1, isEnabled: currentPage < pageCount)
+        HStack(spacing: 0) {
+            step(forward: false)
+            Button { isJumpShown = true } label: {
+                HStack(spacing: 5) {
+                    Text(currentPage, format: .number)
+                        .font(.system(.callout, weight: .semibold))
+                        .foregroundStyle(Ink.primary)
+                        .contentTransition(.numericText(value: Double(currentPage)))
+                    Text("of \(pageCount.formatted(.number))")
+                        .font(.system(.callout, weight: .medium))
+                        .foregroundStyle(Ink.secondary)
+                }
+                .monospacedDigit()
+                .padding(.horizontal, Spacing.base)
+                .frame(minWidth: 76, minHeight: Self.height)
+                .contentShape(.capsule)
             }
+            .buttonStyle(.plain)
+            .help("Go to page…")
+            .accessibilityLabel(Text("Page \(currentPage) of \(pageCount). Go to page"))
+            .popover(isPresented: $isJumpShown, arrowEdge: .top) {
+                SearchPageJump(pageCount: pageCount) { page in
+                    isJumpShown = false
+                    go(page)
+                }
+            }
+            step(forward: true)
         }
-        .padding(.horizontal, Spacing.snug)
-        .padding(.bottom, Spacing.snug)
+        .padding(.horizontal, 3)
+        .frame(height: Self.height)
+        // How far through the pages this is: a hairline along the capsule's
+        // foot, which moves as the number does.
+        .overlay(alignment: .bottom) {
+            GeometryReader { proxy in
+                Capsule()
+                    .fill(Palette.accent.opacity(0.85))
+                    .frame(
+                        width: max(6, proxy.size.width * CGFloat(currentPage) / CGFloat(max(1, pageCount))),
+                        height: 2
+                    )
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 3)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+        .interactiveChrome(in: .capsule)
+        .fixedSize()
+        .opacity(isLoading ? 0.6 : 1)
         .disabled(isLoading)
-        .opacity(isLoading ? 0.55 : 1)
         .animation(motion.standard, value: currentPage)
     }
 
-    /// One glass body holding every number, so the pages read as one control
-    /// rather than as a row of separate buttons.
-    private var numbers: some View {
-        HStack(spacing: 2) {
-            ForEach(Array(pageNumbers.enumerated()), id: \.offset) { _, slot in
-                switch slot {
-                case .page(let page):
-                    numberButton(page)
-                case .gap:
-                    gapButton
-                }
-            }
-        }
-        .padding(.horizontal, Spacing.tight)
-        .frame(height: Metrics.control + Spacing.base)
-        .interactiveChrome(in: .capsule)
-    }
-
-    private func numberButton(_ page: Int) -> some View {
-        let isCurrent = page == currentPage
-        return Button { go(page) } label: {
-            Text(String(page))
-                .font(.system(.caption, weight: isCurrent ? .semibold : .medium))
-                .foregroundStyle(isCurrent ? AnyShapeStyle(.white) : AnyShapeStyle(Ink.secondary))
-                .monospacedDigit()
-                .padding(.horizontal, Spacing.base)
-                .frame(minWidth: 26, minHeight: Metrics.control)
-                .background {
-                    // A tinted region inside the capsule's material, travelling
-                    // between numbers — never a second glass body.
-                    if isCurrent {
-                        Capsule()
-                            .fill(Palette.accent)
-                            .matchedGeometryEffect(id: "page", in: pill)
-                    }
-                }
-                .contentShape(.capsule)
+    private func step(forward: Bool) -> some View {
+        let target = currentPage + (forward ? 1 : -1)
+        let isEnabled = forward ? currentPage < pageCount : currentPage > 1
+        return Button { go(target) } label: {
+            Image(systemName: forward ? "chevron.right" : "chevron.left")
+                .font(.system(.callout, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+                .frame(width: Self.height - 6, height: Self.height - 6)
+                .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Page \(page)")
-        .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
-    }
-
-    /// The elision, which is where a page number is typed.
-    private var gapButton: some View {
-        Button { isJumpShown = true } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(.caption, weight: .semibold))
-                .foregroundStyle(Ink.tertiary)
-                .frame(minWidth: 26, minHeight: Metrics.control)
-                .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Jump to a page")
-        .popover(isPresented: $isJumpShown, arrowEdge: .top) {
-            SearchPageJump(pageCount: pageCount) { page in
-                isJumpShown = false
-                go(page)
-            }
-        }
-    }
-
-    private func step(
-        _ title: String,
-        symbol: String,
-        to page: Int,
-        isEnabled: Bool
-    ) -> some View {
-        Button { go(page) } label: {
-            HStack(spacing: Spacing.tight) {
-                if symbol == "chevron.left" { Image(symbol: symbol) }
-                Text(title)
-                if symbol == "chevron.right" { Image(symbol: symbol) }
-            }
-            .font(.system(.caption, weight: .medium))
-            .foregroundStyle(isEnabled ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.quaternary))
-            .padding(.horizontal, Spacing.snug)
-            .frame(height: Metrics.control + Spacing.base)
-            .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
-        .interactiveChrome(in: .capsule)
         .disabled(!isEnabled)
-        // Kept in place rather than removed at the ends: a bar whose controls
-        // move as you page is a bar you have to re-aim at every time.
-        .opacity(isEnabled ? 1 : 0.5)
+        // Kept in place at the ends: a control that moves as you page is one you
+        // have to re-aim at every time.
+        .opacity(isEnabled ? 1 : 0.3)
+        .help(forward ? "Next page" : "Previous page")
+        .accessibilityLabel(Text(forward ? "Next page" : "Previous page"))
     }
+}
 
-    private enum Slot: Hashable { case page(Int), gap }
+/// The filters the results were searched with, each one a token with a ✕ —
+/// a horizontal strip under the header that scrolls when there are many.
+private struct SearchTokenRow: View {
+    var tokens: [SearchFilterToken]
+    var remove: (SearchFilterToken) -> Void
 
-    /// `1 2 … 400` — the first, the last, and a window around where you are.
-    ///
-    /// **Always at least one gap when there is anything hidden**, because the
-    /// gap is the control that reaches what the window leaves out.
-    private var pageNumbers: [Slot] {
-        guard pageCount > 1 else { return [] }
-        guard pageCount > 6 else { return (1...pageCount).map(Slot.page) }
+    @Environment(\.motion) private var motion
 
-        var slots: [Slot] = [.page(1)]
-        let lower = max(2, currentPage - 1)
-        let upper = min(pageCount - 1, currentPage + 1)
-        if lower > 2 { slots.append(.gap) }
-        for page in lower...upper { slots.append(.page(page)) }
-        if upper < pageCount - 1 { slots.append(.gap) }
-        slots.append(.page(pageCount))
-        return slots
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: Spacing.tight) {
+                ForEach(tokens) { token in
+                    SearchTokenChip(token: token, remove: { remove(token) })
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .scrollIndicators(.never)
+        .animation(motion.standard, value: tokens)
+    }
+}
+
+struct SearchTokenChip: View {
+    var token: SearchFilterToken
+    var remove: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let avatarURL = token.avatarURL {
+                AvatarView(url: avatarURL, monogram: token.monogram ?? "?", side: 16)
+            } else if let symbolName = token.symbolName {
+                Image(symbol: symbolName)
+                    .font(.system(.caption, weight: .semibold))
+                    .foregroundStyle(Palette.accent)
+            }
+            Text(token.prefix)
+                .font(.system(.caption, weight: .semibold))
+                .foregroundStyle(Palette.accent)
+            Text(token.value)
+                .font(.system(.caption, weight: .medium))
+                .foregroundStyle(Ink.primary)
+                .lineLimit(1)
+            Button(action: remove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(isHovering ? Ink.primary : Ink.secondary)
+                    .frame(width: 16, height: 16)
+                    .background(isHovering ? Palette.hoverFill : .clear, in: .circle)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovering = $0 }
+            .help("Remove this filter")
+            .accessibilityLabel(Text("Remove \(token.prefix) \(token.value)"))
+        }
+        .padding(.leading, token.avatarURL == nil ? 8 : 4)
+        .padding(.trailing, 3)
+        .frame(height: 24)
+        .background(Palette.accent.opacity(0.18), in: .capsule)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Black or white over the accent, whichever reads: the accent is the theme's
+/// and white on Wingcord's orange does not.
+private struct AccentBadgeInk: ShapeStyle {
+    func resolve(in environment: EnvironmentValues) -> Color {
+        let accent = Palette.accent.resolve(in: environment)
+        let luminance = 0.2126 * Double(accent.linearRed) + 0.7152 * Double(accent.linearGreen)
+            + 0.0722 * Double(accent.linearBlue)
+        return luminance > 0.18 ? Color.black.opacity(0.88) : .white
     }
 }
 
@@ -549,11 +599,14 @@ private struct SearchCloseButton: View {
     var body: some View {
         Button(action: close) {
             Image(systemName: "xmark")
-                .font(.system(.caption, weight: .semibold))
-                .foregroundStyle(Ink.secondary)
-                .contentShape(.rect)
+                .font(.system(.caption, weight: .bold))
+                .foregroundStyle(Ink.primary)
+                .frame(width: SearchPaneMetrics.control, height: SearchPaneMetrics.control)
+                .contentShape(.circle)
         }
         .buttonStyle(.plain)
+        .interactiveChrome(in: .circle)
+        .help("Close search")
         .accessibilityLabel(Text("Close search"))
     }
 }
@@ -567,13 +620,28 @@ private struct SearchFiltersButton: View {
             HStack(spacing: Spacing.tight) {
                 Image(systemName: "line.3.horizontal.decrease")
                     .font(.system(.caption, weight: .semibold))
-                Text(count > 0 ? "Filters (\(count))" : "Filters")
-                    .font(.system(.caption, weight: .medium))
+                Text("Filters")
+                    .font(.system(.subheadline, weight: .medium))
+                if count > 0 {
+                    // The count in a badge of the accent, as a toolbar shows
+                    // what is set behind a control.
+                    Text("\(count)")
+                        .font(.system(.caption2, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(AccentBadgeInk())
+                        .padding(.horizontal, 5)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(Palette.accent, in: .capsule)
+                        .contentTransition(.numericText(value: Double(count)))
+                }
             }
-            .foregroundStyle(count > 0 ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary))
-            .contentShape(.rect)
+            .foregroundStyle(Ink.primary)
+            .padding(.horizontal, Spacing.snug)
+            .frame(height: SearchPaneMetrics.control)
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
+        .interactiveChrome(in: .capsule)
         .accessibilityLabel(count > 0 ? "Filters, \(count) set" : "Filters")
     }
 }

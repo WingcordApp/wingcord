@@ -256,6 +256,7 @@ extension AppModel {
         let plate = AppSettings.shared.showsNameplateInNowBar
             ? user.flatMap { cosmetics(of: $0)?.nameplate }
             : nil
+        let worn = user.flatMap { cosmetics(of: $0) }
         return NowBarPresentation(
             userID: currentUserID ?? UserID(rawValue: 0),
             displayName: user?.preferredName ?? "Not signed in",
@@ -271,7 +272,15 @@ extension AppModel {
             // being decoded at CDN size for a 240-point capsule.
             nameplateURL: plate?.artworkURL,
             nameplateAnimatedURL: plate?.animatedArtworkURL,
-            nameplatePalette: plate?.palette ?? .none
+            nameplatePalette: plate?.palette ?? .none,
+            nameStyle: worn?.displayNameStyle,
+            tag: worn?.primaryGuildTag,
+            tagBadgeURL: worn.flatMap { decoration in
+                guard let guildID = decoration.primaryGuildID,
+                      let hash = decoration.primaryGuildBadgeHash
+                else { return nil }
+                return CDN.guildTagBadge(guildID: guildID, hash: hash)
+            }
         )
     }
 
@@ -700,6 +709,7 @@ extension AppModel {
                 // one of them would be a fact about somebody the row does not
                 // name.
                 status: partnerID.map { presenceStatus(of: $0) },
+                statusClient: partnerID.map { presenceClient(of: $0) } ?? .desktop,
                 isTyping: partnerID.map { isTypingInDirectMessage(channelID, partner: $0) } ?? false,
                 activityLine: partnerID.flatMap { partnerID in
                     let voice = voicePlace(of: partnerID)
@@ -1160,6 +1170,11 @@ extension AppModel {
         PresenceStatus.resolved(presences[userID]?.status, flags: users[userID]?.flags ?? [])
     }
 
+    /// What somebody's online mark is drawn as: a dot, a phone or a headset.
+    func presenceClient(of userID: UserID) -> PresenceClient {
+        presences[userID]?.client ?? .desktop
+    }
+
     func avatarURL(forUserID userID: UserID, inGuild guildID: GuildID?, side: CGFloat) -> URL? {
         if let guildID, let member = members[guildID]?[userID], let hash = member.avatarHash {
             return CDN.guildMemberAvatar(
@@ -1217,6 +1232,19 @@ extension AppModel {
 
     func selectChannel(_ channelID: ChannelID) {
         guard canOpen(channelID) else { return }
+        // **A server's channel is opened in that server.** The Servers page can
+        // list a server that is not the selected one — it keeps the last
+        // server's channels after the reader goes Home — and a channel opened
+        // from there used to leave the selection behind: the rail lit Home
+        // while the transcript showed the server, and everything that reads the
+        // selected server (its pages, its roster) answered for the wrong one.
+        // Every other way in selects the server first; this is the same rule
+        // for the one that did not. Not the whole of `selectGuild`, which would
+        // pick the server's last channel over the one just clicked.
+        if let channelGuild = channelIndex.guildID(of: channelID), channelGuild != selectedGuildID {
+            if discovery != nil { closeDiscovery() }
+            selectedGuildID = channelGuild
+        }
         // **Leaving the page is what picking a channel means**, and it has to
         // happen even when that channel is already the selected one — otherwise
         // clicking the row you came from leaves the page up and does nothing.

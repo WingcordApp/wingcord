@@ -28,10 +28,10 @@ public struct DisplayNamePalette: Hashable, Sendable {
     public let light2: UInt32
     /// Pop's outline. `l * 0.2`.
     public let dark2: UInt32
-    /// Toon's outline and fill under the gradient. `l * 0.4`.
+    /// Toon's outline and fill under the gradient. `l * 0.4`, never under 12.
     public let toonStroke: UInt32
-    /// Neon's stroke: saturation lifted by 1.2 and clamped, lightness pinned to
-    /// a flat 60 regardless of the source.
+    /// Neon's stroke: saturation lifted by 1.2 and clamped, lightness a tenth
+    /// over the source and capped at 60.
     public let neonStroke: UInt32
     /// The colour Neon's white core drops to on each flicker. Read out of the
     /// keyframe rather than fitted — its `min(1, s)` guard is what keeps a fully
@@ -44,11 +44,18 @@ public struct DisplayNamePalette: Hashable, Sendable {
         light1 = base.scalingLightness(by: 1.2).rgb
         light2 = base.scalingLightness(by: 1.6).rgb
         dark2 = base.scalingLightness(by: 0.2).rgb
-        toonStroke = base.scalingLightness(by: 0.4).rgb
+        // `max(.12, .4 * l)`: the floor is what keeps Toon's outline from
+        // going to black under a dark pick.
+        toonStroke = HSL(
+            hue: base.hue,
+            saturation: base.saturation,
+            lightness: max(12, base.lightness * 0.4)
+        ).rgb
+        // `min(.6, l + .1)`: a tenth lighter than the pick, and never past 60.
         neonStroke = HSL(
             hue: base.hue,
             saturation: min(100, base.saturation * 1.2),
-            lightness: 60
+            lightness: min(60, base.lightness + 10)
         ).rgb
         flickerOff = HSL(
             hue: base.hue,

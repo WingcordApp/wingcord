@@ -241,7 +241,9 @@ struct MiniProfileCard: View {
                             color: InkColor.secondary,
                             emojiSide: 16,
                             mentions: model.mentionContext(),
-                            onEmoji: openEmoji ?? { inspectedEmoji = $0 },
+                            onEmoji: openEmoji,
+                            // The card opens on the emoji, from the prose.
+                            inspectsEmoji: openEmoji == nil,
                             onLink: openLink,
                             animates: animates
                         )

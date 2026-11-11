@@ -160,12 +160,18 @@ struct ProseCanvasTests {
     @Test("A press on an emoji asks about that emoji")
     func emojiPress() throws {
         var asked: [EmojiRef] = []
-        let actions = ProseCanvasView.Actions(emoji: { asked.append($0) })
+        var places: [CGRect] = []
+        let actions = ProseCanvasView.Actions(emoji: { emoji, rect in
+            asked.append(emoji)
+            places.append(rect)
+        })
         let (view, block) = try view("hi <:meow:123456789010468812>", actions: actions)
         let emoji = try #require(block.emojiRects.first)
         view.press(at: center(emoji.rect), clicks: 1)
         view.release(at: center(emoji.rect))
         #expect(asked.map(\.name) == ["meow"])
+        // Where it is, so its card opens on it and not at the surface's edge.
+        #expect(places == [emoji.rect])
     }
 
     @Test("With no opener a link takes no click")

@@ -53,6 +53,13 @@ enum DisplayNameEffectLayers {
         root.bounds = CGRect(origin: .zero, size: run.size)
         root.anchorPoint = .zero
         root.masksToBounds = false
+        // Whatever the effect, the name's emoji go over it and stay as they
+        // are — Discord's `.emoji`, `z-index: 1`.
+        defer {
+            if !run.colorGlyphs.isEmpty {
+                root.addSublayer(DisplayNameColorGlyphLayer(run: run))
+            }
+        }
 
         guard let palette = style.palette else {
             // Solid with no colours: the account chose a face and left the
@@ -106,8 +113,9 @@ enum DisplayNameEffectLayers {
         guard colors.count >= 2 else { return fill(run.path, color: color(fallback.main)) }
         let layer = CAGradientLayer()
         layer.frame = CGRect(origin: .zero, size: run.size)
-        layer.colors = [color(colors[0]), color(colors[1])]
-        layer.locations = DisplayNameEffectSpec.Gradient.stops.map { NSNumber(value: $0) }
+        layer.colors = colors.map(color)
+        layer.locations = DisplayNameEffectSpec.Gradient.stops(count: colors.count)
+            .map { NSNumber(value: $0) }
         // y-up: top-left to bottom-right.
         layer.startPoint = CGPoint(x: 0, y: 1)
         layer.endPoint = CGPoint(x: 1, y: 0)
@@ -334,7 +342,12 @@ enum DisplayNameEffectLayers {
         // 50 ms per letter rather than however long the loop below took.
         let start = CACurrentMediaTime()
 
-        for (index, glyph) in run.glyphs.enumerated() {
+        // **Letters are counted, and a space is not one** — Discord gives a
+        // colour and a place in the wave to each letter it wraps, and it wraps
+        // neither a space nor an emoji.
+        var index = -1
+        for glyph in run.glyphs where !glyph.path.isEmpty {
+            index += 1
             let letter = CAShapeLayer()
             letter.bounds = CGRect(origin: .zero, size: glyph.box.size)
             letter.position = CGPoint(x: glyph.box.midX, y: glyph.box.midY)
@@ -342,7 +355,7 @@ enum DisplayNameEffectLayers {
             letter.path = glyph.path.copy(using: &intoBox)
             letter.fillColor = color(palette[index % palette.count])
             root.addSublayer(letter)
-            guard animates, !glyph.path.isEmpty else { continue }
+            guard animates else { continue }
 
             // Scaled about the centre of the *layout* box, which is what CSS
             // pivots an inline-block about — the ink box would swing a
@@ -385,7 +398,9 @@ enum DisplayNameEffectLayers {
         // `--prism-cycle` is `characterCount * 1ch` — a count of character
         // *slots*, not a measured width, which is what makes the rainbow read
         // the same in a wide face and a narrow one.
-        let tile = max(1, CGFloat(characterCount)) * run.zeroAdvance
+        let tile = DisplayNameEffectSpec.Prism.tile(
+            characterCount: characterCount, zeroAdvance: run.zeroAdvance
+        )
         let repeats = max(2, Int((run.size.width / tile).rounded(.up)) + 1)
 
         var gradientColors: [CGColor] = []

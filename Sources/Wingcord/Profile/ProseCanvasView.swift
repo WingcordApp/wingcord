@@ -14,6 +14,9 @@ struct ProseDrawing: Equatable {
     var emojiSide: CGFloat
     var lineLimit: Int?
     var plays: Bool
+    /// The words' own weight — a title set in prose, as a game announcement's
+    /// is. Bold in the markdown stays bold over it.
+    var weight: NSFont.Weight = .regular
 
     /// The transcript's style at this size and in this ink.
     func style() -> MessageTextStyle {
@@ -33,6 +36,9 @@ struct ProseDrawing: Equatable {
             isLight: isLight,
             highContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         ))
+        if weight != .regular {
+            style.bodyFont = NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: weight)
+        }
         style.emojiWidth = emojiSide
         style.emojiAscent = emojiSide * 0.78
         style.emojiDescent = emojiSide * 0.22
@@ -49,7 +55,10 @@ struct ProseDrawing: Equatable {
 final class ProseCanvasView: NSView, NSMenuItemValidation {
 
     struct Actions {
-        var emoji: ((EmojiRef) -> Void)?
+        /// A click on an emoji, with its rect in this view's own space — which
+        /// is the representable's, so SwiftUI can hang a card on the picture
+        /// itself rather than on the whole surface.
+        var emoji: ((EmojiRef, CGRect) -> Void)?
         /// Where a link, mention or chip goes. Nil takes no clicks. The rect is the
         /// run's, in the hosting root's space, for whatever opens beside it.
         var follow: ((MessageText.LinkTarget, CGRect) -> Void)?
@@ -57,7 +66,7 @@ final class ProseCanvasView: NSView, NSMenuItemValidation {
 
     /// What a press landed on, kept until the release decides.
     private enum Pressed {
-        case emoji(EmojiRef)
+        case emoji(EmojiRef, CGRect)
         case link(MessageText.LinkTarget, CGRect)
     }
 
@@ -353,7 +362,7 @@ final class ProseCanvasView: NSView, NSMenuItemValidation {
         if actions.emoji != nil {
             let emoji = block.emojiRects.first { $0.rect.contains(point) }
                 ?? block.unicodeEmojiRects.first { $0.rect.contains(point) }
-            if let emoji { return .emoji(emoji.emoji) }
+            if let emoji { return .emoji(emoji.emoji, emoji.rect) }
         }
         if actions.follow != nil, let link = block.link(at: point) {
             return .link(link.target, link.rect)
@@ -467,8 +476,8 @@ final class ProseCanvasView: NSView, NSMenuItemValidation {
         isDragging = false
         if let selection, selection.anchor == selection.focus { clearSelection() }
         switch pressed {
-        case .emoji(let emoji):
-            actions.emoji?(emoji)
+        case .emoji(let emoji, let rect):
+            actions.emoji?(emoji, rect)
         case .link(let target, let rect):
             actions.follow?(target, anchorInHostingRoot(rect))
         case nil:

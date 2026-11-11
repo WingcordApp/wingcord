@@ -443,7 +443,11 @@ extension DemoFixtures {
                 reviews: GameReviews(
                     openCritic: GameReviews.OpenCriticReviews(
                         topCriticRating: 79.286, topCriticRatingCount: 15, tier: .strong
-                    )
+                    ),
+                    // The phone stores, linked through the SKUs below — the
+                    // shape a mobile game's record arrives in.
+                    appStore: .init(rating: 4.62, count: 48_213),
+                    googlePlay: .init(rating: 4.3, count: 126_904)
                 ),
                 globalRank: 79,
                 // **No Steam and no Game Pass**, which is why it is worth

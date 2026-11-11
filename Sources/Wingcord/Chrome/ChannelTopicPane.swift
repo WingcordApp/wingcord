@@ -37,7 +37,9 @@ struct ChannelTopicPane: View {
                 color: InkColor.secondary,
                 emojiSide: 18,
                 mentions: mentions,
-                onEmoji: openEmoji,
+                // The card opens on the emoji, from the prose: an anchor of
+                // nothing put it in the window's corner.
+                inspectsEmoji: true,
                 onLink: openLink
             )
         }
