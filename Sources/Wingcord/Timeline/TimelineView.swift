@@ -18,7 +18,7 @@ struct TimelineView: NSViewRepresentable {
     var presentationRevision: UInt64
     /// An invitation card's colour, by application. Packed 24-bit, as every
     /// other themed value in this store is; the canvas converts.
-    var activityAccents: [ApplicationID: UInt32] = [:]
+    var activityAccents: [ApplicationID: ActivityCardTint] = [:]
     /// What each invitation card paints. Observed by the container so presence
     /// moving reaches the canvas; see `TimelineCanvasView.apply(activityInviteStatuses:)`.
     var activityInviteStatuses: [ApplicationID: ActivityInviteStatus] = [:]
@@ -99,6 +99,10 @@ struct TimelineView: NSViewRepresentable {
     /// Whether a new reaction may be started in this channel; see
     /// `TimelineCanvasView.apply(canAddReactions:)`.
     var canAddReactions: Bool
+    /// The message whose reaction picker is open, which keeps its add control
+    /// drawn while the pointer is on the picker — see
+    /// `TimelineCanvasView.apply(pinnedReactionMessage:)`.
+    var pinnedReactionMessage: MessageID?
     /// The channel is a message request, laid out as Discord's restricted
     /// preview — see `Message.restrictedPreview`. Accepting it in front of the
     /// reader is a relayout, into the whole messages.
@@ -155,6 +159,7 @@ struct TimelineView: NSViewRepresentable {
             bookmarks: bookmarks,
             canSuperReact: canSuperReact,
             canAddReactions: canAddReactions,
+            pinnedReactionMessage: pinnedReactionMessage,
             hidesMedia: hidesMedia,
             listenAlongCards: listenAlongCards,
             stageInvitations: stageInvitations,
@@ -910,7 +915,7 @@ final class TimelineCoordinator: NSObject {
         channelID: ChannelID,
         items: [TimelineItem],
         presentationRevision: UInt64,
-        activityAccents: [ApplicationID: UInt32],
+        activityAccents: [ApplicationID: ActivityCardTint],
         activityInviteStatuses: [ApplicationID: ActivityInviteStatus],
         uploadProgress: [MessageID: Double],
         topInset: CGFloat,
@@ -931,6 +936,7 @@ final class TimelineCoordinator: NSObject {
         bookmarks: Set<MessageID>,
         canSuperReact: Bool,
         canAddReactions: Bool,
+        pinnedReactionMessage: MessageID? = nil,
         hidesMedia: Bool,
         listenAlongCards: [String: ListenAlongCard],
         stageInvitations: Set<MessageID>,
@@ -947,6 +953,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.apply(bookmarks: bookmarks)
         canvas?.apply(canSuperReact: canSuperReact)
         canvas?.apply(canAddReactions: canAddReactions)
+        canvas?.apply(pinnedReactionMessage: pinnedReactionMessage)
         canvas?.apply(activityAccents: activityAccents)
         canvas?.apply(playingPreview: playingPreview)
         canvas?.apply(voiceRevision: voiceRevision, isLive: isVoiceLive)
@@ -1603,8 +1610,21 @@ final class TimelineCoordinator: NSObject {
             documentHeight: documentView.frame.height,
             currentFrame: canvas.frame
         )
+        let covered = canvas.bounds
         canvas.installViewport(frame: geometry.frame, bounds: geometry.bounds)
-        syncFrostOutlines()
+        // **The outlines are the canvas's, in the document's space, and the
+        // canvas only moves when it runs out of buffer.** Between moves a
+        // scroll changes nothing about them — the picture under them is what
+        // has to follow the window — and they used to be gathered from every
+        // bubble in the canvas and handed to the mask again on every tick,
+        // which is a new path for Core Animation to fill sixty or a hundred
+        // and twenty times a second. Rows changing say so themselves
+        // (`onBubbleOutlinesChange`).
+        if canvas.bounds != covered {
+            syncFrostOutlines()
+        } else {
+            alignFrost()
+        }
     }
 
     // MARK: The frost
@@ -1628,6 +1648,18 @@ final class TimelineCoordinator: NSObject {
         guard let frostView, let canvas, !frostView.isHidden else { return }
         frostView.mirror(frame: canvas.frame, boundsOrigin: canvas.bounds.origin)
         frostView.setOutlines(canvas.bubbleOutlines(in: canvas.bounds))
+        frostOutlineSyncs += 1
+        alignFrost()
+    }
+
+    /// How many times the outlines have been gathered and handed to the mask:
+    /// what a test reads to know a scroll does not do it per tick.
+    private(set) var frostOutlineSyncs = 0
+
+    /// Keeps the frost's picture on the window while the rows move over it:
+    /// one frame write, and all a scroll tick has to do.
+    private func alignFrost() {
+        guard let frostView, let canvas, !frostView.isHidden else { return }
         frostView.alignToWindow()
         canvas.alignFlightFrost()
     }

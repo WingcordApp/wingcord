@@ -37,7 +37,13 @@ struct TypingIndicatorContainer: View {
         let guildID = model.channelIndex.guildID(of: channelID)
         var result: [(id: UserID, name: String)] = []
         result.reserveCapacity(typing.count)
+        // Nobody the reader has blocked or ignored: Discord's typing line asks
+        // `isBlockedOrIgnored` of everyone in it, and a name here would be the
+        // one place a silenced person still announced themselves.
+        let blocked = model.blockedUserIDs
+        let ignored = model.ignoredUserIDs
         for userID in typing.keys where userID != model.currentUserID {
+            guard !blocked.contains(userID), !ignored.contains(userID) else { continue }
             guard let user = model.users[userID] else { continue }
             let member = guildID.flatMap { model.members[$0]?[userID] }
             result.append((userID, member?.resolvedName(user: user) ?? user.preferredName))

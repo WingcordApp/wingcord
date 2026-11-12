@@ -179,8 +179,17 @@ struct MessageActionBarOverlay: View {
         let hover = model.messageHover
         let _ = model.roleRevision
         let _ = model.messageContentRevision
-        let _ = model.inboundMessageRevision
-        let current = hover ?? (isPointerOnBar ? held : nil)
+        // This transcript's own messages, not the account's: the counter for
+        // every channel never stops moving, and with a row under the pointer
+        // each move worked the row's actions out again.
+        let _ = model.messageBoxes.contentRevision(of: channelID)
+        // **A surface the pill raised keeps the pill on its message.** The
+        // picker opens beside the pointer and the pointer follows it there, off
+        // the row — and a pill that left then took the picker's own anchor
+        // with it. While one is up the pill is that message's, wherever the
+        // pointer goes, another message included; Discord's does the same.
+        let pinned = pinnedMessageID.flatMap { id in held?.messageID == id ? held : nil }
+        let current = pinned ?? hover ?? (isPointerOnBar ? held : nil)
         let actions = current.map { model.actions(for: $0.messageID, in: channelID) } ?? []
         let items = actions.isEmpty ? [] : actions.barItems(shifted: isShifted)
 
@@ -238,7 +247,12 @@ struct MessageActionBarOverlay: View {
         .onChange(of: hover) { _, newValue in
             // Kept only while it exists, so a pointer released onto the pill has
             // something to keep showing.
-            if let newValue { held = newValue }
+            //
+            // Not while a surface pins the pill: the row the pointer has moved
+            // to is not the one the surface is about.
+            guard let newValue else { return }
+            if let pinnedMessageID, newValue.messageID != pinnedMessageID { return }
+            held = newValue
         }
         .onGeometryChange(for: CGPoint.self) { proxy in
             proxy.frame(in: .global).origin
@@ -250,6 +264,14 @@ struct MessageActionBarOverlay: View {
             guard resolved != originInRoot else { return }
             originInRoot = resolved
         }
+    }
+
+    /// The message a surface raised from the pill is about — the reaction
+    /// picker or the More menu, in this transcript — or nil while none is up.
+    private var pinnedMessageID: MessageID? {
+        if let picker = model.reactionPicker, picker.channelID == channelID { return picker.messageID }
+        if let menu = model.messageMenu, menu.channelID == channelID { return menu.messageID }
+        return nil
     }
 
     private func perform(
@@ -274,7 +296,10 @@ struct MessageActionBarOverlay: View {
     /// row — and arithmetic cannot go stale between the layout that placed it
     /// and the click that reads it, which a stored measurement can.
     private func anchor(of kind: MessageActionKind, in items: [MessageActionKind], leadingSlots: Int) -> CGRect {
-        guard let hover = model.messageHover ?? held,
+        // The pill's own message first: with a surface up, the hover may be
+        // another row's.
+        let pinned = pinnedMessageID.flatMap { id in held?.messageID == id ? held : nil }
+        guard let hover = pinned ?? model.messageHover ?? held,
               let found = items.firstIndex(of: kind)
         else { return .zero }
         let index = leadingSlots + found

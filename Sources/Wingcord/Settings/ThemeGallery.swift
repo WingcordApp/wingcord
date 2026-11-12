@@ -46,6 +46,25 @@ nonisolated enum ThemeMetrics {
     static let hairlineHovered = Color.relative(dark: 0.28, light: 0.30)
 }
 
+/// The theme as the window's look.
+///
+/// **Choosing a theme is choosing what the window wears.** With the desktop or
+/// a picture behind it the window's colours come from that (`WallpaperRoom`),
+/// so no theme is ringed — none is showing. Pressing one says "this theme's
+/// colours, over my picture", which is the Colours row's My Theme: the picture
+/// stays, and nothing the reader chose is thrown away.
+@MainActor
+enum ThemeLook {
+    /// Whether the chosen theme's colours are the ones on the window.
+    static var isWorn: Bool { WallpaperStore.shared.wearsTheme }
+
+    static func wear(_ choice: ThemeChoice) {
+        ThemeStore.shared.select(choice)
+        let wallpapers = WallpaperStore.shared
+        if !wallpapers.wearsTheme { wallpapers.colours = .theme }
+    }
+}
+
 struct ThemeGallery: View {
     /// Shared with `DiscordThemeGallery`. See the note at the top.
     var ring: Namespace.ID
@@ -60,10 +79,10 @@ struct ThemeGallery: View {
             ThemeTile(
                 title: "Sync with computer",
                 help: nil,
-                isSelected: theme.choice == .system,
+                isSelected: ThemeLook.isWorn && theme.choice == .system,
                 ring: ring
             ) {
-                theme.select(.system)
+                ThemeLook.wear(.system)
             } swatch: {
                 SystemSwatch()
             }
@@ -71,10 +90,10 @@ struct ThemeGallery: View {
                 ThemeTile(
                     title: preset.title,
                     help: preset.summary,
-                    isSelected: theme.choice == .preset(preset),
+                    isSelected: ThemeLook.isWorn && theme.choice == .preset(preset),
                     ring: ring
                 ) {
-                    theme.select(.preset(preset))
+                    ThemeLook.wear(.preset(preset))
                 } swatch: {
                     RoomSwatch(
                         ground: preset.ground(vividness: vividness),
@@ -123,10 +142,10 @@ private struct PlumageTile: View {
         ThemeTile(
             title: "Custom",
             help: "Your own blend. Choosing this opens Plumage below.",
-            isSelected: theme.choice.isCustom,
+            isSelected: ThemeLook.isWorn && theme.choice.isCustom,
             ring: ring
         ) {
-            theme.select(.custom)
+            ThemeLook.wear(.custom)
         } swatch: {
             RoomSwatch(
                 ground: ThemeStore.ground(
@@ -158,10 +177,10 @@ struct DiscordThemeGallery: View {
                 ThemeTile(
                     title: discord.title,
                     help: nil,
-                    isSelected: theme.choice == .discord(discord),
+                    isSelected: ThemeLook.isWorn && theme.choice == .discord(discord),
                     ring: ring
                 ) {
-                    theme.select(.discord(discord))
+                    ThemeLook.wear(.discord(discord))
                 } swatch: {
                     DiscordSwatch(theme: discord)
                 }
@@ -279,7 +298,7 @@ private struct ThemeTile<Swatch: View>: View {
 ///
 /// A `Canvas` for the same reason as `DiscordSwatch`: the angle is laid out
 /// against the tile's real size.
-private struct RoomSwatch: View {
+struct RoomSwatch: View {
     var ground: ThemeGround
     var accent: UInt32?
     /// Drawn faintly in the corner. Only the reader's own tile has one — the ten
@@ -421,10 +440,10 @@ struct SavedThemeGallery: View {
         ThemeTile(
             title: title,
             help: nil,
-            isSelected: theme.choice == .shared(shared),
+            isSelected: ThemeLook.isWorn && theme.choice == .shared(shared),
             ring: ring
         ) {
-            theme.select(.shared(shared))
+            ThemeLook.wear(.shared(shared))
         } swatch: {
             SharedThemeSwatch(theme: shared)
         }

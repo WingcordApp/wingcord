@@ -23,6 +23,15 @@ struct TrailerPlayer: NSViewRepresentable {
     var url: URL
     var poster: URL?
     var autoplays: Bool
+    /// Whether the stage can be seen in its scroll view.
+    ///
+    /// **A trailer nobody can see is not decoded.** It used to play on under
+    /// the header for as long as the page was open — a video decoder and a
+    /// layer redrawn sixty times a second for a picture scrolled away. Off
+    /// screen it pauses, and comes back playing only if it was. The same goes
+    /// for the app's windows being hidden, which the coordinator hears from
+    /// `AppVisibility` itself.
+    var isOnScreen = true
     /// Told whenever playback starts or stops, for the tray's play mark.
     var onPlayingChange: (Bool) -> Void
 
@@ -35,6 +44,7 @@ struct TrailerPlayer: NSViewRepresentable {
         view.showsFullScreenToggleButton = true
         context.coordinator.onPlayingChange = onPlayingChange
         context.coordinator.attach(to: view)
+        context.coordinator.isOnScreen = isOnScreen
         context.coordinator.load(url, poster: poster, autoplays: autoplays, in: view)
         return view
     }
@@ -42,12 +52,14 @@ struct TrailerPlayer: NSViewRepresentable {
     func updateNSView(_ view: AVPlayerView, context: Context) {
         context.coordinator.onPlayingChange = onPlayingChange
         context.coordinator.load(url, poster: poster, autoplays: autoplays, in: view)
+        context.coordinator.setOnScreen(isOnScreen, in: view)
     }
 
     /// Everything the player holds goes with the page: without this the
     /// decoder and the connection outlive a profile somebody closed.
     static func dismantleNSView(_ view: AVPlayerView, coordinator: Coordinator) {
         coordinator.stop(view)
+        AppVisibility.shared.stopObserving(coordinator)
     }
 
     final class Coordinator: NSObject {
@@ -56,6 +68,16 @@ struct TrailerPlayer: NSViewRepresentable {
         private var playback: NSKeyValueObservation?
         private var posterHost: NSView?
         private var isPlaying = false
+        /// Whether the stage is scrolled into view, and whether any of the
+        /// app's windows can be seen. Playback needs both.
+        var isOnScreen = true
+        private var isAppVisible = AppVisibility.shared.isVisible
+        /// Whether the trailer was playing when it lost its audience, so it
+        /// comes back as it left: a trailer somebody paused stays paused.
+        private var resumesWhenSeen = false
+        private weak var view: AVPlayerView?
+
+        private var canBeSeen: Bool { isOnScreen && isAppVisible }
 
         func attach(to view: AVPlayerView) {
             // **Not delaying the click**: the controls under the pointer still
@@ -64,6 +86,31 @@ struct TrailerPlayer: NSViewRepresentable {
             let click = NSClickGestureRecognizer(target: self, action: #selector(clicked(_:)))
             click.delaysPrimaryMouseButtonEvents = false
             view.addGestureRecognizer(click)
+            self.view = view
+            AppVisibility.shared.observe(self) { [weak self] visible in
+                guard let self, let view = self.view else { return }
+                let before = canBeSeen
+                isAppVisible = visible
+                audienceChanged(from: before, in: view)
+            }
+        }
+
+        func setOnScreen(_ onScreen: Bool, in view: AVPlayerView) {
+            guard onScreen != isOnScreen else { return }
+            let before = canBeSeen
+            isOnScreen = onScreen
+            audienceChanged(from: before, in: view)
+        }
+
+        private func audienceChanged(from before: Bool, in view: AVPlayerView) {
+            guard canBeSeen != before, let player = view.player else { return }
+            if canBeSeen {
+                if resumesWhenSeen { player.play() }
+                resumesWhenSeen = false
+            } else {
+                resumesWhenSeen = player.timeControlStatus != .paused
+                player.pause()
+            }
         }
 
         func load(_ url: URL, poster: URL?, autoplays: Bool, in view: AVPlayerView) {
@@ -72,13 +119,20 @@ struct TrailerPlayer: NSViewRepresentable {
             current = url
             let player = AVPlayer(url: url)
             player.isMuted = true
+            // A muted trailer on a page is not a film: it does not keep the
+            // display awake.
+            player.preventsDisplaySleepDuringVideoPlayback = false
             view.player = player
             showPoster(poster, in: view)
             playback = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
                 let playing = player.timeControlStatus == .playing
                 Task { @MainActor [weak self] in self?.playbackChanged(playing) }
             }
-            if autoplays { player.play() }
+            // Not for nobody: a trailer loaded off screen starts when it is
+            // scrolled to.
+            if autoplays {
+                if canBeSeen { player.play() } else { resumesWhenSeen = true }
+            }
         }
 
         func stop(_ view: AVPlayerView) {
@@ -88,6 +142,7 @@ struct TrailerPlayer: NSViewRepresentable {
             posterHost?.removeFromSuperview()
             posterHost = nil
             current = nil
+            resumesWhenSeen = false
             if isPlaying {
                 isPlaying = false
                 report(false)

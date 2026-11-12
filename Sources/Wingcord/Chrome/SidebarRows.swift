@@ -139,14 +139,14 @@ struct SidebarChannelRow: View {
                     .transition(.opacity)
                 }
             }
-            .sidebarRowHighlight(isSelected: isSelected, isHovering: isHovering)
-            .onHover { hovering in
+            .sidebarRowHighlight(isSelected: isSelected, isHovering: isHovering, suppressesSystemHighlight: false)
+            // Hover and the right-click through the list's one tracker — see
+            // `SidebarHoverRouter`. A catcher only where there is a menu.
+            .modifier(SidebarRowPointer(openMenu: openMenu) { hovering in
                 guard isHovering != hovering else { return }
                 isHovering = hovering
                 noteNameHover(hovering)
-            }
-            // Only where there is a menu to raise. See `openMenu`.
-            .modifier(SecondaryClickModifier(openMenu: openMenu))
+            })
             .animation(motion.fadeQuick, value: isHovering)
             // Being chosen plays the name's effect once. See `playToken`.
             .onChange(of: isSelected) { _, selected in
@@ -158,12 +158,11 @@ struct SidebarChannelRow: View {
             // its owner chose and worth seeing; a column of them all looping at
             // once is a list that never settles, which is why the resting state
             // is still.
-            .task(id: playToken) {
-            guard playToken > 0 else { return }
-            try? await Task.sleep(for: .seconds(playLength))
-            guard !Task.isCancelled else { return }
-            playToken = 0
-        }
+            .modifier(NameEffectTimer(
+                isStyled: channel.nameStyle?.isPlain == false,
+                playToken: $playToken,
+                playLength: playLength
+            ))
         .accessibilityLabel(Text(accessibilityLabel))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityActions {
@@ -425,6 +424,32 @@ private struct FullChannelNotice: ViewModifier {
     }
 }
 
+/// Ends a styled name's one play when its time is up — and exists only on a
+/// row that has a styled name.
+///
+/// **The modifier is guarded, not the closure** (§2). As `.task(id:)` on every
+/// row, each channel scrolled into view started a task whose first line was to
+/// find it had nothing to do; only a conversation with somebody who chose a
+/// style can ever play one.
+private struct NameEffectTimer: ViewModifier {
+    var isStyled: Bool
+    @Binding var playToken: Int
+    var playLength: Double
+
+    func body(content: Content) -> some View {
+        if isStyled {
+            content.task(id: playToken) {
+                guard playToken > 0 else { return }
+                try? await Task.sleep(for: .seconds(playLength))
+                guard !Task.isCancelled else { return }
+                playToken = 0
+            }
+        } else {
+            content
+        }
+    }
+}
+
 /// Installs the secondary-click catcher, or installs nothing.
 ///
 /// **The modifier is guarded, not the closure** — §2. Writing
@@ -629,12 +654,19 @@ extension View {
     /// (`SystemSelectionHighlightSuppressor`). The list still owns the
     /// selection — arrows, type-select, Full Keyboard Access and VoiceOver's
     /// "selected" are the system's — and only the paint is ours.
-    func sidebarRowHighlight(isSelected: Bool, isHovering: Bool = false) -> some View {
+    /// - Parameter suppressesSystemHighlight: false for a row whose pointer
+    ///   agent turns the list's own highlight off (`SidebarRowPointer`), so the
+    ///   row does not make a second platform view to do it.
+    func sidebarRowHighlight(
+        isSelected: Bool,
+        isHovering: Bool = false,
+        suppressesSystemHighlight: Bool = true
+    ) -> some View {
         background {
             RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
                 .fill(isSelected ? SidebarHighlight.selection : isHovering ? SidebarHighlight.hover : .clear)
                 .padding(SidebarRowGeometry.highlightOutset)
-                .background { SystemSelectionHighlightSuppressor() }
+                .background { if suppressesSystemHighlight { SystemSelectionHighlightSuppressor() } }
                 .allowsHitTesting(false)
         }
     }
@@ -902,13 +934,12 @@ struct SidebarThreadRow: View {
             .frame(minHeight: Metrics.sidebarRowContent, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
-            .sidebarRowHighlight(isSelected: isSelected, isHovering: isHovering)
-            .onHover { hovering in
+            .sidebarRowHighlight(isSelected: isSelected, isHovering: isHovering, suppressesSystemHighlight: false)
+            .modifier(SidebarRowPointer(openMenu: openMenu) { hovering in
                 guard isHovering != hovering else { return }
                 isHovering = hovering
-            }
+            })
             .animation(motion.hover, value: isHovering)
-            .modifier(SecondaryClickModifier(openMenu: openMenu))
             .accessibilityLabel(Text("Thread, \(thread.name)"))
             .accessibilityAddTraits(isSelected ? .isSelected : [])
     }

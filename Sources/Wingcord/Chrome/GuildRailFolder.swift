@@ -76,6 +76,8 @@ struct GuildRailFolder: View {
                             openMenu: { openGuildMenu(guild.id, $0) },
                             dragNode: .guild(guild.id)
                         )
+                        // Skipped when nothing it draws changed — see its `==`.
+                        .equatable()
                     }
                 }
                 .padding(.vertical, Spacing.base)

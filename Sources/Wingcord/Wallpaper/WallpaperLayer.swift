@@ -14,6 +14,9 @@ struct WallpaperLayer: View {
     @State private var store = WallpaperStore.shared
     @State private var frost = WallpaperFrost.shared
     @State private var displayed: ShownWallpaper?
+    /// The colour the shown picture leans to, and the picture it was read
+    /// from — nil until its frost has been made.
+    @State private var tone: (source: WallpaperSource, tone: WallpaperTone?)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -37,6 +40,26 @@ struct WallpaperLayer: View {
         .onChange(of: forcesDark(wanted), initial: true) { _, forces in
             ThemeStore.shared.setWallpaperForcesDark(forces)
         }
+        // The colours follow what is behind the window — `WallpaperRoom`.
+        .onChange(of: store.colours) { _, _ in reportRoom(for: wanted) }
+        .onChange(of: wanted.source, initial: true) { _, source in
+            // The theme and the desktop need no picture read first. A picture
+            // waits for its tone in `show`, wearing the room it had meanwhile:
+            // going through grey on the way to its colour is a flash.
+            if !source.isPicture { reportRoom(for: wanted) }
+        }
+    }
+
+    /// Tells the theme which room the shown wallpaper asks for.
+    private func reportRoom(for wallpaper: Wallpaper) {
+        let known = tone?.source == wallpaper.source ? tone?.tone : nil
+        if wallpaper.source.isPicture, store.colours == .automatic, tone?.source != wallpaper.source {
+            // Its colour has not been read yet; `show` reports when it has.
+            return
+        }
+        ThemeStore.shared.setWallpaperRoom(
+            WallpaperRoom.resolve(source: wallpaper.source, colours: store.colours, tone: known)
+        )
     }
 
     private func forcesDark(_ wallpaper: Wallpaper) -> Bool {
@@ -61,6 +84,12 @@ struct WallpaperLayer: View {
         }
         guard !Task.isCancelled else { return }
         frost.update(image: frostImage, preset: presetOf(wallpaper), veil: veilAmount(wallpaper))
+        // The picture's own colour, off the frost that was just made for the
+        // bubbles: one read of a 32-pixel copy.
+        if wallpaper.source.isPicture {
+            tone = (wallpaper.source, frostImage.flatMap(WallpaperMedia.tone(of:)))
+        }
+        reportRoom(for: wallpaper)
     }
 
     /// A built-in scene has no file to decode, so its frost is drawn: the same

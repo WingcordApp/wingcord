@@ -547,3 +547,21 @@ nonisolated struct NotchedRailTile: Shape {
         return path
     }
 }
+
+// MARK: - A tile that is skipped when nothing about it changed
+
+/// **Compared by what a tile draws, never by its closures** (`INVARIANTS.md`
+/// §2, "A list's rows are compared by what they draw").
+///
+/// The rail hands every tile two closures made new on every pass, so one
+/// server's badge changing ran the body of every tile in the column — a
+/// hundred of them on a large account, several times a second on a busy one.
+/// Each closure only ever calls the store with this tile's own server, which
+/// is in `guild`, so neither is part of the answer.
+extension GuildRailTile: Equatable {
+    static func == (lhs: GuildRailTile, rhs: GuildRailTile) -> Bool {
+        lhs.guild == rhs.guild
+            && lhs.isSelected == rhs.isSelected
+            && lhs.dragNode == rhs.dragNode
+    }
+}

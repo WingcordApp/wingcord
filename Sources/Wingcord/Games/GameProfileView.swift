@@ -35,8 +35,6 @@ struct GameProfileView: View {
     /// most games. Collapsing on either one would mean the header jumping when
     /// somebody nudges a list of four details.
     @State private var isHeaderCollapsed = false
-    /// How far the main column has travelled, for the ambient field's parallax.
-    @State private var scrollOffset: CGFloat = 0
     /// Overview or Communities — the second exists only for a game that lists
     /// three servers or more (`GamePresentation.hasCommunities`).
     @State private var tab: GameProfileTab = .overview
@@ -91,13 +89,30 @@ struct GameProfileView: View {
         // aside's cards are flat grey and the page could be about any game. Fed
         // the header artwork, so the light in the page and the pictures on it
         // are the same image.
-        .ambientArtwork(game.artworkURL, tint: nil, strength: 0.42, offset: scrollOffset)
+        //
+        // **Still, on purpose.** It used to slide with the scroll, a third as
+        // fast — which wrote a state on this view sixty to a hundred and twenty
+        // times a second, re-ran this whole body each time, re-rendered a
+        // sixty-point blur of the page's full size each time, and made every
+        // material on the page blur its backdrop again each time. That was the
+        // page's lag, all of it from one parallax nobody would name if asked
+        // what the page looks like. A field that holds still is drawn once.
+        .ambientArtwork(game.artworkURL, tint: nil, strength: 0.42)
         .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .strokeBorder(Ink.quaternary, lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.5), radius: 36, y: 14)
+        // **The shadow is a plain shape's, behind the page.** On the page
+        // itself it is the shadow of everything in it: the whole subtree
+        // flattened off screen to find its outline, again on every frame
+        // anything inside moved — a scroll, a trailer's frame. The outline
+        // was always this rounded rectangle.
+        .background {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .fill(Palette.surface)
+                .shadow(color: .black.opacity(0.5), radius: 36, y: 14)
+        }
         .animation(motion.standard, value: isHeaderCollapsed)
         .animation(motion.fade, value: tab)
         // The Communities page scrolls by itself and never condenses the
@@ -133,11 +148,12 @@ struct GameProfileView: View {
         .scrollIndicators(.never)
         .softScrollEdgesVertical()
         .frame(maxWidth: .infinity)
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
-            max(geometry.contentOffset.y, 0)
-        } action: { _, offset in
-            scrollOffset = offset
-            let collapsed = offset > Self.collapseThreshold
+        // **A yes or no, not the offset.** The action runs when the answer
+        // changes — twice a scroll at most — where the offset changed on every
+        // frame of one.
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y > Self.collapseThreshold
+        } action: { _, collapsed in
             guard isHeaderCollapsed != collapsed else { return }
             isHeaderCollapsed = collapsed
         }
@@ -396,12 +412,17 @@ private struct GameHeaderBar: View {
         .padding(.vertical, isCondensed ? Spacing.base : Self.padding)
         .frame(height: isCondensed ? 54 : Self.cover / GameArt.coverAspect + Self.padding * 2)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: .rect(cornerRadius: isCondensed ? 20 : 26))
+        // The shadow is the bar's own shape's, not the shadow of the cover,
+        // the title and four controls flattened to find the same outline.
+        .background {
+            RoundedRectangle(cornerRadius: isCondensed ? 20 : 26, style: .continuous)
+                .fill(.thinMaterial)
+                .shadow(color: .black.opacity(0.55), radius: 26, y: 12)
+        }
         .overlay {
             RoundedRectangle(cornerRadius: isCondensed ? 20 : 26, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.55), radius: 26, y: 12)
     }
 
     private func circle(
@@ -452,6 +473,18 @@ private struct RankChip: View {
             in: .capsule
         )
         .accessibilityLabel(Text("Ranked number \(rank) globally"))
+    }
+}
+
+/// **The page is its game, and nothing else it is handed.** The presenter
+/// builds a `GamePresentation` whenever any server, any game or any application
+/// in the store changes — on a real account, many times a minute — and the
+/// value it builds is nearly always the one it built before. Compared here, the
+/// page's body does not run for a change that was not about it. `dismiss` is
+/// left out: it is the same act every time, made new each time it is written.
+extension GameProfileView: Equatable {
+    static func == (lhs: GameProfileView, rhs: GameProfileView) -> Bool {
+        lhs.game == rhs.game
     }
 }
 

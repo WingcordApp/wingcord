@@ -91,18 +91,34 @@ extension SessionController {
             } catch let indexing as DiscordREST.SearchIndexing {
                 throw indexing
             } catch let failure as DiscordREST.Failure {
-                switch failure {
-                case .unauthorized, .forbidden, .transport:
-                    throw failure
-                default:
-                    Self.trace("search tabs refused, asking the classic route: \(Self.describe(failure))")
-                    searchTabsRefused = true
-                }
+                // **Only "this route does not know the question" sends every
+                // later search to the classic one**: a route that is not there
+                // (404, 405), a body it would not read (400), or an answer that
+                // was not the tabs shape. A server having a bad minute — a 5xx,
+                // a rate limit that outlasted its retries — is reported as it
+                // is and asked again next time; it used to switch the tabs off
+                // for the rest of the session on the first one.
+                guard Self.meansTabsNotUnderstood(failure) else { throw failure }
+                Self.trace("search tabs refused, asking the classic route: \(Self.describe(failure))")
+                searchTabsRefused = true
             }
         }
         var classic = query
         classic.has = Set(query.tabHas)
         return try await rest.searchMessages(classic)
+    }
+
+    /// Whether a failure of the tabs route says the route did not understand
+    /// the question, rather than that it could not answer this time.
+    nonisolated static func meansTabsNotUnderstood(_ failure: DiscordREST.Failure) -> Bool {
+        switch failure {
+        case .notFound, .decoding:
+            true
+        case .api(let status, _, _):
+            status == 400 || status == 404 || status == 405
+        case .unauthorized, .forbidden, .slowmode, .transport:
+            false
+        }
     }
 
     /// How many times a 202 is waited out before giving up. Three attempts at

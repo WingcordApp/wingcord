@@ -185,6 +185,46 @@ extension AppModel {
         sessionController.writeIgnore(isIgnored, userID: userID)
     }
 
+    /// A relationship as the gateway now says it stands — Discord's
+    /// `RelationshipStore` for `RELATIONSHIP_ADD`, `_UPDATE` and `_REMOVE`.
+    ///
+    /// **Blocked is the kind; ignored is a flag beside it, and it outlives the
+    /// kind.** A removal (`.none`) drops the relationship, its facts and the
+    /// block, and leaves the ignore wherever the event put it — Discord's
+    /// `userIgnored || D(id)` — so somebody unfriended while ignored stays
+    /// ignored.
+    ///
+    /// The two sets are written only where they change: each write redraws
+    /// every transcript that folds by them.
+    func applyRelationship(
+        _ kind: Relationship,
+        isIgnored: Bool,
+        for userID: UserID,
+        user: User? = nil,
+        facts: RelationshipFacts? = nil
+    ) {
+        if let user, users[userID] == nil { users[userID] = user }
+        if kind == .none {
+            relationships[userID] = nil
+            relationshipFacts[userID] = nil
+        } else {
+            relationships[userID] = kind
+            // **Only when the event carried some.** A relationship update with
+            // nothing remarkable on it must not erase the `since` a pending
+            // request already has — that date is the friend-request list's
+            // only ordering.
+            if let facts { relationshipFacts[userID] = facts }
+        }
+        let isBlocked = kind == .blocked
+        if blockedUserIDs.contains(userID) != isBlocked {
+            if isBlocked { blockedUserIDs.insert(userID) } else { blockedUserIDs.remove(userID) }
+        }
+        if ignoredUserIDs.contains(userID) != isIgnored {
+            if isIgnored { ignoredUserIDs.insert(userID) } else { ignoredUserIDs.remove(userID) }
+        }
+        identityRevision &+= 1
+    }
+
     /// Rolls a relationship write back after the route refused it.
     func revertRelationship(userID: UserID, blocked: Bool?, ignored: Bool?) {
         if let blocked {

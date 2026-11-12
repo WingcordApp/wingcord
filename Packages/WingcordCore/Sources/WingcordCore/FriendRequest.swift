@@ -11,7 +11,7 @@ import Foundation
 /// relationship the account has.
 ///
 /// **All three were on the wire and read by nothing.** `RelationshipDTO`
-/// decoded `id`, `type`, `is_ignored`, `nickname` and `user`, and Discord sends
+/// decoded `id`, `type`, the ignore flag, `nickname` and `user`, and Discord sends
 /// `since`, `is_spam_request` and `stranger_request` beside them on the same
 /// object — documented, and present in the docs' own example payload. Without
 /// `since` a friend-requests list has no ordering except the user id, which

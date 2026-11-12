@@ -117,6 +117,11 @@ final class MemberListCoordinator: NSObject {
     private var ownMove: CGPoint?
     private var motionSettle: Task<Void, Never>?
     private var rowReport: Task<Void, Never>?
+    /// When the rows on screen are next reported — see `scheduleRowReport`.
+    private var rowReportDue: CFTimeInterval = 0
+    /// The rows the pictures were last asked for, so a scroll tick that shows
+    /// the same rows asks for nothing — see `schedulePrefetch`.
+    private var prefetchedRows: Range<Int>?
     private var isTornDown = false
 
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
@@ -640,7 +645,7 @@ final class MemberListCoordinator: NSObject {
             return
         }
         positionCanvas()
-        schedulePrefetch()
+        schedulePrefetch(onScrollTick: true)
         scheduleRowReport()
     }
 
@@ -649,12 +654,22 @@ final class MemberListCoordinator: NSObject {
     /// thousands of rows asks for the pages it stops at, not every page it
     /// passes.
     private func scheduleRowReport() {
-        rowReport?.cancel()
+        // **One task that waits for the viewport to stop, not one per tick.**
+        // Cancelling a task and starting another on every scroll event is two
+        // allocations and a cancellation a frame for a report that is only
+        // ever made once, when the movement ends.
+        rowReportDue = CACurrentMediaTime() + 0.05
+        guard rowReport == nil else { return }
         rowReport = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(50))
-            guard !Task.isCancelled, let self, !self.isTornDown,
-                  let canvas = self.canvas, let scrollView = self.scrollView
-            else { return }
+            while true {
+                guard let self, !Task.isCancelled, !self.isTornDown else { return }
+                let wait = self.rowReportDue - CACurrentMediaTime()
+                if wait <= 0 { break }
+                try? await Task.sleep(for: .seconds(wait))
+            }
+            guard !Task.isCancelled, let self, !self.isTornDown else { return }
+            self.rowReport = nil
+            guard let canvas = self.canvas, let scrollView = self.scrollView else { return }
             // **Back into the server's rows, in runs.** A collapsed section is a
             // hole in the column: the rows either side of it can be thousands
             // apart in the list, and a person moved up into Active Now is a smaller
@@ -716,13 +731,20 @@ final class MemberListCoordinator: NSObject {
 
     /// Fetches the avatars and plates the visible rows need, once per viewport
     /// change and behind the scroll gate.
-    private func schedulePrefetch() {
+    /// - Parameter onScrollTick: the viewport moved and nothing else did. The
+    ///   rows on screen change every few ticks, not every tick, and until they
+    ///   do there is nothing new to ask for: walking them again — a cache
+    ///   lookup per picture per row — was most of what a tick cost here.
+    private func schedulePrefetch(onScrollTick: Bool = false) {
         guard !isTornDown, let canvas else { return }
+        let visible = canvas.visibleRowRange()
+        if onScrollTick, visible == prefetchedRows { return }
+        prefetchedRows = visible
         let scale = canvas.window?.backingScaleFactor ?? 2
         var requests: [(ImageStore.Key, ImageStore.Bucket)] = []
         var seen = Set<ImageStore.Key>()
         var unresolvedApplications: [ApplicationID] = []
-        for index in canvas.visibleRowRange() {
+        for index in visible {
             // A heading's picture: a role's icon, a game's. **Missing from this
             // loop is how every role icon in the list never drew** — the same trap
             // as the tag badge below.

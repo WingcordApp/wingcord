@@ -377,8 +377,24 @@ final class MemberListCanvas: NSView {
 
     // MARK: Drawing
 
+    /// How many rows have been painted, and in how many passes: what a test
+    /// reads to know that a scroll painted the rows it revealed and no others
+    /// (docs/PERFORMANCE.md, the scroll pass).
+    private(set) var paintedRowCount = 0
+    private(set) var paintPassCount = 0
+    /// The tallest rectangle one pass was asked for.
+    private(set) var tallestPaint: CGFloat = 0
+
+    /// Paints whatever is waiting to be painted, now: what a measurement does
+    /// in place of waiting for the next display pass.
+    func paintForMeasurement() {
+        layer?.displayIfNeeded()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
+        paintPassCount += 1
+        tallestPaint = max(tallestPaint, dirtyRect.height)
         context.clear(dirtyRect)
         let scale = window?.backingScaleFactor ?? 2
         if let activity, dirtyRect.minY < activityHeight {
@@ -401,6 +417,7 @@ final class MemberListCanvas: NSView {
             let frame = rowFrame(at: index)
             guard frame.minY < dirtyRect.maxY, frame.minY < drawingLimit ?? .infinity else { break }
             if frame.intersects(dirtyRect) {
+                paintedRowCount += 1
                 switch row {
                 case .header(let section):
                     MemberRowPainter.drawHeader(

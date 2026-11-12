@@ -35,7 +35,7 @@ extension AppModel {
             mobileReviews: game.mobileStoreReviews,
             steamURL: game.steamStoreURL,
             openCriticURL: game.openCriticURL,
-            announcements: (announcements?.messages ?? []).compactMap(Self.announcementCard),
+            announcements: announcementCards(for: gameID, from: announcements?.messages ?? []),
             // **The ids are enough, and the permission check that used to be
             // here was the whole of "clicking an announcement does nothing".**
             //
@@ -186,6 +186,44 @@ extension AppModel {
         )
     }
 
+    /// A game's announcements digested, once per answer.
+    ///
+    /// The page is asked for on every pass of its view, and a digest reads
+    /// every post's components, embeds and words. The posts are the same array
+    /// from one pass to the next until the shelf is fetched again, so comparing
+    /// them is a look at one buffer.
+    private func announcementCards(for gameID: ApplicationID, from messages: [Message]) -> [GameAnnouncementCard] {
+        if let cached = announcementCardCache[gameID], cached.messages == messages { return cached.cards }
+        let cards = messages.compactMap(Self.announcementCard)
+        announcementCardCache[gameID] = (messages, cards)
+        return cards
+    }
+
+    /// Whether the words are one link and nothing else: `http://` or
+    /// `https://`, then at least one character, none of them a space.
+    ///
+    /// **Read by hand, not by a regex literal** (`INVARIANTS.md` §2): a literal
+    /// inside a function is parsed and compiled on every call, and this runs
+    /// once a post.
+    static func isLoneLink(_ trimmed: String) -> Bool {
+        for scheme in ["https://", "http://"] where trimmed.hasPrefix(scheme) {
+            let rest = trimmed.dropFirst(scheme.count)
+            return !rest.isEmpty && !rest.contains(where: \.isWhitespace)
+        }
+        return false
+    }
+
+    /// A line's heading — one to three `#`, a space, then the words — or nil.
+    static func heading(in line: String) -> String? {
+        let marks = line.prefix(while: { $0 == "#" })
+        guard (1...3).contains(marks.count) else { return nil }
+        let afterMarks = line.dropFirst(marks.count)
+        let words = afterMarks.drop(while: { $0.isWhitespace })
+        // At least one space between the marks and the words, and some words.
+        guard words.count < afterMarks.count, !words.isEmpty else { return nil }
+        return String(words)
+    }
+
     /// One announcement, digested — Discord's `pp` (`05ea9e44…`), step for step.
     ///
     /// **The words**: a components post's text displays, joined line by line; a
@@ -234,8 +272,7 @@ extension AppModel {
         } else {
             words = content
             let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-            let isLoneLink = trimmed.wholeMatch(of: /https?:\/\/\S+/) != nil
-            if trimmed.isEmpty || isLoneLink, let embed = embeds.first {
+            if trimmed.isEmpty || isLoneLink(trimmed), let embed = embeds.first {
                 let parts = [embed.title.map { "# \($0)" }, embed.description].compactMap { $0 }
                 if !parts.isEmpty {
                     words = parts.joined(separator: "\n")
@@ -249,8 +286,8 @@ extension AppModel {
         var body = words
         let firstBreak = words.firstIndex(of: "\n")
         let firstLine = firstBreak.map { String(words[..<$0]) } ?? words
-        if let heading = firstLine.wholeMatch(of: /#{1,3}\s+(.+)/) {
-            title = String(heading.1).trimmingCharacters(in: .whitespaces)
+        if let heading = Self.heading(in: firstLine) {
+            title = heading.trimmingCharacters(in: .whitespaces)
             body = firstBreak.map { String(words[words.index(after: $0)...]) } ?? ""
             body = String(body.drop(while: \.isWhitespace))
         }

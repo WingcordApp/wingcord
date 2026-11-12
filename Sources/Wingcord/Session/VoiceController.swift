@@ -29,6 +29,8 @@ final class VoiceController {
     /// The call's media session. The share and the watch below are the same
     /// type, each its own session on the wire — see `MediaSession`.
     private var engine: MediaSession?
+    /// Whether a call's audio is up — what the system's mute gesture is held for.
+    var hasCallAudio: Bool { engine != nil }
     /// The call's session, to lend a voice message its microphone.
     var currentSession: MediaSession? { engine }
     private var engineTask: Task<Void, Never>?
@@ -731,6 +733,8 @@ final class VoiceController {
             )
         )
         self.engine = engine
+        // AirPods' stem press mutes this call from here on.
+        adoptSystemMuteGesture()
         // A second engine can't have the microphone, so a note going now stops here.
         model.voiceRecorder.callChanged()
         // The call's side of clips, while clips are on — the plan says whose.
@@ -943,6 +947,7 @@ final class VoiceController {
         // issued in, and that session goes with the call.
         watchCredentials.removeAll()
         guard let engine else { return }
+        releaseSystemMuteGesture()
         self.engine = nil
         // The note was borrowing this call's microphone.
         model.voiceRecorder.callChanged()
@@ -957,6 +962,7 @@ final class VoiceController {
         sounds.play(muted ? .mute : .unmute)
         Task { [engine] in await engine?.setMuted(muted) }
         publishSwitches()
+        syncSystemMute()
     }
 
     func setDeafened(_ deafened: Bool) {
@@ -978,6 +984,7 @@ final class VoiceController {
             _ = model
         }
         publishSwitches()
+        syncSystemMute()
     }
 
     func setPushToTalkHeld(_ held: Bool) {

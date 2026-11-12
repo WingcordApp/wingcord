@@ -114,6 +114,17 @@ final class TimelineCanvasView: NSView {
         clearTooltips()
     }
 
+    /// The message whose reaction picker is open, or nil. Its row keeps its
+    /// two controls drawn while the pointer is away on the picker.
+    func apply(pinnedReactionMessage: MessageID?) {
+        guard pinnedReactionMessage != self.pinnedReactionMessage else { return }
+        let previous = self.pinnedReactionMessage
+        self.pinnedReactionMessage = pinnedReactionMessage
+        for id in [previous, pinnedReactionMessage] {
+            if let id { invalidateMessage(id) }
+        }
+    }
+
     /// Whether a new reaction may be started in this channel — the add
     /// control at the end of every reaction row. See `canAddReactions`.
     func apply(canAddReactions: Bool) {
@@ -312,10 +323,10 @@ final class TimelineCanvasView: NSView {
     /// Pushed in rather than read from the store: the painter is `nonisolated`
     /// so a render test can drive it, and a draw loop must not reach for a
     /// main-actor singleton.
-    private var activityAccents: [ApplicationID: CGColor] = [:]
+    private var activityAccents: [ApplicationID: (primary: CGColor, secondary: CGColor)] = [:]
     /// What `activityAccents` was built from, kept so the comparison above can
     /// be an equality rather than a count.
-    private var packedActivityAccents: [ApplicationID: UInt32] = [:]
+    private var packedActivityAccents: [ApplicationID: ActivityCardTint] = [:]
     /// The live line each invitation draws, by application, and whether the
     /// reader is in it. Pushed in and redrawn — never laid out. See
     /// `ActivityInviteSlot.statusOrigin`.
@@ -410,6 +421,22 @@ final class TimelineCanvasView: NSView {
     private var voiceScrub: (voice: VoiceNoteSlot, rowX: CGFloat)?
     /// Repaints the playing note, and nothing else, while it plays.
     private var voiceLink: CADisplayLink?
+    /// The message whose reaction picker is open — `apply(pinnedReactionMessage:)`.
+    private var pinnedReactionMessage: MessageID?
+    /// Counts rolling on a layer over their chips — see `ReactionCountRolls`.
+    private let countRolls = ReactionCountRolls()
+    /// Chips that are popping, and when each started.
+    private var reactionPops: [ReactionChipKey: CFTimeInterval] = [:]
+    /// Repaints the popping chips and a moving fold, and nothing else, while
+    /// either moves.
+    private var popLink: CADisplayLink?
+    /// A fold opening or shutting: its rows by their place down it, when it
+    /// began, and which way — see `FoldReveal`.
+    private var foldMotion: (order: [MessageID: Int], start: CFTimeInterval, closing: Bool)?
+    /// A fold the reader has just pressed Show on, until its rows arrive.
+    private var pendingFoldOpen: (ids: [MessageID], until: CFTimeInterval)?
+    /// The shut that follows a fold's rows leaving.
+    private var foldClose: Task<Void, Never>?
     private var voiceRevision: UInt64 = 0
     private var isVoiceLive = false
 
@@ -798,20 +825,20 @@ final class TimelineCanvasView: NSView {
         }
     }
 
-    func apply(activityAccents accents: [ApplicationID: UInt32]) {
+    func apply(activityAccents accents: [ApplicationID: ActivityCardTint]) {
         // Compared as packed values, which are `Equatable`; a `CGColor`
         // dictionary is not, and this runs on every update.
         guard accents != packedActivityAccents else { return }
         packedActivityAccents = accents
         activityAccents = accents.mapValues {
-            CGColor(
-                srgbRed: CGFloat(($0 >> 16) & 0xFF) / 255,
-                green: CGFloat(($0 >> 8) & 0xFF) / 255,
-                blue: CGFloat($0 & 0xFF) / 255,
-                alpha: 1
-            )
+            (InviteCardColours.cgColor($0.primary), InviteCardColours.cgColor($0.secondary))
         }
-        setNeedsDisplay(visibleRect)
+        // A card's colours and its cover are paint state: the rows that carry
+        // one are redrawn, and nothing is measured again.
+        for index in visibleRowRange() {
+            guard case .message(let row) = rows[index].kind, row.activityInvite != nil else { continue }
+            setNeedsDisplay(rowFrame(at: index))
+        }
     }
 
     /// Installs a new row list and recomputes the offset table.
@@ -821,6 +848,10 @@ final class TimelineCanvasView: NSView {
     /// later and leave the scroller briefly wrong.
     @discardableResult
     func apply(rows: [TimelineRow], leadingSpace: CGFloat = 0) -> CGFloat {
+        // What the chips in sight said before the rows moved, so the ones that
+        // changed can show it — see `animateReactionChanges`.
+        let countsBefore = visibleReactionCounts()
+        countRolls.removeAll()
         self.rows = rows
         offsets.removeAll(keepingCapacity: true)
         offsets.reserveCapacity(rows.count + 1)
@@ -856,6 +887,8 @@ final class TimelineCanvasView: NSView {
         burstEffects.follow()
         playPendingArrivals()
         refreshAmbient()
+        animateReactionChanges(from: countsBefore)
+        followFold()
         needsDisplay = true
         refreshStickerAnimation()
         reconcileFilms()
@@ -1533,8 +1566,21 @@ final class TimelineCanvasView: NSView {
 
     // MARK: Drawing
 
+    /// How many rows have been painted, and in how many passes: what a test
+    /// reads to know that a scroll painted the rows it revealed and no others
+    /// (docs/PERFORMANCE.md, the scroll pass).
+    private(set) var paintedRowCount = 0
+    private(set) var paintPassCount = 0
+
+    /// Paints whatever is waiting to be painted, now: what a measurement does
+    /// in place of waiting for the next display pass.
+    func paintForMeasurement() {
+        layer?.displayIfNeeded()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
+        paintPassCount += 1
         // The view is transparent and layer-backed, and Core Graphics does not
         // guarantee the previous backing pixels are cleared before `draw`. Clear
         // first, or rows composite over their former positions after a scroll.
@@ -1561,6 +1607,7 @@ final class TimelineCanvasView: NSView {
         while index < rows.count, offsets[index] < dirtyRect.maxY {
             let frame = rowFrame(at: index)
             if frame.intersects(dirtyRect) || index == bleedingRow {
+                paintedRowCount += 1
                 let row = rows[index]
                 var state = TimelineRowPainter.State()
                 // **The preference, then the pointer.** Always-on timestamps are
@@ -1595,6 +1642,17 @@ final class TimelineCanvasView: NSView {
                     )
                     if !burstEffects.isEmpty {
                         state.burstEffects = burstEffects.showing(on: message.id)
+                    }
+                    state.pinsReactionControls = pinnedReactionMessage == message.id
+                    if !countRolls.isEmpty || !reactionPops.isEmpty {
+                        let now = CACurrentMediaTime()
+                        for (place, slot) in message.reactions.enumerated() {
+                            let key = ReactionChipKey(
+                                messageID: message.id, emoji: slot.emoji.reactionKey, kind: slot.kind
+                            )
+                            if countRolls.contains(key) { state.rollingReactions.insert(place) }
+                            if let start = reactionPops[key] { state.reactionPops[place] = now - start }
+                        }
                     }
                 }
                 state.playingPreviewURL = playingPreview
@@ -1665,7 +1723,11 @@ final class TimelineCanvasView: NSView {
                 if case .message(let message) = row.kind,
                    let invite = message.activityInvite {
                     let application = invite.source.applicationID
-                    state.activityAccent = activityAccents[application]
+                    if let colours = activityAccents[application] {
+                        state.activityAccent = colours.primary
+                        state.activityAccentEnd = colours.secondary
+                    }
+                    state.activityCover = ActivityCardCovers.cover(for: application)
                     state.activityInviteStatus = activityInviteStatuses[application]?.line
                     state.activityInviteIsJoined =
                         activityInviteStatuses[application]?.isJoined ?? false
@@ -1686,6 +1748,14 @@ final class TimelineCanvasView: NSView {
                 if state.isHovered, playsNameEffects {
                     state.nameGradientPhase = nameGradientPhase
                 }
+                // A row of a fold that is opening or shutting is drawn where
+                // `FoldReveal` says it is: part-way out of its line.
+                let pose = foldPose(for: row)
+                if let pose {
+                    context.saveGState()
+                    context.setAlpha(pose.alpha)
+                    context.translateBy(x: 0, y: pose.offset)
+                }
                 TimelineRowPainter.draw(
                     row: row,
                     in: frame,
@@ -1696,6 +1766,7 @@ final class TimelineCanvasView: NSView {
                     scale: scale,
                     styledAuthorName: preparedName
                 )
+                if pose != nil { context.restoreGState() }
             }
             index += 1
         }
@@ -1788,6 +1859,192 @@ final class TimelineCanvasView: NSView {
         )
         styledName = (key, prepared)
         return prepared
+    }
+
+    // MARK: Reactions that just changed
+
+    /// Every chip in sight and its count, keyed so the same chip can be found
+    /// again after the rows move.
+    private func visibleReactionCounts() -> [MessageID: [ReactionChipKey: Int]] {
+        guard window != nil, !rows.isEmpty else { return [:] }
+        var counts: [MessageID: [ReactionChipKey: Int]] = [:]
+        for index in visibleRowRange() {
+            guard case .message(let row) = rows[index].kind else { continue }
+            var chips: [ReactionChipKey: Int] = [:]
+            for slot in row.reactions {
+                chips[ReactionChipKey(messageID: row.id, emoji: slot.emoji.reactionKey, kind: slot.kind)] = slot.count
+            }
+            counts[row.id] = chips
+        }
+        return counts
+    }
+
+    /// Rolls the counts that moved and pops the chips that arrived.
+    ///
+    /// **Only for a message that was already in sight**, so a transcript that
+    /// has just loaded, or scrolled a page, animates nothing: `before` holds
+    /// the visible rows of the list being replaced, and a message not in it
+    /// has no "before" to have changed from.
+    private func animateReactionChanges(from before: [MessageID: [ReactionChipKey: Int]]) {
+        guard !before.isEmpty else { return }
+        let textStyle = style
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let now = CACurrentMediaTime()
+        for index in visibleRowRange() {
+            guard case .message(let row) = rows[index].kind, let known = before[row.id] else { continue }
+            let frame = rowFrame(at: index)
+            for slot in row.reactions {
+                let key = ReactionChipKey(messageID: row.id, emoji: slot.emoji.reactionKey, kind: slot.kind)
+                guard let old = known[key] else {
+                    // A chip this message did not have: it arrives with a pop.
+                    if !reduceMotion { reactionPops[key] = now }
+                    continue
+                }
+                guard old != slot.count, !slot.isTapback || slot.count > 1 else { continue }
+                if !reduceMotion, slot.count > old { reactionPops[key] = now }
+                let glyph = slot.glyphRect
+                let x = glyph.maxX + TimelineMetrics.reactionGlyphGap
+                countRolls.roll(
+                    key,
+                    from: old,
+                    to: slot.count,
+                    frame: CGRect(
+                        x: frame.minX + x,
+                        y: frame.minY + slot.rect.minY,
+                        width: max(0, slot.rect.maxX - x),
+                        height: slot.rect.height
+                    ),
+                    font: TimelineMetrics.reactionCountFont(textStyle),
+                    color: TimelineRowPainter.reactionCountColor(slot, style: textStyle),
+                    in: self,
+                    reduceMotion: reduceMotion
+                ) { [weak self] key in
+                    self?.invalidateMessage(key.messageID)
+                }
+            }
+        }
+        reconcilePopLink()
+    }
+
+    // MARK: A fold opening and shutting
+
+    /// Show or Hide, pressed. Opening asks for the rows and animates them in
+    /// when they arrive; shutting animates them out and only then asks for
+    /// them to go.
+    private func toggleFold(_ group: CollapsedGroup) {
+        guard group.canOpen, window != nil,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        else {
+            onToggleCollapsedGroup?(group)
+            return
+        }
+        foldClose?.cancel()
+        if group.isOpen {
+            startFoldMotion(group.messageIDs, closing: true)
+            let wait = FoldReveal.duration(rows: group.messageIDs.count, closing: true)
+            foldClose = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(wait))
+                guard !Task.isCancelled, let self else { return }
+                onToggleCollapsedGroup?(group)
+            }
+        } else {
+            foldMotion = nil
+            pendingFoldOpen = (group.messageIDs, CACurrentMediaTime() + 1)
+            onToggleCollapsedGroup?(group)
+        }
+    }
+
+    private func startFoldMotion(_ ids: [MessageID], closing: Bool) {
+        var order: [MessageID: Int] = [:]
+        for (place, id) in ids.enumerated() { order[id] = place }
+        foldMotion = (order, CACurrentMediaTime(), closing)
+        reconcilePopLink()
+    }
+
+    /// The rows changed: a fold that was waiting for its messages starts once
+    /// they are rows, and one that was shutting is done once they are not.
+    private func followFold() {
+        if let pending = pendingFoldOpen {
+            if let first = pending.ids.first, messageRows[first] != nil {
+                pendingFoldOpen = nil
+                startFoldMotion(pending.ids, closing: false)
+            } else if CACurrentMediaTime() > pending.until {
+                pendingFoldOpen = nil
+            }
+        }
+        if let motion = foldMotion, motion.closing, !motion.order.keys.contains(where: { messageRows[$0] != nil }) {
+            foldMotion = nil
+        }
+    }
+
+    /// Where a row of a moving fold is drawn, or nil for every other row.
+    private func foldPose(for row: TimelineRow) -> FoldReveal.Pose? {
+        guard let motion = foldMotion, let id = row.messageID, let place = motion.order[id] else { return nil }
+        let pose = FoldReveal.pose(
+            order: place, of: motion.order.count,
+            elapsed: CACurrentMediaTime() - motion.start, closing: motion.closing
+        )
+        return pose == .rest ? nil : pose
+    }
+
+    /// Repaints a moving fold's rows, and ends an opening one when it is open.
+    private func stepFold(now: CFTimeInterval) {
+        guard let motion = foldMotion else { return }
+        var top = CGFloat.greatestFiniteMagnitude, bottom = -CGFloat.greatestFiniteMagnitude
+        for id in motion.order.keys {
+            guard let index = messageRows[id] else { continue }
+            let frame = rowFrame(at: index)
+            top = min(top, frame.minY)
+            bottom = max(bottom, frame.maxY)
+        }
+        if top < bottom {
+            setNeedsDisplay(CGRect(
+                x: bounds.minX, y: top - FoldReveal.rise,
+                width: bounds.width, height: bottom - top + FoldReveal.rise
+            ))
+        }
+        // A shutting fold holds its last pose until its rows are taken away —
+        // `followFold` — so they never flash back for a frame.
+        let length = FoldReveal.duration(rows: motion.order.count, closing: motion.closing)
+        // …but not for ever: a shut that was refused puts the rows back.
+        if now - motion.start >= length + (motion.closing ? 0.6 : 0) {
+            foldMotion = nil
+        }
+    }
+
+    /// Keeps the clock going for as long as a chip is popping or a fold moves.
+    private func reconcilePopLink() {
+        if !reactionPops.isEmpty || foldMotion != nil, window != nil {
+            guard popLink == nil else { return }
+            let link = displayLink(target: self, selector: #selector(stepReactionPops))
+            link.add(to: .main, forMode: .common)
+            popLink = link
+        } else if let link = popLink {
+            link.invalidate()
+            popLink = nil
+            reactionPops.removeAll()
+            foldMotion = nil
+        }
+    }
+
+    @objc private func stepReactionPops(_ link: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        stepFold(now: now)
+        // A finished pop is repainted once more, at rest.
+        let finished = reactionPops.filter { now - $0.value >= ReactionPop.duration }
+        for (key, _) in reactionPops {
+            guard let index = messageRows[key.messageID], case .message(let row) = rows[index].kind,
+                  let slot = row.reactions.first(where: {
+                      $0.kind == key.kind && $0.emoji.reactionKey == key.emoji
+                  })
+            else { continue }
+            let frame = rowFrame(at: index)
+            setNeedsDisplay(
+                slot.rect.offsetBy(dx: frame.minX, dy: frame.minY).insetBy(dx: -4, dy: -4)
+            )
+        }
+        for key in finished.keys { reactionPops[key] = nil }
+        reconcilePopLink()
     }
 
     /// The rows currently inside the canvas's window, as an index range.
@@ -1914,7 +2171,7 @@ final class TimelineCanvasView: NSView {
             if let action = slot.action,
                action.rect.offsetBy(dx: frame.minX, dy: frame.minY).contains(point)
             {
-                onToggleCollapsedGroup?(slot.group)
+                toggleFold(slot.group)
             }
             return
         }
@@ -2682,11 +2939,8 @@ final class TimelineCanvasView: NSView {
             return .reaction(slot.emoji, kind: slot.kind, origin: slot.rect.origin)
         }
 
-        let controls = row.visibleReactionControls(
-            canAddReaction: canAddReactions,
-            showsBookmark: bookmarkedMessageIDs.contains(row.id)
-                || row.reactionStripContains(local, rowWidth: frame.width)
-        )
+        // The pointer is on the row, which is what shows both controls.
+        let controls = row.visibleReactionControls(canAddReaction: canAddReactions, showsBookmark: true)
         for slot in controls where slot.rect.contains(local) {
             switch slot.kind {
             case .addReaction:

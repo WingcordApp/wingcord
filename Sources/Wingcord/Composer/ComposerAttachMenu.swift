@@ -26,6 +26,11 @@ struct ComposerAttachActions {
     var openStickers: (() -> Void)?
     var openActivities: (() -> Void)?
 
+    /// Called as the menu opens, for a row whose answer may have gone stale —
+    /// the Listen Along invitation, which is only as fresh as the last word
+    /// from Spotify. Not a row, so it is no part of `isEmpty`.
+    var menuWillOpen: (() -> Void)?
+
     struct Invitation {
         var title: String
         var send: () -> Void

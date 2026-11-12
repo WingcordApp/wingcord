@@ -66,6 +66,7 @@ struct GameProfilePresenter: ViewModifier {
         Group {
             if let game = model.gamePresentation(for: request.gameID) {
                 GameProfileView(game: game) { model.dismissGameProfile() }
+                    .equatable()
             } else {
                 // The game itself has not landed. Everything else on this page
                 // is optional and fills in around it, but the page cannot be
@@ -75,7 +76,12 @@ struct GameProfilePresenter: ViewModifier {
             }
         }
         .frame(width: width, height: height)
-        .transition(.materialize)
+        // **Scale and opacity, no blur** — Motion's own rule for a surface
+        // whose ground is a material. The blur put the whole page, three
+        // materials and a playing trailer through an off-screen pass on every
+        // frame of its arrival, which is the moment the page is also decoding
+        // its pictures.
+        .transition(.materialize(from: .center, blurring: false))
     }
 }
 

@@ -98,6 +98,7 @@ struct TimelineContainer: View {
             // control at the end of a reaction row is drawn, and a drawn
             // canvas only hears what SwiftUI re-evaluates.
             canAddReactions: model.permissionGate.canAddReaction(in: channelID),
+            pinnedReactionMessage: model.reactionPicker.flatMap { $0.channelID == channelID ? $0.messageID : nil },
             hidesMedia: model.channelIndex[channelID]?.messageRequest != nil,
             listenAlongCards: model.listenAlongCards(in: channelID),
             // Read here so a stage chat observes the hands: Invite to Speak

@@ -129,6 +129,8 @@ struct GuildRail: View, Equatable {
                             openMenu: { openGuildMenu(guild.id, $0) },
                             dragNode: .guild(guild.id)
                         )
+                        // Skipped when nothing it draws changed — see its `==`.
+                        .equatable()
                     case .folder(let folder):
                         GuildRailFolder(
                             folder: folder,

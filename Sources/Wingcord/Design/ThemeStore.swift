@@ -100,6 +100,51 @@ final class ThemeStore {
         apply(notifyingDrawnSurfaces: true)
     }
 
+    // MARK: A wallpaper's room
+
+    /// The room whatever is behind the window asks for — the theme's own
+    /// unless the desktop or a picture is up. See `WallpaperRoom`.
+    ///
+    /// **An override like the two beside it**: the reader's choice is not
+    /// touched and nothing here is persisted, so taking the picture down puts
+    /// their theme back exactly as it was.
+    private(set) var wallpaperRoom = WallpaperRoom.theme
+
+    func setWallpaperRoom(_ room: WallpaperRoom) {
+        guard room != wallpaperRoom else { return }
+        wallpaperRoom = room
+        apply(notifyingDrawnSurfaces: true)
+    }
+
+    /// The colours and the ground a wallpaper's room is drawn in, or nil for
+    /// the theme's own.
+    ///
+    /// **Light or dark as the reader's room is.** A room that takes its colour
+    /// from a picture does not get to turn the lights on or off: that is the
+    /// theme's, or "Dark appearance with a wallpaper"'s. A light one is
+    /// Porcelain either way — the light ramp is stated rather than derived, and
+    /// a tinted Porcelain is not a thing this app can draw yet.
+    static func room(
+        _ room: WallpaperRoom,
+        isDark: Bool,
+        vividness: Double
+    ) -> (colors: ThemeColors, ground: ThemeGround)? {
+        switch room {
+        case .theme:
+            return nil
+        case .neutral:
+            let preset = isDark ? ThemePreset.graphite : .porcelain
+            return (preset.colors(vividness: vividness), preset.ground(vividness: vividness))
+        case .toned(let tone):
+            guard isDark else {
+                let preset = ThemePreset.porcelain
+                return (preset.colors(vividness: vividness), preset.ground(vividness: vividness))
+            }
+            let seed = tone.seed.at(vividness: vividness)
+            return (ThemeColors(seed, followsSystemAccent: false), ThemeGround(seed))
+        }
+    }
+
     // MARK: A server's theme
 
     /// The theme of the server the reader is in, while it is the one drawn —
@@ -332,7 +377,16 @@ final class ThemeStore {
         // Black for as long as the picture is up — see `wallpaperForcesDark`.
         let forcedDark = wallpaperForcesDark && chosen.appearance == .light
         let dark = ThemePreset.following(systemIsDark: true)
-        let own = forcedDark ? dark.colors(vividness: vividness) : chosen
+        // What is behind the window decides the colours on it: the house greys
+        // over the desktop, the picture's own colour over a picture — see
+        // `WallpaperRoom`. Without this the embeds, cards and sheets kept the
+        // last theme's colour in a window that no longer had it.
+        let room = Self.room(
+            wallpaperRoom,
+            isDark: forcedDark || chosen.appearance != .light,
+            vividness: vividness
+        )
+        let own = room?.colors ?? (forcedDark ? dark.colors(vividness: vividness) : chosen)
         // A server's theme is drawn in the reader's own room: it carries a
         // version for each, and choosing which is the reader's theme's job.
         // A theme being previewed is above both: the reader asked to see it.
@@ -343,6 +397,7 @@ final class ThemeStore {
         // when it moved: an `@Observable` setter invalidates its readers
         // whether or not the value changed.
         let resolvedGround = server.map(ThemeGround.init(server:))
+            ?? room?.ground
             ?? (forcedDark
                 ? dark.ground(vividness: vividness)
                 : Self.ground(for: choice, customSeed: customSeed, vividness: vividness))
@@ -356,7 +411,7 @@ final class ThemeStore {
         // changes no colour, but it does change who owns the appearance — and
         // left unpinned, the next switch to Light would put the system's black
         // labels on its near-black ground.
-        if choice != .system || forcedDark { Self.pinAppearance(resolved.appearance) }
+        if choice != .system || forcedDark || room != nil { Self.pinAppearance(resolved.appearance) }
         BubbleTint.setLight(resolved.appearance == .light)
         guard resolved != colors || !isLoaded else { return }
         ThemeRuntime.install(resolved)

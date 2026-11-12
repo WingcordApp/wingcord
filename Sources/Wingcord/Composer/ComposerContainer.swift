@@ -92,7 +92,7 @@ struct ComposerContainer: View {
             cancelEdit: { model.cancelEdit(in: channelID) },
             editLatest: { model.editLatestOwnMessage(in: channelID) },
             escapeTranscript: { model.escapeTranscript(in: channelID) },
-            attachActions: attachActions,
+            attachActions: refreshingAttachActions,
             scheduledAt: box?.scheduledAt,
             setSchedule: { model.setSchedule($0, in: channelID) },
             pasteFiles: { model.stageAttachments($0, in: channelID) },
@@ -232,6 +232,15 @@ struct ComposerContainer: View {
 
     /// Discord's `channel-attach` rows this conversation can honour. Files and
     /// photos need `ATTACH_FILES`; the rest gate themselves on the store.
+    /// The rows, and the one thing the menu does as it opens: ask Spotify
+    /// again what is playing, so "Invite … to Listen" is there for a track
+    /// that started a moment ago without waiting on a word from Spotify.
+    private var refreshingAttachActions: ComposerAttachActions {
+        var actions = attachActions
+        actions.menuWillOpen = { model.sessionController.refreshSpotify() }
+        return actions
+    }
+
     private var attachActions: ComposerAttachActions {
         let canAttach = model.canAttachFiles(in: channelID)
         // Files and pictures: the rest of the menu is for a conversation that

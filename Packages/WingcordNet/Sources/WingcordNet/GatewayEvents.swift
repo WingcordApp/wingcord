@@ -541,11 +541,17 @@ struct GuildSettingsDTO: Decodable, Sendable {
 
 struct RelationshipDTO: Decodable, Sendable {
     var id: UserID
-    /// 2 is BLOCKED. Ignoring is not a type — see `is_ignored`.
+    /// 2 is BLOCKED. Ignoring is not a type — see `user_ignored`.
     var type: Int?
     /// Orthogonal to `type`: a friend can be ignored, and a block does not
     /// imply one.
-    var is_ignored: Bool?
+    ///
+    /// **`user_ignored`, which is Discord's name for it** — READY's
+    /// relationships and all three relationship events carry it
+    /// (`userIgnored: e.user_ignored || !1`). This was `is_ignored`, a name
+    /// Discord sends nowhere, so no ignore was ever read: none at launch, and
+    /// every event's "not ignored" lifted the one the reader had just made.
+    var user_ignored: Bool?
     /// What the reader has decided to call this person, 1-32 characters.
     ///
     /// **Theirs alone and friends only.** It is not a nickname in a server and
@@ -566,6 +572,9 @@ struct RelationshipDTO: Decodable, Sendable {
     /// They share no mutual friend and no small mutual server with the reader.
     /// Ordinary, and deliberately distinct from spam.
     var stranger_request: Bool?
+    /// The same fact under the name the gateway's events use
+    /// (`isStrangerRequest: e.is_stranger_request || !1`).
+    var is_stranger_request: Bool?
     /// What they wrote with their request. See `RelationshipFacts.note`.
     var note: String?
 
@@ -574,7 +583,7 @@ struct RelationshipDTO: Decodable, Sendable {
         let facts = RelationshipFacts(
             since: since,
             isSpam: is_spam_request ?? false,
-            isStranger: stranger_request ?? false,
+            isStranger: stranger_request ?? is_stranger_request ?? false,
             note: note.flatMap { $0.isEmpty ? nil : $0 }
         )
         return facts.isNoteworthy ? facts : nil

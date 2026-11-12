@@ -55,8 +55,34 @@ extension AppModel {
     ///
     /// - Parameter reacting: a reaction picker ranks by the reaction table,
     ///   as Discord's picker does for a reaction's intention.
+    ///
+    /// **Memoized, and the picker is why.** It reads its catalog from four
+    /// places a pass and is run again for every cell the pointer crosses, and
+    /// this filed every cell of every server under its id each time: on an
+    /// account with ten thousand emoji, a few milliseconds a hover step. The
+    /// answer moves with the stars and uses (`expressionUsageRevision`) and
+    /// with the catalog under it, which is itself a memo — so its sections are
+    /// the same buffer from one read to the next and comparing them is free.
     func withUsageSections(_ catalog: ExpressionCatalog, stickers: Bool, reacting: Bool) -> ExpressionCatalog {
-        let usage = (expressionUsage ?? .empty()).seeded()
+        // Read before the early return, so a cache hit still registers it.
+        let usage = (expressionUsage ?? .empty())
+        let key = UsageCatalogKey(stickers: stickers, reacting: reacting, usageRevision: expressionUsageRevision)
+        if let cached = usageCatalogCache[key], cached.base == catalog.sections { return cached.value }
+        let value = buildUsageSections(catalog, usage: usage.seeded(), stickers: stickers, reacting: reacting)
+        // One entry a kind of picker: an older revision's is never asked for again.
+        usageCatalogCache = usageCatalogCache.filter {
+            $0.key.stickers != stickers || $0.key.reacting != reacting
+        }
+        usageCatalogCache[key] = (catalog.sections, value)
+        return value
+    }
+
+    private func buildUsageSections(
+        _ catalog: ExpressionCatalog,
+        usage: ExpressionUsage,
+        stickers: Bool,
+        reacting: Bool
+    ) -> ExpressionCatalog {
         var cells: [String: ExpressionItem] = [:]
         for section in catalog.sections {
             for item in section.items where cells[item.id] == nil { cells[item.id] = item }
@@ -102,13 +128,32 @@ extension AppModel {
 
     /// The message bar's quick reactions: Discord's three most-reacted, of
     /// those the reader may react with in this channel.
+    ///
+    /// **Worked out once per channel, not once per row pointed at.** The bar
+    /// asks every time the pointer changes rows; the answer is a sort of the
+    /// reaction table and, for a custom emoji, a search of every server's set.
+    /// It moves with the uses, the emoji sets, and what the reader may do here.
     func quickReactions(in channelID: ChannelID) -> [EmojiRef] {
+        // Read before the early return, so a cache hit still registers them.
         let usage = expressionUsage ?? .empty()
-        return usage.quickReactions { key in
+        let key = QuickReactionsKey(
+            channelID: channelID,
+            usageRevision: expressionUsageRevision,
+            expressionRevision: expressionRevision,
+            roleRevision: roleRevision,
+            structureRevision: channelIndex.structureRevision,
+            entitlements: entitlements
+        )
+        if let quickReactionsCache, quickReactionsCache.key == key { return quickReactionsCache.value }
+        var resolved: [String: EmojiRef] = [:]
+        let keys = usage.quickReactions { key in
             guard let emoji = emojiRef(forUsageKey: key) else { return false }
+            resolved[key] = emoji
             return canReact(with: emoji, in: channelID)
         }
-        .compactMap(emojiRef(forUsageKey:))
+        let value = keys.compactMap { resolved[$0] }
+        quickReactionsCache = (key, value)
+        return value
     }
 
     /// The emoji a key names: a custom one this session knows, or a Unicode
@@ -125,4 +170,21 @@ extension AppModel {
         }
         return nil
     }
+}
+
+/// What a picker's catalog with its usage sections is filed under.
+struct UsageCatalogKey: Hashable {
+    var stickers: Bool
+    var reacting: Bool
+    var usageRevision: UInt64
+}
+
+/// What the message bar's quick reactions move with.
+struct QuickReactionsKey: Equatable {
+    var channelID: ChannelID
+    var usageRevision: UInt64
+    var expressionRevision: UInt64
+    var roleRevision: UInt64
+    var structureRevision: UInt64
+    var entitlements: AccountEntitlements
 }

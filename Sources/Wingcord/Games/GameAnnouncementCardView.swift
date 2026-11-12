@@ -30,7 +30,9 @@ struct GameAnnouncementCardView: View {
                 // four points under the pointer.
                 .offset(y: isHovering && !motion.reduceMotion ? -4 : 0)
         }
-        .background(.thinMaterial, in: Self.shape)
+        // A fill, not a material: these cards scroll, twice over (the page
+        // and their own shelf) — see `GamePanel`.
+        .background(GamePanel.fill, in: Self.shape)
         .overlay { Self.shape.strokeBorder(isHovering ? Palette.edgeStrong : Palette.edge) }
         .clipShape(Self.shape)
         .contentShape(Self.shape)
@@ -45,6 +47,15 @@ struct GameAnnouncementCardView: View {
         .accessibilityValue(Text(announcement.postedAt, format: .dateTime.month(.wide).day().year()))
         .accessibilityAddTraits(open == nil ? [] : .isButton)
         .accessibilityAction { open?() }
+        // **Reachable from the keyboard too.** A tap is all this card had, so
+        // Tab passed it by. Not a `Button`: the card holds links of its own,
+        // and a button round them would take their presses.
+        .focusable(open != nil)
+        .onKeyPress(keys: [.return, .space]) { _ in
+            guard let open else { return .ignored }
+            open()
+            return .handled
+        }
     }
 
     // MARK: The parts

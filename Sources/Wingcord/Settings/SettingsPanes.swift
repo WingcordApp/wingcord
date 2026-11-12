@@ -295,7 +295,11 @@ private struct AppearancePane: View {
     @State private var shelf: LookShelf
 
     init() {
-        _shelf = State(initialValue: LookShelf(holding: ThemeStore.shared.choice))
+        // The shelf the look is on: Pictures while the desktop or a picture is
+        // what the window wears, the theme's own shelf otherwise.
+        _shelf = State(initialValue: WallpaperStore.shared.global.source == .theme
+            ? LookShelf(holding: ThemeStore.shared.choice)
+            : .pictures)
     }
 
     var body: some View {

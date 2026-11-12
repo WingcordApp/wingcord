@@ -28,6 +28,9 @@ struct GameMediaStage: View {
     /// Whether the trailer on the stage is playing — the tray's mark on it
     /// says Pause while it is, as Discord's does.
     @State private var isTrailerPlaying = false
+    /// Whether enough of the stage is on screen for a trailer to be worth
+    /// decoding — see `TrailerPlayer.isOnScreen`.
+    @State private var isStageOnScreen = true
 
     /// 78 in the handoff. The tray shows a page of these and names how many
     /// there are, which a bare scrolling strip does not.
@@ -69,6 +72,7 @@ struct GameMediaStage: View {
                         url: video,
                         poster: poster,
                         autoplays: !motion.reduceMotion,
+                        isOnScreen: isStageOnScreen,
                         onPlayingChange: { isTrailerPlaying = $0 }
                     )
                 case .still(let url):
@@ -83,7 +87,18 @@ struct GameMediaStage: View {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
             }
-            .shadow(color: .black.opacity(0.5), radius: 28, y: 12)
+            // A plain shape's shadow behind the stage, not the stage's own: a
+            // shadow on the stage is worked out again from every frame of the
+            // trailer in it.
+            .background {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(.black)
+                    .shadow(color: .black.opacity(0.5), radius: 28, y: 12)
+            }
+            .onScrollVisibilityChange(threshold: 0.25) { visible in
+                guard isStageOnScreen != visible else { return }
+                isStageOnScreen = visible
+            }
             // The stage cross-fades rather than sliding: the tray below carries
             // the sense of position, and two things moving for one click reads
             // as a transition the app is performing rather than a picture
@@ -130,8 +145,12 @@ struct GameMediaStage: View {
             .frame(height: Self.thumbnailHeight)
         }
         .padding(Spacing.snug)
-        // Content over the game's artwork: a standard material, not glass.
-        .background(.thinMaterial, in: .rect(cornerRadius: 22))
+        // **A fill, because this panel scrolls.** A material that moves over
+        // its backdrop blurs that backdrop again on every frame it moves; the
+        // field behind it is already a sixty-point blur, so a translucent fill
+        // reads the same and costs a rectangle. Materials are kept for the
+        // panels that hold still: the header and the aside.
+        .background(GamePanel.fill, in: .rect(cornerRadius: 22))
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
@@ -199,9 +218,23 @@ struct GameMediaStage: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .interactiveChromeOverMedia(in: .circle)
+        .opacity(enabled ? 1 : 0.4)
+        // A chip, not glass: the tray scrolls, and glass in what scrolls is a
+        // lens re-sampled on every frame of it.
+        .plainChip(in: Circle())
         .accessibilityLabel(Text(label))
     }
+}
+
+/// The ground of a panel that scrolls on a game's page.
+///
+/// **Not a material** — see `GameMediaStage.tray`. Dark over the dark field
+/// and light over the light one, at the weight `.thinMaterial` has there.
+enum GamePanel {
+    static let fill = Color.adaptive(
+        dark: NSColor(white: 0.13, alpha: 0.62),
+        light: NSColor(white: 1, alpha: 0.66)
+    )
 }
 
 // MARK: - Announcements

@@ -21,6 +21,9 @@ nonisolated struct ActivityInviteSlot: Sendable {
     var monogramOrigin: CGPoint
     var title: TimelineTextBlock
     var titleOrigin: CGPoint
+    /// Where "Invite to Play" is drawn, above the icon's row. Painted, like
+    /// the status: its words are the card's, not the message's.
+    var eyebrowOrigin: CGPoint
     /// Where the live status line is drawn, and how wide it may run.
     ///
     /// **The line itself is NOT here.** It comes from presence, which changes
@@ -42,38 +45,59 @@ nonisolated struct ActivityInviteSlot: Sendable {
 
 nonisolated enum ActivityInviteLayoutEngine {
 
-    static let padding: CGFloat = 14
-    static let iconSide: CGFloat = 40
-    static let iconCorner: CGFloat = 13
-    static let buttonHeight: CGFloat = 34
-    static let buttonCorner: CGFloat = 8
+    static let padding: CGFloat = 16
+    static let iconSide: CGFloat = 48
+    static let iconCorner: CGFloat = 14
+    static let buttonHeight: CGFloat = 36
+    /// A capsule: the one control on the card, and the roundest thing on it.
+    static let buttonCorner: CGFloat = buttonHeight / 2
     static let gutter: CGFloat = 12
-    /// The coloured rule down the leading edge.
-    ///
-    /// **This app's own idiom for "this belongs to somebody", not Discord's.**
-    /// The reference client floods the whole card with a gradient of the app's
-    /// colour; an embed here already says the same thing with a bar, and one
-    /// vocabulary for one idea is worth more than a resemblance. It also keeps
-    /// the card legible on every theme, which a full-bleed fill does not.
-    static let rule: CGFloat = 4
+    /// The card's own corner. Twenty, concentric with the icon's fourteen at
+    /// the card's sixteen-point padding, near enough that the two read as one
+    /// family (Alex, 2026-11-12: "making the invitations rounded").
+    static let corner: CGFloat = 20
+    /// Narrower than an embed: a card with one line of words and one button
+    /// stretched to 432 is mostly the button.
+    static let maxWidth: CGFloat = 400
+    /// Between the eyebrow and the icon's row, and between that row and the
+    /// button.
+    static let rowGap: CGFloat = 12
 
-    /// **No colour here, deliberately.** The card's accent is quantised from
+    // **The card is always dark, so its words are always light.** Its ground
+    // is the app's own colours taken down until white reads on them
+    // (`InviteCardColours`), in a light room as much as a dark one — so none
+    // of these come from the theme, whose primary ink in Porcelain is black.
+    static let ink = NSColor.white
+    static let quietInk = NSColor.white.withAlphaComponent(0.78)
+    /// The word on the white button.
+    static let buttonInk = NSColor(white: 0.07, alpha: 1)
+
+    static func eyebrowFont(_ style: MessageTextStyle) -> NSFont {
+        NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold)
+    }
+
+    /// **No colour here, deliberately.** The card's colours are quantised from
     /// the app's icon asynchronously, and a colour taken at layout time is a
     /// colour that arrives after the row is already cached — the layout only
     /// re-runs on a presentation or items change, so the card kept the neutral
     /// fallback for the life of the channel. The geometry does not depend on
     /// the colour, so the colour belongs on the paint path, where it costs a
-    /// redraw instead of a re-measure.
+    /// redraw instead of a re-measure. The same goes for the cover.
     static func layout(
         _ invite: ActivityInvite,
         origin: CGPoint,
         availableWidth: CGFloat,
         style: MessageTextStyle
     ) -> ActivityInviteSlot {
-        let cardWidth = min(Metrics.embedMaxWidth, availableWidth)
-        let contentX = origin.x + rule + padding
+        let cardWidth = min(maxWidth, availableWidth)
+        let contentX = origin.x + padding
         let contentRight = origin.x + cardWidth - padding
         var y = origin.y + padding
+
+        // "Invite to Play", painted — see the slot's note.
+        let eyebrowOrigin = CGPoint(x: contentX, y: y)
+        let eyebrow = eyebrowFont(style)
+        y += (eyebrow.ascender - eyebrow.descender).rounded(.up) + rowGap - 2
 
         let iconRect = CGRect(x: contentX, y: y, width: iconSide, height: iconSide)
         let textX = iconRect.maxX + gutter
@@ -81,8 +105,8 @@ nonisolated enum ActivityInviteLayoutEngine {
 
         let title = block(
             invite.name,
-            font: NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold),
-            color: style.primaryColor,
+            font: NSFont.systemFont(ofSize: style.bodyFont.pointSize + 1, weight: .semibold),
+            color: ink,
             width: textWidth,
             style: style
         )
@@ -90,21 +114,21 @@ nonisolated enum ActivityInviteLayoutEngine {
         // `statusOrigin` for why the text is not measured here.
         let statusFont = style.metadataFont
         let statusHeight = statusFont.ascender - statusFont.descender
-        let textHeight = title.size.height + 2 + statusHeight
+        let textHeight = title.size.height + 3 + statusHeight
         let textTop = iconRect.midY - textHeight / 2
         let titleOrigin = CGPoint(x: textX, y: textTop)
-        let statusOrigin = CGPoint(x: textX, y: textTop + title.size.height + 2)
+        let statusOrigin = CGPoint(x: textX, y: textTop + title.size.height + 3)
 
         // The monogram stands in until the icon lands, in the icon's own box.
         let monogram = block(
             String(invite.name.prefix(1)).uppercased(),
             font: NSFont.systemFont(ofSize: iconSide * 0.4, weight: .semibold),
-            color: style.secondaryColor,
+            color: quietInk,
             width: iconSide,
             style: style
         )
 
-        y = max(iconRect.maxY, textTop + textHeight) + padding
+        y = max(iconRect.maxY, textTop + textHeight) + rowGap + 2
 
         let buttonRect = CGRect(
             x: contentX,
@@ -132,7 +156,7 @@ nonisolated enum ActivityInviteLayoutEngine {
                     .font: NSFont.systemFont(
                         ofSize: style.bodyFont.pointSize, weight: .semibold
                     ),
-                    .foregroundColor: style.primaryColor,
+                    .foregroundColor: buttonInk,
                     .paragraphStyle: centred,
                 ]
             )),
@@ -157,6 +181,7 @@ nonisolated enum ActivityInviteLayoutEngine {
             ),
             title: title,
             titleOrigin: titleOrigin,
+            eyebrowOrigin: eyebrowOrigin,
             statusOrigin: statusOrigin,
             statusWidth: textWidth,
             buttonRect: buttonRect,

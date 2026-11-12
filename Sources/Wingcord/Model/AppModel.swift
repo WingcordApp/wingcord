@@ -552,7 +552,20 @@ final class AppModel {
     /// The account's starred and most-used emoji and stickers, once read —
     /// the pickers' Favorites and Frequently Used, and the message bar's quick
     /// reactions. Nil until first read.
-    var expressionUsage: ExpressionUsage?
+    var expressionUsage: ExpressionUsage? {
+        // From the table's own `didSet`, so no writer has to remember (§2).
+        didSet { expressionUsageRevision &+= 1 }
+    }
+    /// Moves with `expressionUsage`: what its memos key on, in place of
+    /// comparing every use in the tables on every read.
+    @ObservationIgnored private(set) var expressionUsageRevision: UInt64 = 0
+    /// The pickers' catalogs with Favorites and Frequently Used on them — see
+    /// `withUsageSections`.
+    @ObservationIgnored var usageCatalogCache: [UsageCatalogKey: (base: [ExpressionSection], value: ExpressionCatalog)] = [:]
+    /// A game's announcements as its shelf draws them — see `announcementCards`.
+    @ObservationIgnored var announcementCardCache: [ApplicationID: (messages: [Message], cards: [GameAnnouncementCard])] = [:]
+    /// The message bar's quick reactions — see `quickReactions(in:)`.
+    @ObservationIgnored var quickReactionsCache: (key: QuickReactionsKey, value: [EmojiRef])?
     /// The sound somebody just pressed, and who pressed it. Drawn as a chip
     /// over their tile for a beat, then cleared.
     var soundboardEffects: [UserID: String] = [:]
@@ -1461,7 +1474,7 @@ final class AppModel {
     /// is its container re-evaluating. A card whose colour arrives on a table
     /// nobody observes keeps the neutral rule for the life of the channel,
     /// which is exactly what it did.
-    var activityAccents: [ApplicationID: UInt32] = [:]
+    var activityAccents: [ApplicationID: ActivityCardTint] = [:]
     /// What is typed in the launcher's search field. Observable: it is the one
     /// input here a keystroke moves.
     var activityQuery = ""
@@ -2392,6 +2405,7 @@ final class AppModel {
         channelsAndRolesCache = nil
         emojiCatalogCache = nil
         reactionEmojiCatalogCache = nil
+        usageCatalogCache = [:]
         invokedCommands.removeAll()
         stickerCatalogCache = nil
         mentionCache = nil

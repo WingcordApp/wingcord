@@ -922,6 +922,9 @@ struct Composer: View {
             isCancel: isVoiceActive,
             action: action
         )
+            .onChange(of: isAttachMenuOpen) { _, isOpen in
+                if isOpen { attachActions.menuWillOpen?() }
+            }
             .popover(isPresented: $isAttachMenuOpen, arrowEdge: .top) {
                 ComposerAttachMenu(actions: menuActions) { isAttachMenuOpen = false }
             }

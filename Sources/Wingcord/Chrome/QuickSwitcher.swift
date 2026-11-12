@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WingcordCore
 
@@ -98,6 +99,8 @@ struct QuickSwitcher: View {
             .foregroundStyle(InkColor.solid)
             .lineLimit(1)
             .focused($isFocused)
+            // The keyboard, made sure of — see `QuickSwitchFocusAnchor`.
+            .background { QuickSwitchFocusAnchor() }
             .onKeyPress(.upArrow) { move(-1) }
             .onKeyPress(.downArrow) { move(1) }
             .onKeyPress(.return) { commit() }
@@ -394,5 +397,76 @@ private struct MentionBadge: View {
             .frame(minWidth: 16, minHeight: 16)
             .background(Palette.unreadBadge, in: .capsule)
             .accessibilityHidden(true)
+    }
+}
+
+// MARK: - The keyboard, made sure of
+
+/// Puts the keyboard in the switcher's field, and checks that it stayed there.
+///
+/// **`isFocused = true` is one request, and SwiftUI drops it without a word
+/// when the field is not ready to take it.** The panel arrives through a
+/// transition, so its field is put into the window a little after the panel
+/// appears; a request that lands in between is lost, and how wide that gap is
+/// depends on how busy the main thread is — which is why the switcher opened
+/// with the keyboard still in the composer *sometimes*, and more often on a
+/// busy account. Moving the request from `onAppear` to `.task` narrowed the gap
+/// and did not close it.
+///
+/// So the field is found in AppKit — the text field lying where this view
+/// lies, behind it — and made first responder directly, a turn after the panel
+/// is in the window and again over the next half second for as long as it has
+/// not held. After that it stops: the keyboard is the reader's to move.
+private struct QuickSwitchFocusAnchor: NSViewRepresentable {
+    func makeNSView(context: Context) -> Anchor { Anchor() }
+    func updateNSView(_ nsView: Anchor, context: Context) {}
+
+    final class Anchor: NSView {
+        private var attempts: Task<Void, Never>?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            attempts?.cancel()
+            attempts = nil
+            guard window != nil else { return }
+            attempts = Task { [weak self] in
+                // A turn first, so the field is in the window; then while the
+                // panel is still settling.
+                for wait in [0, 50, 100, 150, 200] {
+                    if wait > 0 { try? await Task.sleep(for: .milliseconds(wait)) } else { await Task.yield() }
+                    guard !Task.isCancelled, let self else { return }
+                    self.focusField()
+                }
+            }
+        }
+
+        /// The text field this view sits behind: the one whose box in the
+        /// window meets this one's.
+        private func field(in window: NSWindow) -> NSTextField? {
+            guard let content = window.contentView else { return nil }
+            let mine = convert(bounds, to: nil)
+            var found: NSTextField?
+            func search(_ view: NSView) {
+                guard found == nil else { return }
+                if let candidate = view as? NSTextField, candidate.isEditable,
+                   candidate.convert(candidate.bounds, to: nil).intersects(mine) {
+                    found = candidate
+                    return
+                }
+                for child in view.subviews { search(child) }
+            }
+            search(content)
+            return found
+        }
+
+        private func focusField() {
+            guard let window, let field = field(in: window) else { return }
+            // Already there: its field editor is the first responder.
+            if window.firstResponder === field { return }
+            if let editor = window.firstResponder as? NSTextView, editor.delegate === field { return }
+            window.makeFirstResponder(field)
+        }
     }
 }

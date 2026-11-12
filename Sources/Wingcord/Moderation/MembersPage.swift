@@ -47,16 +47,9 @@ private struct MembersPage: View {
         GeometryReader { proxy in
             ScrollView(.horizontal) {
                 VStack(alignment: .leading, spacing: 0) {
-                    if reviewsApplications {
-                        tabs
-                    }
                     switch store.tab {
                     case .members:
-                        toolbar(permissions: permissions)
-                        if !store.selection.isEmpty {
-                            selectionBar
-                                .transition(.move(edge: .top).combined(with: .opacity))
-                        }
+                        caption
                         MembersTableHeader(store: store, columns: columns)
                         Divider().overlay(Ink.quaternary)
                         content(columns: columns)
@@ -74,6 +67,29 @@ private struct MembersPage: View {
                 .frame(minWidth: proxy.size.width, maxHeight: .infinity, alignment: .topLeading)
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        }
+        // **The page's controls are on the toolbar row** (Alex, 2026-11-12:
+        // "moving these up the toolbar") — the tabs at its leading end, the
+        // page's name in the middle where every page's is, and the search, Sort
+        // and Prune at its trailing end, as Channels & Roles and Discover lay
+        // theirs. `floatingTopBar` registers the bar, so the table's inset and
+        // the bar cannot disagree.
+        .floatingTopBar {
+            MembersBar(
+                store: store,
+                text: $text,
+                showsTabs: reviewsApplications,
+                prune: canPrune(permissions) ? { model.presentModeration(.prune(store.guildID)) } : nil
+            )
+        }
+        // What is selected, and the one thing to do with it, floating over the
+        // table's foot — it used to push the whole table down a row.
+        .overlay(alignment: .bottom) {
+            if store.tab == .members, !store.selection.isEmpty {
+                selectionBar
+                    .padding(.bottom, Spacing.group)
+                    .transition(.materialize(from: .bottom, blurring: false))
+            }
         }
         .animation(motion.standard, value: store.selection.isEmpty)
         // Pending is asked for up front, so its tab can carry the count.
@@ -93,102 +109,58 @@ private struct MembersPage: View {
 
     // MARK: Above the table
 
-    /// Discord's tabs: All Members, then the applications by status.
-    private var tabs: some View {
-        let pending = store.applications[.submitted]?.count ?? 0
-        let options: [SegmentedPicker<MemberSafetyStore.Tab>.Option] = [
-            .init(.members, "All Members"),
-            .init(.applications(.submitted), pending > 0 ? "Pending (\(pending))" : "Pending"),
-            .init(.applications(.rejected), "Rejected"),
-            .init(.applications(.approved), "Approved"),
-        ]
-        return SegmentedPicker(
-            options: options,
-            selection: Binding(get: { store.tab }, set: { store.show($0) })
+    private func canPrune(_ permissions: Permissions) -> Bool {
+        guard let guild = model.guilds[store.guildID] else { return false }
+        return ModerationPolicy.canPrune(
+            permissions,
+            isOwner: guild.ownerID == model.currentUserID,
+            features: guild.features
         )
-        .fixedSize()
-        .padding(.horizontal, Spacing.group)
-        .padding(.top, Spacing.snug)
-        .accessibilityLabel(Text("Member Applications"))
     }
 
-    private func toolbar(permissions: Permissions) -> some View {
-        let guild = model.guilds[store.guildID]
-        let canPrune = guild.map {
-            ModerationPolicy.canPrune(
-                permissions,
-                isOwner: $0.ownerID == model.currentUserID,
-                features: $0.features
-            )
-        } ?? false
-        return HStack(spacing: Spacing.snug) {
-            Text(store.title)
-                .font(.system(.title3, weight: .semibold))
-                .foregroundStyle(Ink.primary)
-            Spacer(minLength: Spacing.base)
-            HStack(spacing: Spacing.tight) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Ink.tertiary)
-                TextField("Search by username or id", text: $text)
-                    .textFieldStyle(.plain)
-                    .font(.system(.subheadline))
-                if !text.isEmpty {
-                    Button { text = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(Ink.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Text("Clear"))
-                }
-            }
-            .padding(.horizontal, Spacing.snug)
-            .frame(width: 240, height: Metrics.composerControlHeight)
-            .background(Palette.surfaceRaised, in: .capsule)
-            MembersSortButton(store: store)
-            if canPrune {
-                Button { model.presentModeration(.prune(store.guildID)) } label: {
-                    Text("Prune")
+    /// The table's own line: what it is listing, and how many.
+    private var caption: some View {
+        Text(store.title)
+            .font(.system(.title3, weight: .semibold))
+            .foregroundStyle(Ink.primary)
+            .padding(.horizontal, Spacing.group)
+            .padding(.vertical, Spacing.snug)
+    }
+
+    /// A floating glass capsule: the count, the way out, and Ban Members with
+    /// its colour in the glass rather than under it.
+    private var selectionBar: some View {
+        let count = store.selection.count
+        return GlassEffectContainer(spacing: Spacing.base) {
+            HStack(spacing: Spacing.base) {
+                HStack(spacing: Spacing.snug) {
+                    Text(count == 1 ? "1 member selected" : "\(count) members selected")
                         .font(.system(.subheadline, weight: .semibold))
-                        .padding(.horizontal, Spacing.snug)
-                        .frame(height: Metrics.composerControlHeight)
-                        .background(Palette.surfaceRaised, in: .capsule)
+                        .foregroundStyle(Ink.primary)
+                        .contentTransition(.numericText(value: Double(count)))
+                    Button("Clear") { store.selection = [] }
+                        .buttonStyle(.plain)
+                        .font(.system(.subheadline, weight: .medium))
+                        .foregroundStyle(Ink.secondary)
+                }
+                .padding(.horizontal, Spacing.margin)
+                .frame(height: SearchField.height)
+                .glassEffect(.regular, in: .capsule)
+                Button {
+                    model.presentModeration(.bulkBan(Array(store.selection), store.guildID))
+                } label: {
+                    Label("Ban Members", systemImage: "hammer.fill")
+                        .font(.system(.subheadline, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, Spacing.margin)
+                        .frame(height: SearchField.height)
                         .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Ink.primary)
+                .glassEffect(.regular.tint(Palette.destructive).interactive(), in: .capsule)
             }
         }
-        .padding(.horizontal, Spacing.group)
-        .padding(.vertical, Spacing.snug)
-    }
-
-    private var selectionBar: some View {
-        let count = store.selection.count
-        return HStack(spacing: Spacing.snug) {
-            Text(count == 1 ? "1 member selected" : "\(count) members selected")
-                .font(.system(.subheadline, weight: .semibold))
-                .foregroundStyle(Ink.primary)
-            Button("Clear selection") { store.selection = [] }
-                .buttonStyle(.link)
-                .font(.system(.subheadline))
-            Spacer()
-            Button {
-                model.presentModeration(.bulkBan(Array(store.selection), store.guildID))
-            } label: {
-                Text("Ban Members")
-                    .font(.system(.subheadline, weight: .semibold))
-                    .padding(.horizontal, Spacing.snug)
-                    .frame(height: Metrics.composerControlHeight)
-                    .background(Palette.destructive, in: .capsule)
-                    .contentShape(.capsule)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-        }
-        .padding(.horizontal, Spacing.group)
-        .padding(.vertical, Spacing.base)
-        .background(Palette.groupedFill)
+        .animation(motion.standard, value: count)
     }
 
     // MARK: The table
@@ -560,6 +532,70 @@ private struct SignalsFilter: View {
 }
 
 /// Discord's Sort button and its four orders.
+/// The page's floating chrome, on the toolbar row — see `MembersPage.body`.
+///
+/// The search is the system's field on glass (`SearchField`), where it was a
+/// text field in a painted capsule; Sort and Prune are glass capsules at its
+/// height, so the three sit on one line at one size.
+private struct MembersBar: View {
+    var store: MemberSafetyStore
+    @Binding var text: String
+    var showsTabs: Bool
+    /// Nil where the reader may not prune, and the button is then not drawn.
+    var prune: (() -> Void)?
+
+    private static let searchWidth: CGFloat = 240
+
+    var body: some View {
+        PageHeaderBar {
+            if showsTabs {
+                SegmentedPicker(
+                    options: tabs,
+                    selection: Binding(get: { store.tab }, set: { store.show($0) })
+                )
+                .fixedSize()
+                .accessibilityLabel(Text("Member Applications"))
+            }
+        } center: {
+            HeaderTitleCapsule()
+        } trailing: {
+            if store.tab == .members {
+                GlassEffectContainer(spacing: Spacing.base) {
+                    HStack(spacing: Spacing.base) {
+                        SearchField(prompt: "Search by username or ID", text: $text)
+                            .frame(width: Self.searchWidth)
+                        MembersSortButton(store: store)
+                        if let prune {
+                            Button(action: prune) {
+                                Text("Prune")
+                                    .font(.system(.subheadline, weight: .semibold))
+                                    .foregroundStyle(Ink.primary)
+                                    .padding(.horizontal, Spacing.margin)
+                                    .frame(height: SearchField.height)
+                                    .contentShape(.capsule)
+                            }
+                            .buttonStyle(.plain)
+                            .glassEffect(.regular.interactive(), in: .capsule)
+                            .help("Remove members who have not been seen in a while")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Discord's tabs: All Members, then the applications by status.
+    private var tabs: [SegmentedPicker<MemberSafetyStore.Tab>.Option] {
+        let pending = store.applications[.submitted]?.count ?? 0
+        return [
+            .init(.members, "All Members"),
+            .init(.applications(.submitted), pending > 0 ? "Pending (\(pending))" : "Pending"),
+            .init(.applications(.rejected), "Rejected"),
+            .init(.applications(.approved), "Approved"),
+        ]
+    }
+}
+
 private struct MembersSortButton: View {
     var store: MemberSafetyStore
 
@@ -573,13 +609,13 @@ private struct MembersSortButton: View {
                 Text("Sort")
                     .font(.system(.subheadline, weight: .semibold))
             }
-            .padding(.horizontal, Spacing.snug)
-            .frame(height: Metrics.composerControlHeight)
-            .background(Palette.surfaceRaised, in: .capsule)
+            .padding(.horizontal, Spacing.margin)
+            .frame(height: SearchField.height)
             .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .foregroundStyle(Ink.primary)
+        .glassEffect(.regular.interactive(), in: .capsule)
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
             VStack(spacing: 0) {
                 ForEach(GuildMemberRow.Sort.allCases) { sort in

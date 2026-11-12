@@ -153,6 +153,9 @@ final class SessionController {
     /// The reader's own Spotify, per linked account — see
     /// `SessionController+SpotifyPlayer`.
     var spotifyFollowers: [String: Task<Void, Never>] = [:]
+    /// Hears the Mac wake, so the Spotify sockets it slept through are replaced —
+    /// `restartSpotifyAfterWake`.
+    var spotifyWakeObserver: NSObjectProtocol?
     var spotifyClients: [String: SpotifyPlayerClient] = [:]
     var spotifyPlaying: [String: SpotifyNowPlaying] = [:]
     var spotifyExpiries: [String: Task<Void, Never>] = [:]
@@ -257,6 +260,12 @@ final class SessionController {
     /// account's frecency, and the write that will carry them.
     var pendingExpressionUses = PendingExpressionUses()
     var expressionUseWrite: Task<Void, Never>?
+    /// The star being written, which the next one waits for, and how many are
+    /// queued or in flight — see `setFavorite`.
+    var favoriteWrite: Task<Void, Never>?
+    var favoriteWritesPending = 0
+    /// Whether the last session's unwritten uses have been taken up.
+    var hasAdoptedStoredExpressionUses = false
     /// The re-read after the blob moved elsewhere, debounced.
     var expressionUsageRefresh: Task<Void, Never>?
     /// The invite resolve behind the Add a Server field, replaced per keystroke.
@@ -336,6 +345,10 @@ final class SessionController {
     private static let heldUpdatesInterval = Duration.milliseconds(750)
     private var heldUpdates: [GatewaySocket.Event] = []
     private var heldUpdatesFlush: Task<Void, Never>?
+    /// Waits for the scroll that is holding updates to end — see `receive`.
+    private var scrollEndFlush: Task<Void, Never>?
+    /// True while `flushHeldUpdates` is applying its batch — see `enqueue`.
+    private var isApplyingHeldUpdates = false
 
     /// The call, and everything that follows from being in one.
     ///
@@ -797,9 +810,10 @@ final class SessionController {
         model.summaryLoader = { [weak self] channelID, request in
             self?.loadSummaries(in: channelID, request)
         }
-        // A window coming back shows what happened while it was gone at once.
-        AppVisibility.shared.observe(self) { [weak self] visible in
-            if visible { self?.flushHeldUpdates() }
+        // A window coming back — or the overlay coming up over a game — shows
+        // what happened while it was gone at once.
+        AppVisibility.shared.observeDelivery(self) { [weak self] delivers in
+            if delivers { self?.flushHeldUpdates() }
         }
         eventTask = Task { [weak self] in
             await socket.connect(token: token)
@@ -959,6 +973,8 @@ final class SessionController {
         heldUpdates.removeAll(keepingCapacity: false)
         heldUpdatesFlush?.cancel()
         heldUpdatesFlush = nil
+        scrollEndFlush?.cancel()
+        scrollEndFlush = nil
         requestedPreviewChannels.removeAll()
         cancelFolderSave()
         stopGameDetection()
@@ -995,20 +1011,62 @@ final class SessionController {
     /// **Not during a call**: a join or a leave is heard the moment it happens.
     /// And an event that is not an update is never held, with whatever was
     /// waiting applied first so nothing overtakes it.
+    ///
+    /// **And while something is being scrolled, for the same reason at a
+    /// shorter wait** (`scrollHeldUpdatesInterval`). A scroll is the one
+    /// interaction with no frames to spare, and on a busy account every message
+    /// and presence anywhere was its own pass over the window's graph and its
+    /// own commit, landing between the frames of the gesture. Measured
+    /// 2026-11-11 (docs/PERFORMANCE.md): the drawn lists' own work is a few
+    /// tenths of a millisecond a frame, so what a scroll competes with is this.
+    /// Held, a quarter second of them is one pass; the scroll ending applies
+    /// whatever is waiting at once. Nothing the reader is scrolling arrives
+    /// this way — a member list asks for its rows after it stops, and history
+    /// comes by request — so the list under the hand is never the one waiting.
     private func receive(_ event: GatewaySocket.Event) {
-        if case .update = event, !AppVisibility.shared.isVisible, model.connectedVoiceChannelID == nil {
+        if case .update = event, let wait = heldUpdatesWait {
             heldUpdates.append(event)
-            scheduleHeldUpdatesFlush()
+            scheduleHeldUpdatesFlush(after: wait)
             return
         }
         flushHeldUpdates()
         apply(event)
     }
 
-    private func scheduleHeldUpdatesFlush() {
+    /// How long an update arriving now waits for company, or nil to apply it
+    /// as it arrives.
+    private var heldUpdatesWait: Duration? {
+        if !AppVisibility.shared.deliversAtOnce, model.connectedVoiceChannelID == nil {
+            return Self.heldUpdatesInterval
+        }
+        if Self.holdsUpdatesDuringScroll, ScrollWorkGate.isActive {
+            return Self.scrollHeldUpdatesInterval
+        }
+        return nil
+    }
+
+    /// How long updates wait for company while something is being scrolled.
+    private static let scrollHeldUpdatesInterval = Duration.milliseconds(250)
+
+    /// Off with `defaults write <bundle id> scrollHoldsUpdates -bool NO`: the
+    /// switch a recording on a real account is compared across.
+    private static let holdsUpdatesDuringScroll =
+        UserDefaults.standard.object(forKey: "scrollHoldsUpdates") as? Bool ?? true
+
+    private func scheduleHeldUpdatesFlush(after wait: Duration) {
+        // The scroll ending is not something a sleep can hear, so it has its
+        // own listener: one a gesture, however many updates it held.
+        if ScrollWorkGate.isActive, scrollEndFlush == nil {
+            scrollEndFlush = Task { [weak self] in
+                await ScrollWorkGate.waitUntilInactive()
+                guard let self, !Task.isCancelled else { return }
+                self.scrollEndFlush = nil
+                self.flushHeldUpdates()
+            }
+        }
         guard heldUpdatesFlush == nil else { return }
         heldUpdatesFlush = Task { [weak self] in
-            try? await Task.sleep(for: Self.heldUpdatesInterval, tolerance: .milliseconds(250))
+            try? await Task.sleep(for: wait, tolerance: wait / 3)
             guard !Task.isCancelled else { return }
             self?.flushHeldUpdates()
         }
@@ -1020,9 +1078,14 @@ final class SessionController {
         guard !heldUpdates.isEmpty else { return }
         let held = heldUpdates
         heldUpdates.removeAll(keepingCapacity: true)
+        isApplyingHeldUpdates = true
         for event in held { apply(event) }
+        isApplyingHeldUpdates = false
         // In this same turn, so it is the same pass.
-        if !pendingPresences.isEmpty { flushPresences() }
+        if !pendingPresences.isEmpty {
+            presenceFlushTask?.cancel()
+            flushPresences()
+        }
     }
 
     private func apply(_ event: GatewaySocket.Event) {
@@ -1837,32 +1900,18 @@ final class SessionController {
             // own acts as well as for somebody else's, so the optimistic write
             // and the echo settle on the same answer — and a request accepted
             // on a phone reaches this window without a refetch.
-            if let user, model.users[userID] == nil { model.users[userID] = user }
-            if kind == .none {
-                model.relationships[userID] = nil
-                model.relationshipFacts[userID] = nil
-                model.blockedUserIDs.remove(userID)
-                model.ignoredUserIDs.remove(userID)
-            } else {
-                model.relationships[userID] = kind
-                // **Only when the event carried some.** A relationship update
-                // with nothing remarkable on it must not erase the `since` a
-                // pending request already has — that date is the friend-request
-                // list's only ordering.
-                if let facts { model.relationshipFacts[userID] = facts }
-                if kind == .blocked {
-                    model.blockedUserIDs.insert(userID)
-                } else {
-                    model.blockedUserIDs.remove(userID)
-                }
-                if isIgnored {
-                    model.ignoredUserIDs.insert(userID)
-                } else {
-                    model.ignoredUserIDs.remove(userID)
-                }
-            }
-            model.identityRevision &+= 1
+            model.applyRelationship(kind, isIgnored: isIgnored, for: userID, user: user, facts: facts)
             // A friendship made or lost moves a friend link's Add Friend.
+            model.inviteSettlementChanged()
+
+        case .relationshipUpdated(let userID, let kind, let isIgnored, let nickname, let facts):
+            // The whole relationship as it now stands: its kind where the event
+            // named one, the ignore either way, and the private nickname.
+            model.applyRelationship(
+                kind ?? model.relationships[userID] ?? .none,
+                isIgnored: isIgnored, for: userID, user: nil, facts: facts
+            )
+            model.applyFriendNickname(nickname, for: userID)
             model.inviteSettlementChanged()
         }
     }
@@ -1981,8 +2030,13 @@ final class SessionController {
 
     private func enqueue(_ presence: Presence) {
         pendingPresences[presence.userID] = presence
-        // While nothing can be seen the held batch applies these at its end.
-        guard presenceFlushTask == nil, AppVisibility.shared.isVisible else { return }
+        // **Inside a held batch, the batch applies these at its end. Everywhere
+        // else they are flushed on their own clock**, seen or not: the test here
+        // was "can a window be seen", and during a call updates are not held at
+        // all — so with the window covered in a call nothing ever flushed them.
+        // Listening along and the rooms' activity marks stopped following, and
+        // the list was still stale when the window came back.
+        guard presenceFlushTask == nil, !isApplyingHeldUpdates else { return }
         presenceFlushTask = Task { [weak self] in
             try? await Task.sleep(for: Self.presenceFlushInterval)
             guard let self, !Task.isCancelled else { return }

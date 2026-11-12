@@ -35,7 +35,14 @@ final class OverlayController {
     /// has the overlay present and locked: visible, click-through, showing one
     /// widget. Presented is about the window existing; locked is about who owns
     /// the mouse.
-    private(set) var isPresented = false
+    private(set) var isPresented = false {
+        didSet {
+            // What arrives is shown at once while this is up — see
+            // `AppVisibility.isOverlayShown`.
+            guard isPresented != oldValue else { return }
+            AppVisibility.shared.setOverlayShown(isPresented)
+        }
+    }
 
     /// Whether the game has the mouse.
     ///

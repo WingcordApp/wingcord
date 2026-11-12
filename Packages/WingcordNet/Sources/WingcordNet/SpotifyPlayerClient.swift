@@ -179,15 +179,33 @@ public actor SpotifyPlayerClient {
     }
 
     /// One socket, until it closes. Answers whether it ever opened.
+    /// When the dealer last said anything, a pong included.
+    private var lastHeard = ContinuousClock.now
+    /// Whether two pings have gone unanswered.
+    private var isQuiet: Bool { ContinuousClock.now - lastHeard > Self.pingInterval * 2 + .seconds(5) }
+
     private func listen(_ continuation: AsyncStream<Event>.Continuation) async -> Bool {
         guard let url = URL(string: "wss://dealer.spotify.com/?access_token=\(accessToken)") else { return false }
         var request = URLRequest(url: url)
         request.setValue("https://discord.com", forHTTPHeaderField: "Origin")
         let socket = Self.session.webSocketTask(with: request)
         socket.resume()
-        let pings = Task {
+        // **A socket that has gone quiet is closed, not waited on.** Spotify
+        // answers every ping with a pong; a connection that died with the
+        // network, or under a sleeping Mac, answers nothing and reports
+        // nothing — `receive` simply never returns — so the player's state
+        // froze at whatever it last heard until the app was restarted. Two
+        // pings with no word back and the socket is cancelled, which ends the
+        // loop below and lets `run` connect again.
+        lastHeard = .now
+        let pings = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.pingInterval)
+                guard !Task.isCancelled, let self else { return }
+                if await self.isQuiet {
+                    socket.cancel(with: .goingAway, reason: nil)
+                    return
+                }
                 try? await socket.send(.string(#"{"type":"ping"}"#))
             }
         }
@@ -199,6 +217,7 @@ public actor SpotifyPlayerClient {
         while !Task.isCancelled {
             guard let message = try? await socket.receive() else { break }
             opened = true
+            lastHeard = .now
             let text: String? = switch message {
             case .string(let string): string
             case .data(let data): String(data: data, encoding: .utf8)

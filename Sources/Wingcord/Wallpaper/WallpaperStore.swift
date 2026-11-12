@@ -28,6 +28,20 @@ final class WallpaperStore {
         }
     }
 
+    /// Where the window's colours come from while the desktop or a picture is
+    /// behind it — see `WallpaperColours`.
+    var colours: WallpaperColours {
+        didSet {
+            guard colours != oldValue else { return }
+            defaults.set(colours.rawValue, forKey: Key.colours)
+        }
+    }
+
+    /// Whether the chosen theme is what the window is wearing: nothing is
+    /// behind it but the theme's own ground, or the reader kept the theme's
+    /// colours over what is. The theme galleries ring their choice only then.
+    var wearsTheme: Bool { global.source == .theme || colours == .theme }
+
     /// The conversation the window is showing, set by the shell. Read by
     /// `shown` so the wallpaper follows the selection.
     var openConversation: ChannelID?
@@ -47,6 +61,7 @@ final class WallpaperStore {
         global = Self.decode(Wallpaper.self, defaults.data(forKey: Key.global)) ?? .theme
         perConversation = Self.decode([UInt64: Wallpaper].self, defaults.data(forKey: Key.perConversation)) ?? [:]
         forcesDarkAppearance = defaults.object(forKey: Key.forcesDark) as? Bool ?? true
+        colours = defaults.string(forKey: Key.colours).flatMap(WallpaperColours.init(rawValue:)) ?? .automatic
         migrateLegacyBackdrop()
         dropMissingFiles()
     }
@@ -167,6 +182,7 @@ final class WallpaperStore {
         static let global = "wallpaper.global"
         static let perConversation = "wallpaper.conversations"
         static let forcesDark = "wallpaper.forcesDarkAppearance"
+        static let colours = "wallpaper.colours"
         /// The picture card's setting before the wallpaper store. Read once.
         static let legacyBackdrop = "appearance.backdrop"
     }

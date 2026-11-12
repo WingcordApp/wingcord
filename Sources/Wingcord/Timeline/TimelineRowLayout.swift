@@ -1039,10 +1039,11 @@ nonisolated struct ReactionControlSlot: Sendable {
 nonisolated extension MessageRow {
     /// The reaction row's controls that are showing, each in the slot it takes.
     ///
-    /// Discord's rule (`17256`'s reaction row): the add control is always
-    /// shown where a new reaction may be started, and is not rendered at all
-    /// where it may not; the bookmark is shown when the message is kept, and
-    /// otherwise only while the pointer is on the reactions. **Showing controls
+    /// Both are the pointer's (Alex, 2026-11-12, "should appear only on hover
+    /// like on Discord"): the add control where a new reaction may be started
+    /// and the pointer is on the message — the caller's `canAddReaction` says
+    /// both — and the bookmark while the pointer is there or the message is
+    /// kept, which is a state a reader has to be able to see. **Showing controls
     /// fill the slots in order**, so a missing add control leaves no hole in
     /// front of the bookmark. The painter and the hit test both read this, so
     /// what is drawn and what answers a click cannot disagree.
@@ -3228,11 +3229,11 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             // Built from the same parts the painter draws, so the chip cannot be
             // narrower than its own contents.
             let chipWidth = TimelineMetrics.reactionChipWidth(
-                countWidth: measure("\(count)", font: style.metadataFont)
+                countWidth: measure("\(count)", font: TimelineMetrics.reactionCountFont(style))
             )
             if x + chipWidth > contentX + width, x > contentX {
                 x = contentX
-                y += TimelineMetrics.reactionChipHeight + 4
+                y += TimelineMetrics.reactionChipHeight + TimelineMetrics.reactionSpacing
             }
             slots.append(ReactionSlot(
                 rect: CGRect(
@@ -3246,7 +3247,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 imageURL: imageURL,
                 palette: palette
             ))
-            x += chipWidth + 4
+            x += chipWidth + TimelineMetrics.reactionSpacing
         }
 
         for reaction in reactions {
@@ -3271,17 +3272,30 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             }
         }
 
-        // The two controls wrap with the chips rather than being pinned to the
-        // row's end: a message with eight reactions on a narrow column ends its
-        // last line wherever it ends, and a control pinned to the right of the
-        // measure would sit alone under a gap.
+        // The two controls follow the last chip rather than being pinned to
+        // the row's end: a message with eight reactions on a narrow column ends
+        // its last line wherever it ends, and a control pinned to the right of
+        // the measure would sit alone under a gap.
+        //
+        // **They never get a line to themselves.** They are drawn only while
+        // the pointer is on the message (`visibleReactionControls`), so a line
+        // holding nothing else would be a blank band under every such message
+        // at rest. Where they do not fit after the last chip, that chip comes
+        // down with them — the line then has a chip on it either way.
         let kinds: [ReactionControlSlot.Kind] = offersBookmark ? [.addReaction, .bookmark] : [.addReaction]
-        for kind in kinds {
-            let side = TimelineMetrics.reactionControlSide
-            if x + side > contentX + width, x > contentX {
+        let side = TimelineMetrics.reactionControlSide
+        let controlsWidth = CGFloat(kinds.count) * side + CGFloat(kinds.count - 1) * 4
+        if x + controlsWidth > contentX + width, x > contentX {
+            y += TimelineMetrics.reactionChipHeight + TimelineMetrics.reactionSpacing
+            if let last = slots.indices.last, slots[last].rect.minX > contentX {
+                slots[last].rect.origin = CGPoint(x: contentX, y: y)
+                x = contentX + slots[last].rect.width + TimelineMetrics.reactionSpacing
+            } else {
+                // The one case left: a chip so wide it fills its line alone.
                 x = contentX
-                y += TimelineMetrics.reactionChipHeight + 4
             }
+        }
+        for kind in kinds {
             controls.append(ReactionControlSlot(
                 rect: CGRect(x: x, y: y, width: side, height: side),
                 kind: kind

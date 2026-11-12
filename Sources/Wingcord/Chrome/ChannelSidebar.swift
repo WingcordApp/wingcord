@@ -101,6 +101,9 @@ struct ChannelSidebar: View, Equatable {
     @State private var settings = AppSettings.shared
     /// The Messages page's search — see `visibleRows`.
     @State private var query = ""
+    /// Which row the pointer is on, tracked once for the list — see
+    /// `SidebarHoverRouter`.
+    @State private var hoverRouter = SidebarHoverRouter()
 
     /// The direct-message home, whose list the search narrows.
     private var isHome: Bool { presentation.header != nil && presentation.header?.guildID == nil }
@@ -465,6 +468,10 @@ struct ChannelSidebar: View, Equatable {
             }
         }
         .listStyle(.sidebar)
+        // One tracking area for every row's hover, behind the list and the
+        // size of it; the rows find the router in the environment.
+        .environment(\.sidebarHoverRouter, hoverRouter)
+        .background { SidebarHoverSurface(router: hoverRouter) }
         // The column's own ground shows through: the theme, the wallpaper's
         // vibrancy, and the banner the list scrolls over.
         .scrollContentBackground(.hidden)

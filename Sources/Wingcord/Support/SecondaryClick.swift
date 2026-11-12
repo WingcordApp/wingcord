@@ -54,7 +54,9 @@ struct SecondaryClickCatcher: NSViewRepresentable {
         nsView.isInPopover = isInPopover
     }
 
-    final class CatcherView: NSView {
+    /// Open to one subclass: a sidebar row's catcher also answers for the
+    /// row's hover — see `SidebarRowAgentView`.
+    class CatcherView: NSView {
         var onClick: (CGRect) -> Void = { _ in }
         var isInPopover = false
 

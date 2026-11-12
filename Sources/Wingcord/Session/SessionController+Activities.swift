@@ -149,12 +149,30 @@ extension SessionController {
             let palette = await Task.detached(priority: .utility) {
                 ProfileThemePalette.derive(from: image)
             }.value
-            guard let primary = palette.first else { return }
-            model.activityAccents[invite.applicationID] = primary
+            guard !palette.isEmpty else { return }
+            // Discord's pair: the palette's first two, each taken down until
+            // white reads on it.
+            let pair = InviteCardColours.pair(from: palette)
+            model.activityAccents[invite.applicationID] = ActivityCardTint(
+                primary: pair.primary, secondary: pair.secondary
+            )
             // The row cache keys on the mention table's token, which moves with
             // this counter — without the bump a card already laid out keeps its
-            // neutral rule for as long as the channel stays open.
+            // neutral ground for as long as the channel stays open.
             model.identityRevision &+= 1
+
+            // The app's cover, where the shelf knows one — Discord's
+            // `embedded_cover`, bled into the card's trailing side. After the
+            // colours, so a card is never waiting on a picture to stop being
+            // grey.
+            guard let asset = model.activityDirectory.apps[invite.applicationID]?.tileAssetID,
+                  let coverURL = CDN.applicationAsset(id: invite.applicationID, assetID: asset, side: 600),
+                  let cover = await ImageStore.shared.image(
+                      for: ImageStore.Key(url: coverURL, maximumPixelSize: 600), bucket: .artwork
+                  )
+            else { return }
+            ActivityCardCovers.set(cover, for: invite.applicationID)
+            model.activityAccents[invite.applicationID]?.hasCover = true
         }
     }
 

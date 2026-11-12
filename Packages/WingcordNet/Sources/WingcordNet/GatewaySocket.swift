@@ -1571,7 +1571,7 @@ public struct ReadySnapshot: Sendable {
             // Reading either as the other is how a friend gets hidden or an
             // ignore is silently lifted on every launch.
             if kind == .blocked { blockedUserIDs.insert(relationship.id) }
-            if relationship.is_ignored == true { ignoredUserIDs.insert(relationship.id) }
+            if relationship.user_ignored == true { ignoredUserIDs.insert(relationship.id) }
         }
         self.blockedUserIDs = blockedUserIDs
         self.ignoredUserIDs = ignoredUserIDs
@@ -1871,6 +1871,11 @@ public enum GatewayUpdate: Sendable {
     /// is not a relationship arriving, and folding it in would make every
     /// nickname change look like one to a store that reconciles on kind.
     case friendNicknameChanged(UserID, nickname: String?)
+    /// A relationship as it now stands — `RELATIONSHIP_UPDATE`. The kind is
+    /// nil where the event named none, and the relationship then keeps its own.
+    case relationshipUpdated(
+        UserID, kind: Relationship?, isIgnored: Bool, nickname: String?, facts: RelationshipFacts?
+    )
     /// A pin, a mute or a notification level changed for one guild — or, when
     /// `guildID` is nil, for the direct-message list.
     ///
@@ -2229,7 +2234,7 @@ public enum GatewayUpdate: Sendable {
             self = .relationshipChanged(
                 dto.id,
                 kind: Relationship(rawValue: dto.type ?? 0),
-                isIgnored: dto.is_ignored ?? false,
+                isIgnored: dto.user_ignored ?? false,
                 user: dto.user?.domain,
                 facts: dto.facts
             )
@@ -2342,15 +2347,30 @@ public enum GatewayUpdate: Sendable {
             // A removal carries the type that *was*, not one to apply — so the
             // event is normalised to `.none` here rather than at the store,
             // where the distinction would have to be remembered.
+            //
+            // **The ignore is the one thing a removal can leave standing**:
+            // Discord's store drops it only where the event does not say
+            // `user_ignored` (`e.relationship.userIgnored || D(id)`), so an
+            // unfriended person the reader ignores stays ignored.
             self = .relationshipChanged(
-                dto.id, kind: .none, isIgnored: false, user: nil, facts: nil
+                dto.id, kind: .none, isIgnored: dto.user_ignored ?? false, user: nil, facts: nil
             )
         case .relationshipUpdate(let dto):
             // **Empty is cleared.** The route takes `null` to clear and the
             // event has been seen to echo either, so both are normalised to
             // nil here — a nickname of no characters is not a nickname.
-            self = .friendNicknameChanged(
-                dto.id, nickname: dto.nickname?.isEmpty == true ? nil : dto.nickname
+            //
+            // **An update is the whole relationship, not only its nickname.**
+            // Discord's store takes the type and the ignore from it as well
+            // (`v(t.id, t.type)`, `t.userIgnored ? y(id) : D(id)`), and it is
+            // the event an ignore made on another device arrives as for
+            // somebody who is already a friend.
+            self = .relationshipUpdated(
+                dto.id,
+                kind: dto.type.map(Relationship.init(rawValue:)),
+                isIgnored: dto.user_ignored ?? false,
+                nickname: dto.nickname?.isEmpty == true ? nil : dto.nickname,
+                facts: dto.facts
             )
         case .userGuildSettingsUpdate(let dto):
             self = .guildSettingsChanged(

@@ -17,6 +17,9 @@ struct ListenAlongCard: Hashable, Sendable {
     var title: String
     var artworkURL: URL?
     var startedAt: Date?
+    /// When the track runs out, for the card's progress line. Nil where the
+    /// host's presence carries no end.
+    var endsAt: Date?
     /// Up to three of the people in the party, the host first; nil draws a
     /// face's placeholder.
     var faces: [URL?]
@@ -64,6 +67,7 @@ extension AppModel {
                 title: host.title,
                 artworkURL: host.artworkURL,
                 startedAt: host.startedAt,
+                endsAt: host.endsAt,
                 faces: listeners.prefix(3).map { userID in
                     users[userID].flatMap { avatarURL(for: $0, side: ListenAlongLayoutEngine.faceSide) }
                 },
@@ -78,7 +82,7 @@ extension AppModel {
     /// The host's live session for a party, read off their presence — or off
     /// the reader's own Spotify, when the party is theirs.
     private func listenAlongHost(of party: String) -> (
-        userID: UserID, title: String, artworkURL: URL?, startedAt: Date?, partySize: Int?
+        userID: UserID, title: String, artworkURL: URL?, startedAt: Date?, endsAt: Date?, partySize: Int?
     )? {
         guard let hostID = UInt64(party.dropFirst(SpotifyListening.partyPrefix.count)).map(UserID.init(rawValue:))
         else { return nil }
@@ -89,6 +93,7 @@ extension AppModel {
                 Self.listenAlongTitle(track: own.details, artist: own.state),
                 SpotifyListening.imageURL(forAsset: own.assets?.largeImage),
                 own.timestamps?.start.map { Date(timeIntervalSince1970: Double($0) / 1000) },
+                own.timestamps?.end.map { Date(timeIntervalSince1970: Double($0) / 1000) },
                 nil
             )
         }
@@ -100,6 +105,7 @@ extension AppModel {
             Self.listenAlongTitle(track: activity.details, artist: activity.state),
             activity.largeImageURL ?? SpotifyListening.imageURL(forAsset: activity.largeImageKey),
             activity.startedAt,
+            activity.endsAt,
             activity.partySize?.first
         )
     }

@@ -38,8 +38,10 @@ public enum MemberListOrganization: String, CaseIterable, Identifiable, Sendable
         }
     }
 
-    /// The default, Discord's: `O = m.Vj.ACTIVE_NOW`.
-    public static let standard = MemberListOrganization.activeNow
+    /// The default: the server's own groups (Alex, 2026-11-12). Discord's
+    /// friends sidebar starts on Active Now (`O = m.Vj.ACTIVE_NOW`), which is
+    /// one choice away, and a list with no roles falls back to it — `resolved`.
+    public static let standard = MemberListOrganization.roles
 
     /// What this asks for of a list that cannot do it.
     ///

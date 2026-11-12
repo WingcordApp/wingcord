@@ -182,8 +182,13 @@ nonisolated enum TimelineMetrics {
     /// Bars short of this and a note in a narrow panel is a stub: two seconds' worth.
     static let voiceNoteMinimumBars: CGFloat = 50
     /// Between reaction chips and the content above them.
-    static let reactionGap: CGFloat = 6
-    static let reactionChipHeight: CGFloat = 22
+    static let reactionGap: CGFloat = 8
+    /// 28, up from 22 (Alex, 2026-11-12: "bigger, more appealing"). A chip is
+    /// a control people aim at, and at 22 it was the smallest one on the row
+    /// it shares with a 34-point thread chip.
+    static let reactionChipHeight: CGFloat = 28
+    /// Between two chips, along the row and between its lines.
+    static let reactionSpacing: CGFloat = 6
 
     /// The chip's corner.
     ///
@@ -194,7 +199,11 @@ nonisolated enum TimelineMetrics {
     /// over the same 14 px of height, so the corner is 0.24 of the chip's own
     /// height. Derived rather than written down, so a change to the chip's
     /// height keeps its silhouette.
-    static let reactionChipRadius: CGFloat = (reactionChipHeight * 0.24).rounded()
+    ///
+    /// **Rounder since the redesign** (2026-11-12): 0.36 of the height, which
+    /// on a 28-point chip is 10 — a soft tile that still is not a lozenge, so
+    /// a chip and a tapback's capsule stay two shapes.
+    static let reactionChipRadius: CGFloat = (reactionChipHeight * 0.36).rounded()
 
     /// The square controls at the end of the reaction row: add a reaction, and
     /// bookmark the message.
@@ -203,7 +212,7 @@ nonisolated enum TimelineMetrics {
     /// it, so a control a point taller would break the line the row sits on.
     static let reactionControlSide: CGFloat = reactionChipHeight
     /// The glyph inside one of them.
-    static let reactionControlGlyphSide: CGFloat = 14
+    static let reactionControlGlyphSide: CGFloat = 16
 
     // The reaction chip's parts. Layout and painter read the SAME constants,
     // because they are two halves of one geometry and drifting them is
@@ -214,11 +223,23 @@ nonisolated enum TimelineMetrics {
     // replaced was narrower than every single emoji it was asked to hold, and
     // `drawText`'s tail truncation duly replaced each one with an ellipsis.
     // That is the whole of "reactions render as ...".
-    static let reactionEmojiFontSize: CGFloat = 13
-    static let reactionGlyphSide: CGFloat = 19
-    static let reactionLeadingInset: CGFloat = 6
-    static let reactionGlyphGap: CGFloat = 4
-    static let reactionTrailingInset: CGFloat = 7
+    //
+    // 15 and 22 since the redesign, the same 1.46 ratio: 15 × 1.46 is 21.9.
+    static let reactionEmojiFontSize: CGFloat = 15
+    static let reactionGlyphSide: CGFloat = 22
+    static let reactionLeadingInset: CGFloat = 8
+    static let reactionGlyphGap: CGFloat = 5
+    static let reactionTrailingInset: CGFloat = 10
+
+    /// The count beside the emoji: a point over the metadata size, semibold,
+    /// in digits of one width — so a count that rolls from 9 to 10 widens the
+    /// chip by a digit and never by a digit's worth of jitter.
+    ///
+    /// One function for the layout that measures it, the painter that draws it
+    /// and the roll that animates it: three fonts would be three widths.
+    static func reactionCountFont(_ style: MessageTextStyle) -> NSFont {
+        NSFont.monospacedDigitSystemFont(ofSize: style.metadataFont.pointSize + 1, weight: .semibold)
+    }
 
     /// A super reaction chip's glow: Discord's `box-shadow: 0 0 16px`, at the
     /// 35 % its glow element is drawn at.

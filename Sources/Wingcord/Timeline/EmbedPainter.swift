@@ -550,63 +550,174 @@ nonisolated extension TimelineRowPainter {
 /// life.
 nonisolated extension TimelineRowPainter {
 
-    /// An activity invitation.
+    /// The ground every card that belongs to an app or a track is painted on:
+    /// two colours on Discord's 45° line, the cover bled in from the trailing
+    /// edge, and a hairline that catches the light.
     ///
-    /// **A coloured rule, not a flood.** The reference client fills the whole
-    /// card with a gradient of the app's colour; an embed in this app already
-    /// says "this belongs to somebody" with a bar down its leading edge, and
-    /// one vocabulary for one idea beats a resemblance. It also stays legible
-    /// on every theme, which a full-bleed fill of an arbitrary app's colour
-    /// does not.
+    /// **A flood, since the 2026-11-12 redesign.** This used to be the neutral
+    /// card fill with a coloured rule down its leading edge — one vocabulary
+    /// with an embed, and legible on any theme. The colours make it legible
+    /// now: both are taken down until white reads on them
+    /// (`InviteCardColours.darkened`), so the card can be the app's own colour
+    /// in a light room as in a dark one.
+    private static func drawInviteGround(
+        in frame: CGRect,
+        primary: CGColor,
+        secondary: CGColor,
+        cover: CGImage?,
+        context: CGContext
+    ) {
+        let corner = ActivityInviteLayoutEngine.corner
+        let path = CGPath(roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil)
+        context.saveGState()
+        context.addPath(path)
+        context.clip()
+        // CSS's `45deg` runs from the bottom-leading corner to the top-trailing
+        // one, and this canvas is flipped: bottom is `maxY`.
+        if let space = CGColorSpace(name: CGColorSpace.sRGB),
+           let gradient = CGGradient(
+               colorsSpace: space, colors: [primary, secondary] as CFArray, locations: [0, 1]
+           ) {
+            context.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: frame.minX, y: frame.maxY),
+                end: CGPoint(x: frame.maxX, y: frame.minY),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        } else {
+            context.setFillColor(primary)
+            context.fill(frame)
+        }
+        if let cover, let fade = Self.coverFade {
+            // The trailing three fifths, filled by the cover and faded in from
+            // nothing at its leading edge: the words are on the colour, and the
+            // picture arrives where they have stopped.
+            let box = CGRect(
+                x: frame.minX + frame.width * 0.4, y: frame.minY,
+                width: frame.width * 0.6, height: frame.height
+            )
+            context.saveGState()
+            context.clip(to: box, mask: fade)
+            context.setAlpha(0.55)
+            let scale = max(box.width / CGFloat(cover.width), box.height / CGFloat(cover.height))
+            let size = CGSize(width: CGFloat(cover.width) * scale, height: CGFloat(cover.height) * scale)
+            TimelineRowPainter.drawFlipped(
+                cover,
+                in: CGRect(
+                    x: box.maxX - size.width, y: box.midY - size.height / 2,
+                    width: size.width, height: size.height
+                ),
+                context: context
+            )
+            context.restoreGState()
+        }
+        context.restoreGState()
+
+        let inner = CGPath(
+            roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
+            cornerWidth: corner - 0.5, cornerHeight: corner - 0.5, transform: nil
+        )
+        context.addPath(inner)
+        context.setStrokeColor(CGColor(gray: 1, alpha: 0.14))
+        context.setLineWidth(1)
+        context.strokePath()
+    }
+
+    /// The cover's fade, as a mask: nothing at the leading edge, everything by
+    /// the middle. Luminance is coverage, so this is a grey ramp one pixel tall.
+    private static let coverFade: CGImage? = {
+        let width = 256
+        guard let context = CGContext(
+            data: nil, width: width, height: 1, bitsPerComponent: 8, bytesPerRow: width,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ), let gradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceGray(),
+            colors: [CGColor(gray: 0, alpha: 1), CGColor(gray: 1, alpha: 1)] as CFArray,
+            locations: [0, 0.62]
+        ) else { return nil }
+        context.drawLinearGradient(
+            gradient, start: .zero, end: CGPoint(x: width, y: 0), options: [.drawsAfterEndLocation]
+        )
+        return context.makeImage()
+    }()
+
+    /// The card's one control: a white capsule with a dark word, as Discord's
+    /// overlay button is — or, where there is nothing to press, a quiet one
+    /// with a light word.
+    private static func drawInviteButton(
+        in rect: CGRect,
+        isProminent: Bool,
+        isHovered: Bool,
+        context: CGContext
+    ) {
+        let radius = ActivityInviteLayoutEngine.buttonCorner
+        context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        context.setFillColor(CGColor(
+            gray: 1,
+            alpha: isProminent ? (isHovered ? 1 : 0.92) : (isHovered ? 0.26 : 0.18)
+        ))
+        context.fillPath()
+        if !isProminent {
+            context.addPath(CGPath(
+                roundedRect: rect.insetBy(dx: 0.5, dy: 0.5),
+                cornerWidth: radius - 0.5, cornerHeight: radius - 0.5, transform: nil
+            ))
+            context.setStrokeColor(CGColor(gray: 1, alpha: 0.2))
+            context.setLineWidth(1)
+            context.strokePath()
+        }
+    }
+
+    /// An activity invitation — Discord's card (`572211.h`): the app's own two
+    /// colours, its icon, its name, what is happening in it and one button.
     static func drawActivityInvite(
         _ slot: ActivityInviteSlot,
         offset: CGPoint,
         context: CGContext,
         style: MessageTextStyle,
         accent: CGColor?,
+        accentEnd: CGColor? = nil,
+        cover: CGImage? = nil,
         status: String?,
         isJoined: Bool,
         hovered: CGPoint?,
         images: ImageStore,
         scale: CGFloat
     ) {
-        let ink = ThemeInk.current
         let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
-        let corner = EmbedLayoutEngine.corner
+        let neutral = InviteCardColours.cgColor(InviteCardColours.neutral)
+        drawInviteGround(
+            in: frame,
+            primary: accent ?? neutral,
+            secondary: accentEnd ?? accent ?? InviteCardColours.cgColor(0x1E_1F_22),
+            cover: cover,
+            context: context
+        )
 
-        context.saveGState()
-        context.addPath(CGPath(
-            roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
-        ))
-        context.setFillColor(ink.cardFill)
-        context.fillPath()
-
-        // The rule is clipped to the card's own rounded path, so its top and
-        // bottom follow the corner rather than squaring it off.
-        context.addPath(CGPath(
-            roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
-        ))
-        context.clip()
-        context.setFillColor(accent ?? ink.accent)
-        context.fill(CGRect(
-            x: frame.minX,
-            y: frame.minY,
-            width: ActivityInviteLayoutEngine.rule,
-            height: frame.height
-        ))
-        context.restoreGState()
+        drawLine(
+            "Invite to Play",
+            font: ActivityInviteLayoutEngine.eyebrowFont(style),
+            color: ActivityInviteLayoutEngine.quietInk,
+            at: CGPoint(x: offset.x + slot.eyebrowOrigin.x, y: offset.y + slot.eyebrowOrigin.y),
+            maxWidth: frame.maxX - offset.x - slot.eyebrowOrigin.x - ActivityInviteLayoutEngine.padding,
+            style: style,
+            context: context,
+            images: images,
+            scale: scale
+        )
 
         // The icon, with the monogram behind it until it lands.
         let iconRect = slot.iconRect.offsetBy(dx: offset.x, dy: offset.y)
-        context.saveGState()
-        context.addPath(CGPath(
+        let iconPath = CGPath(
             roundedRect: iconRect,
             cornerWidth: ActivityInviteLayoutEngine.iconCorner,
             cornerHeight: ActivityInviteLayoutEngine.iconCorner,
             transform: nil
-        ))
+        )
+        context.saveGState()
+        context.addPath(iconPath)
         context.clip()
-        context.setFillColor(ink.surfaceRaised)
+        context.setFillColor(CGColor(gray: 1, alpha: 0.14))
         context.fill(iconRect)
         if let url = slot.iconURL,
            let image = images.cached(
@@ -634,6 +745,10 @@ nonisolated extension TimelineRowPainter {
             )
         }
         context.restoreGState()
+        context.addPath(iconPath)
+        context.setStrokeColor(CGColor(gray: 1, alpha: 0.16))
+        context.setLineWidth(1)
+        context.strokePath()
 
         drawTextFrame(
             slot.title,
@@ -647,7 +762,7 @@ nonisolated extension TimelineRowPainter {
             drawLine(
                 status,
                 font: style.metadataFont,
-                color: style.secondaryColor,
+                color: ActivityInviteLayoutEngine.quietInk,
                 at: CGPoint(x: offset.x + slot.statusOrigin.x, y: offset.y + slot.statusOrigin.y),
                 maxWidth: slot.statusWidth,
                 style: style,
@@ -656,21 +771,14 @@ nonisolated extension TimelineRowPainter {
                 scale: scale
             )
         }
-        // The button. Tinted with the app's own colour at a low alpha rather
-        // than filled with it: the label has to stay readable against whatever
-        // an arbitrary developer's icon happens to be.
-        let buttonRect = slot.buttonRect.offsetBy(dx: offset.x, dy: offset.y)
-        let isHovered = hovered == slot.buttonRect.origin
-        context.addPath(CGPath(
-            roundedRect: buttonRect,
-            cornerWidth: ActivityInviteLayoutEngine.buttonCorner,
-            cornerHeight: ActivityInviteLayoutEngine.buttonCorner,
-            transform: nil
-        ))
-        let tint = accent ?? ink.accent
-        context.setFillColor(tint.copy(alpha: isHovered ? 0.42 : 0.28) ?? tint)
-        context.fillPath()
 
+        let buttonRect = slot.buttonRect.offsetBy(dx: offset.x, dy: offset.y)
+        drawInviteButton(
+            in: buttonRect,
+            isProminent: !isJoined,
+            isHovered: hovered == slot.buttonRect.origin,
+            context: context
+        )
         if isJoined {
             // "Joined" rather than "Play": a button offering what somebody
             // already has is a control that cannot do anything. Painted for the
@@ -680,7 +788,7 @@ nonisolated extension TimelineRowPainter {
                 font: NSFont.systemFont(
                     ofSize: style.bodyFont.pointSize, weight: .semibold
                 ),
-                color: style.primaryColor,
+                color: ActivityInviteLayoutEngine.ink,
                 at: CGPoint(
                     x: offset.x + slot.buttonRect.minX,
                     y: offset.y + slot.buttonLabelOrigin.y
@@ -706,14 +814,16 @@ nonisolated extension TimelineRowPainter {
         }
     }
 
-    /// A listen-along invitation — Discord's card, in this app's card idiom:
-    /// the activity invitation's ground and rule, in Spotify's green.
+    /// A listen-along invitation, painted from the track it is about: the
+    /// album's own two colours, its cover large, the track's progress, who is
+    /// listening, and Join.
     ///
     /// **Everything that moves is painted from `card`**, the host's presence:
-    /// the cover, "{track} by {artist}", the clock — read off `now`, which is
-    /// why the canvas repaints a live card every second — the faces and "N
-    /// Listening", and Join or Joined. An ended party draws Spotify's mark and
-    /// Discord's "The listening party is over!", and no button.
+    /// the cover and the colours taken from it, "{track} by {artist}", the
+    /// clock and the progress line — read off `now`, which is why the canvas
+    /// repaints a live card every second — the faces and "N Listening", and
+    /// Join or Joined. An ended party draws Spotify's mark and Discord's "The
+    /// listening party is over!", on the neutral ground, and no button.
     static func drawListenAlong(
         _ slot: ListenAlongSlot,
         offset: CGPoint,
@@ -725,28 +835,62 @@ nonisolated extension TimelineRowPainter {
         images: ImageStore,
         scale: CGFloat
     ) {
-        let ink = ThemeInk.current
         let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
-        let corner = EmbedLayoutEngine.corner
-        let green = CGColor(srgbRed: 0x1E / 255.0, green: 0xD7 / 255.0, blue: 0x60 / 255.0, alpha: 1)
+        let ink = ActivityInviteLayoutEngine.ink
+        let quiet = ActivityInviteLayoutEngine.quietInk
+        let green: UInt32 = 0x1E_D7_60
 
-        context.saveGState()
-        context.addPath(CGPath(roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil))
-        context.setFillColor(ink.cardFill)
-        context.fillPath()
-        context.addPath(CGPath(roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil))
-        context.clip()
-        context.setFillColor(green)
-        context.fill(CGRect(x: frame.minX, y: frame.minY, width: ListenAlongLayoutEngine.rule, height: frame.height))
-        context.restoreGState()
+        let artwork: CGImage? = slot.isLive
+            ? card?.artworkURL.flatMap { url in
+                images.cached(
+                    ImageStore.Key(url: url, maximumPixelSize: Int(ListenAlongLayoutEngine.artSide * scale)),
+                    bucket: .thumbnail
+                )
+            }
+            : nil
+        // The album's colours once its cover is in hand; Spotify's green over
+        // near-black until then; the neutral pair once the party is over.
+        let tint: ActivityCardTint
+        if let artwork, let url = card?.artworkURL {
+            tint = ArtworkCardColours.tint(for: url, image: artwork)
+        } else if slot.isLive {
+            tint = ActivityCardTint(primary: InviteCardColours.darkened(green), secondary: 0x12_12_12)
+        } else {
+            tint = ActivityCardTint(primary: InviteCardColours.neutral, secondary: 0x1E_1F_22)
+        }
+        drawInviteGround(
+            in: frame,
+            primary: InviteCardColours.cgColor(tint.primary),
+            secondary: InviteCardColours.cgColor(tint.secondary),
+            cover: nil,
+            context: context
+        )
 
-        let textWidth = slot.textWidth
+        // Spotify's mark, then the eyebrow.
+        let markSide = ListenAlongLayoutEngine.markSide
+        let headerX = offset.x + slot.headerOrigin.x
+        let headerY = offset.y + slot.headerOrigin.y
+        var eyebrowX = headerX
+        if let mark = BrandMark.path(for: "spotify") {
+            var transform = CGAffineTransform(translationX: headerX, y: headerY)
+                .scaledBy(x: markSide / BrandMark.side, y: markSide / BrandMark.side)
+            if let placed = mark.copy(using: &transform) {
+                context.addPath(placed)
+                context.setFillColor(InviteCardColours.cgColor(green))
+                context.fillPath(using: .evenOdd)
+            }
+            eyebrowX += markSide + Spacing.tight
+        }
+        let eyebrow = ActivityInviteLayoutEngine.eyebrowFont(style)
         drawLine(
-            "Invite to Listen Along on \(slot.source.name)",
-            font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold),
-            color: style.secondaryColor,
-            at: CGPoint(x: offset.x + slot.headerOrigin.x, y: offset.y + slot.headerOrigin.y),
-            maxWidth: frame.maxX - offset.x - slot.headerOrigin.x - ListenAlongLayoutEngine.padding,
+            "Listen Along on \(slot.source.name)",
+            font: eyebrow,
+            color: quiet,
+            at: CGPoint(
+                x: eyebrowX,
+                y: headerY + (markSide - ListenAlongLayoutEngine.lineHeight(eyebrow)) / 2
+            ),
+            maxWidth: frame.maxX - eyebrowX - ListenAlongLayoutEngine.padding,
             style: style,
             context: context,
             images: images,
@@ -755,29 +899,32 @@ nonisolated extension TimelineRowPainter {
 
         // The cover, or Spotify's own mark once the party is over.
         let art = slot.artRect.offsetBy(dx: offset.x, dy: offset.y)
-        context.saveGState()
-        context.addPath(CGPath(
+        let artPath = CGPath(
             roundedRect: art,
             cornerWidth: ListenAlongLayoutEngine.artCorner,
             cornerHeight: ListenAlongLayoutEngine.artCorner,
             transform: nil
-        ))
+        )
+        // The cover's own shadow: it is the one object on the card, and a
+        // picture flat on a gradient of its own colours has no edge.
+        context.saveGState()
+        context.setShadow(offset: CGSize(width: 0, height: 4), blur: 12, color: CGColor(gray: 0, alpha: 0.35))
+        context.addPath(artPath)
+        context.setFillColor(CGColor(gray: 0, alpha: 0.35))
+        context.fillPath()
+        context.restoreGState()
+        context.saveGState()
+        context.addPath(artPath)
         context.clip()
         if slot.isLive {
-            context.setFillColor(ink.surfaceRaised)
+            context.setFillColor(CGColor(gray: 1, alpha: 0.12))
             context.fill(art)
-            if let url = card?.artworkURL,
-               let image = images.cached(
-                   ImageStore.Key(url: url, maximumPixelSize: Int(ListenAlongLayoutEngine.artSide * scale)),
-                   bucket: .thumbnail
-               ) {
-                TimelineRowPainter.drawFlipped(image, in: art, context: context)
-            }
+            if let artwork { TimelineRowPainter.drawFlipped(artwork, in: art, context: context) }
         } else {
             context.setFillColor(CGColor(gray: 0, alpha: 1))
             context.fill(art)
             if let mark = BrandMark.path(for: "spotify") {
-                let side = art.width * 0.62
+                let side = art.width * 0.56
                 var transform = CGAffineTransform(translationX: art.midX - side / 2, y: art.midY - side / 2)
                     .scaledBy(x: side / BrandMark.side, y: side / BrandMark.side)
                 if let placed = mark.copy(using: &transform) {
@@ -788,38 +935,47 @@ nonisolated extension TimelineRowPainter {
             }
         }
         context.restoreGState()
+        context.addPath(artPath)
+        context.setStrokeColor(CGColor(gray: 1, alpha: 0.16))
+        context.setLineWidth(1)
+        context.strokePath()
 
-        let titleFont = NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold)
+        let titleFont = NSFont.systemFont(ofSize: style.bodyFont.pointSize + 1, weight: .semibold)
+        let textWidth = slot.textWidth
         let x = offset.x + slot.textX
         func top(_ line: Int) -> CGFloat { offset.y + slot.lineTops[line] }
         guard slot.isLive else {
-            drawLine(slot.source.name, font: titleFont, color: style.primaryColor,
+            drawLine(slot.source.name, font: titleFont, color: ink,
                      at: CGPoint(x: x, y: top(0)), maxWidth: textWidth,
                      style: style, context: context, images: images, scale: scale)
-            drawLine("The listening party is over!", font: style.metadataFont, color: style.secondaryColor,
+            drawLine("The listening party is over!", font: style.metadataFont, color: quiet,
                      at: CGPoint(x: x, y: top(1)), maxWidth: textWidth,
                      style: style, context: context, images: images, scale: scale)
             return
         }
 
-        drawLine(card?.title ?? slot.source.name, font: titleFont, color: style.primaryColor,
+        drawLine(card?.title ?? slot.source.name, font: titleFont, color: ink,
                  at: CGPoint(x: x, y: top(0)), maxWidth: textWidth,
                  style: style, context: context, images: images, scale: scale)
 
-        let glyph = style.metadataFont.pointSize + 2
+        // The clock: elapsed, and the track's length where the host's
+        // presence says when it ends.
+        var fraction: Double?
         if let start = card?.startedAt {
-            TimelineRowPainter.drawSymbol(
-                "music.note",
-                tint: style.secondaryColor,
-                in: CGRect(x: x, y: top(1) + 1, width: glyph, height: glyph),
-                context: context
-            )
+            var clock = ListenAlongLayoutEngine.clock(since: start, now: now)
+            if let end = card?.endsAt, end > start {
+                let length = end.timeIntervalSince(start)
+                let elapsed = min(max(0, now.timeIntervalSince(start)), length)
+                fraction = elapsed / length
+                clock = ListenAlongLayoutEngine.clock(seconds: Int(elapsed))
+                    + "  /  " + ListenAlongLayoutEngine.clock(seconds: Int(length))
+            }
             drawLine(
-                ListenAlongLayoutEngine.clock(since: start, now: now),
-                font: NSFont.monospacedDigitSystemFont(ofSize: style.metadataFont.pointSize, weight: .regular),
-                color: style.secondaryColor,
-                at: CGPoint(x: x + glyph + Spacing.tight, y: top(1)),
-                maxWidth: textWidth - glyph - Spacing.tight,
+                clock,
+                font: NSFont.monospacedDigitSystemFont(ofSize: style.metadataFont.pointSize, weight: .medium),
+                color: quiet,
+                at: CGPoint(x: x, y: top(1)),
+                maxWidth: textWidth,
                 style: style, context: context, images: images, scale: scale
             )
         }
@@ -832,7 +988,7 @@ nonisolated extension TimelineRowPainter {
                 context.saveGState()
                 context.addEllipse(in: circle)
                 context.clip()
-                context.setFillColor(ink.surfaceRaised)
+                context.setFillColor(CGColor(gray: 1, alpha: 0.2))
                 context.fill(circle)
                 if let url, let image = images.cached(
                     ImageStore.Key(url: url, maximumPixelSize: Int(face * scale)), bucket: .thumbnail
@@ -840,35 +996,58 @@ nonisolated extension TimelineRowPainter {
                     TimelineRowPainter.drawFlipped(image, in: circle, context: context)
                 }
                 context.restoreGState()
-                faceX += face + Spacing.hair
+                // Overlapped a little, each ringed in the card's own colour so
+                // the stack reads as faces rather than as one shape.
+                context.addEllipse(in: circle.insetBy(dx: -0.75, dy: -0.75))
+                context.setStrokeColor(InviteCardColours.cgColor(tint.primary))
+                context.setLineWidth(1.5)
+                context.strokePath()
+                faceX += face - 4
             }
+            if !card.faces.isEmpty { faceX += 4 }
             drawLine(
                 "\(card.listenerCount) Listening",
                 font: style.metadataFont,
-                color: style.secondaryColor,
-                at: CGPoint(x: faceX + Spacing.tight, y: top(2) + (face - style.metadataFont.pointSize) / 2 - 2),
+                color: quiet,
+                at: CGPoint(
+                    x: faceX + Spacing.tight,
+                    y: top(2) + (face - ListenAlongLayoutEngine.lineHeight(style.metadataFont)) / 2
+                ),
                 maxWidth: max(0, x + textWidth - faceX - Spacing.tight),
                 style: style, context: context, images: images, scale: scale
             )
         }
 
+        if let progress = slot.progressRect?.offsetBy(dx: offset.x, dy: offset.y) {
+            let radius = progress.height / 2
+            context.addPath(CGPath(roundedRect: progress, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            context.setFillColor(CGColor(gray: 1, alpha: 0.2))
+            context.fillPath()
+            if let fraction {
+                let filled = CGRect(
+                    x: progress.minX, y: progress.minY,
+                    width: max(progress.height, progress.width * fraction), height: progress.height
+                )
+                context.addPath(CGPath(roundedRect: filled, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                context.setFillColor(CGColor(gray: 1, alpha: 0.92))
+                context.fillPath()
+            }
+        }
+
         guard let button = slot.buttonRect else { return }
         let buttonRect = button.offsetBy(dx: offset.x, dy: offset.y)
         let isEnabled = card?.isButtonEnabled ?? false
-        let isHovered = isEnabled && hovered == button.origin
-        context.addPath(CGPath(
-            roundedRect: buttonRect,
-            cornerWidth: ActivityInviteLayoutEngine.buttonCorner,
-            cornerHeight: ActivityInviteLayoutEngine.buttonCorner,
-            transform: nil
-        ))
-        context.setFillColor(isEnabled ? green.copy(alpha: isHovered ? 0.42 : 0.28) ?? green : ink.lift(0.08))
-        context.fillPath()
+        drawInviteButton(
+            in: buttonRect,
+            isProminent: isEnabled,
+            isHovered: isEnabled && hovered == button.origin,
+            context: context
+        )
         let label = NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold)
         drawLine(
             card?.buttonTitle ?? "Join",
             font: label,
-            color: isEnabled ? style.primaryColor : style.tertiaryColor,
+            color: isEnabled ? ActivityInviteLayoutEngine.buttonInk : ink,
             at: CGPoint(x: buttonRect.minX, y: buttonRect.midY - ListenAlongLayoutEngine.lineHeight(label) / 2),
             maxWidth: buttonRect.width,
             centred: true,

@@ -119,7 +119,10 @@ private struct WallpaperTile: View {
     private var preview: some View {
         switch source {
         case .theme:
-            Color.clear.themeGroundOnly()
+            // The chosen theme's own ground, not the window's: with a picture
+            // up the window's ground is the picture's room, and this tile is
+            // the way back to the theme.
+            ThemeTilePreview()
                 .overlay { Image(systemName: "paintpalette").foregroundStyle(InkColor.solid) }
         case .desktop:
             ZStack {
@@ -148,6 +151,17 @@ private struct WallpaperTile: View {
 }
 
 /// A tile that does something rather than being something.
+/// The chosen theme's ground, as its gallery tile draws it.
+private struct ThemeTilePreview: View {
+    @State private var theme = ThemeStore.shared
+
+    var body: some View {
+        RoomSwatch(
+            ground: ThemeStore.ground(for: theme.choice, customSeed: theme.customSeed, vividness: theme.vividness)
+        )
+    }
+}
+
 private struct ActionTile: View {
     var title: String
     var systemImage: String
@@ -323,6 +337,18 @@ struct WallpaperSettingsCard: View {
                         range: 0...0.9,
                         step: 0.02,
                         format: { $0.formatted(.percent.precision(.fractionLength(0))) }
+                    )
+                }
+                if store.global.source != .theme {
+                    CardDivider()
+                    CardHeaderRow(
+                        title: "Colours",
+                        help: "Automatic takes the window\u{2019}s colours from the picture, and none over the "
+                            + "desktop. My Theme keeps the theme you chose."
+                    )
+                    SettingsSegmentedControl(
+                        selection: $store.colours,
+                        options: WallpaperColours.allCases.map { .init($0, $0.title) }
                     )
                 }
                 CardDivider()

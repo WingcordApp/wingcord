@@ -219,6 +219,70 @@ struct ReactionRowTests {
         // half the height, and that is what this drew.
         #expect(TimelineMetrics.reactionChipRadius < TimelineMetrics.reactionChipHeight / 2)
         #expect(TimelineMetrics.reactionChipRadius > 0)
-        #expect(TimelineMetrics.reactionChipRadius == 5)
+        // 0.36 of a 28-point chip since the 2026-11-12 redesign.
+        #expect(TimelineMetrics.reactionChipRadius == 10)
+    }
+
+    @Test("The controls never get a line to themselves: the last chip comes down with them")
+    func neverAloneOnALine() throws {
+        // They are drawn only under the pointer, so a line holding nothing
+        // else would be a blank band under the message at rest. Swept over
+        // widths so some of them end with no room after the last chip.
+        // From 260: narrower than a chip and the two controls side by side is
+        // the one case they do get their own line, and no transcript is.
+        for width in stride(from: CGFloat(260), through: 520, by: 7) {
+            let row = try #require(
+                laidOut(reactions: (0..<5).map { reaction("👍", count: 10 + $0) }, width: width)
+            ).row
+            let controlLine = try #require(row.reactionControls.first).rect.minY
+            #expect(row.reactions.contains { $0.rect.minY == controlLine }, "width \(width)")
+            let contentX = try #require(row.reactions.map(\.rect.minX).min())
+            for control in row.reactionControls {
+                #expect(control.rect.maxX <= contentX + width, "width \(width)")
+            }
+        }
+    }
+
+    @Test("Both controls are the pointer's; a kept message shows its bookmark at rest")
+    func controlsFollowThePointer() throws {
+        let row = try #require(laidOut(reactions: [reaction("👍")])).row
+        // At rest: nothing.
+        #expect(row.visibleReactionControls(canAddReaction: false, showsBookmark: false).isEmpty)
+        // Under the pointer: both, in order.
+        #expect(row.visibleReactionControls(canAddReaction: true, showsBookmark: true).map(\.kind)
+            == [.addReaction, .bookmark])
+        // Kept, at rest: the bookmark alone, in the first slot — no hole where
+        // the add control would be.
+        let kept = row.visibleReactionControls(canAddReaction: false, showsBookmark: true)
+        #expect(kept.map(\.kind) == [.bookmark])
+        #expect(kept.first?.rect == row.reactionControls.first?.rect)
+    }
+
+    @Test("A fold's rows arrive from the top down and leave from the foot up")
+    func foldZip() {
+        // Opening: the first row leads, every row ends at rest.
+        let early = 0.05
+        let first = FoldReveal.pose(order: 0, of: 5, elapsed: early, closing: false)
+        let last = FoldReveal.pose(order: 4, of: 5, elapsed: early, closing: false)
+        #expect(first.alpha > last.alpha)
+        #expect(first.offset < 0)
+        let done = FoldReveal.duration(rows: 5, closing: false)
+        #expect(FoldReveal.pose(order: 4, of: 5, elapsed: done, closing: false) == .rest)
+        // Shutting: the foot leads, and everything has gone by the end.
+        let foot = FoldReveal.pose(order: 4, of: 5, elapsed: early, closing: true)
+        let head = FoldReveal.pose(order: 0, of: 5, elapsed: early, closing: true)
+        #expect(foot.alpha < head.alpha)
+        let shut = FoldReveal.duration(rows: 5, closing: true)
+        #expect(FoldReveal.pose(order: 0, of: 5, elapsed: shut, closing: true).alpha == 0)
+        // Two hundred rows take no longer than nine.
+        #expect(FoldReveal.duration(rows: 200, closing: false) == FoldReveal.duration(rows: 9, closing: false))
+    }
+
+    @Test("A pop starts and ends at the chip's own size")
+    func popIsABump() {
+        #expect(ReactionPop.scale(at: 0) == 1)
+        #expect(ReactionPop.scale(at: ReactionPop.duration) == 1)
+        #expect(ReactionPop.scale(at: 0.06) > 1.05)
+        #expect(ReactionPop.scale(at: 0.06) < 1.15)
     }
 }

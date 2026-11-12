@@ -19,7 +19,6 @@ struct ModViewPane: View {
         VStack(alignment: .leading, spacing: 0) {
             if let store = model.modView {
                 header(store)
-                Divider().overlay(Ink.quaternary)
                 switch store.panel {
                 case .info:
                     ScrollView {
@@ -59,31 +58,41 @@ struct ModViewPane: View {
                 .font(.system(.headline))
                 .foregroundStyle(Ink.primary)
             Spacer(minLength: 0)
-            Button { store.refresh() } label: {
-                Group {
-                    if store.isRefreshing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(.caption, weight: .semibold))
-                            .foregroundStyle(Ink.secondary)
+            // The panel's two controls, as glass: the round buttons every
+            // card and sheet in this app closes with.
+            GlassEffectContainer(spacing: Spacing.tight) {
+                HStack(spacing: Spacing.tight) {
+                    Button { store.refresh() } label: {
+                        Group {
+                            if store.isRefreshing {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(.caption, weight: .bold))
+                                    .foregroundStyle(Ink.primary)
+                            }
+                        }
+                        .frame(width: ModViewMetrics.control, height: ModViewMetrics.control)
+                        .contentShape(.circle)
                     }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                    .disabled(store.isRefreshing)
+                    .help("Refresh")
+                    .accessibilityLabel(Text("Refresh"))
+                    Button { model.closeModView() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(.caption, weight: .bold))
+                            .foregroundStyle(Ink.primary)
+                            .frame(width: ModViewMetrics.control, height: ModViewMetrics.control)
+                            .contentShape(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                    .help("Close")
+                    .accessibilityLabel(Text("Close Mod View"))
                 }
-                .frame(width: 18, height: 18)
-                .contentShape(.rect)
             }
-            .buttonStyle(.plain)
-            .disabled(store.isRefreshing)
-            .help("Refresh")
-            .accessibilityLabel(Text("Refresh"))
-            Button { model.closeModView() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(.caption, weight: .semibold))
-                    .foregroundStyle(Ink.secondary)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Close Mod View"))
         }
         .padding(.horizontal, Spacing.margin)
         .padding(.vertical, Spacing.snug)
@@ -135,14 +144,15 @@ private struct ModViewInfo: View {
 
     private func identity(member: Member?) -> some View {
         let user = model.users[store.userID]
+        let avatar = model.avatarURL(forUserID: store.userID, inGuild: store.guildID, side: 56)
         return Button {
             model.openProfile(store.userID, anchor: .zero, depth: .full)
         } label: {
             HStack(spacing: Spacing.snug) {
                 AvatarView(
-                    url: model.avatarURL(forUserID: store.userID, inGuild: store.guildID, side: 48),
+                    url: avatar,
                     monogram: String(user?.preferredName.prefix(1) ?? "?"),
-                    side: 48
+                    side: 56
                 )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: model.moderationName(of: store.userID, in: store.guildID))
@@ -155,8 +165,22 @@ private struct ModViewInfo: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Ink.tertiary)
             }
-            .contentShape(.rect)
+            .padding(Spacing.snug)
+            // **Lit by their own picture** — the profile's own idiom
+            // (`AmbientArtwork`): the face spread under the card as a field of
+            // its colours, so the panel is about somebody rather than a form
+            // with a name at the top. One still picture, drawn once.
+            .ambientArtwork(avatar, tint: nil, strength: 0.55)
+            .clipShape(.rect(cornerRadius: ModViewMetrics.corner, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: ModViewMetrics.corner, style: .continuous)
+                    .strokeBorder(Palette.edge, lineWidth: 1)
+            }
+            .contentShape(.rect(cornerRadius: ModViewMetrics.corner, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityHint(Text("Opens their profile"))
@@ -169,7 +193,7 @@ private struct ModViewInfo: View {
         let guildID = store.guildID
         let moderation = model.moderationActions(for: userID, in: guildID)
         let isSelf = userID == model.currentUserID
-        return HStack(spacing: Spacing.base) {
+        return HStack(alignment: .top, spacing: 0) {
             ModViewAction(title: "Message", symbolName: "bubble.left.fill", isEnabled: !isSelf) {
                 model.messagePerson(userID)
             }
@@ -226,16 +250,22 @@ private struct ModViewInfo: View {
     private var serverActivity: some View {
         let counts = store.counts
         let audits = store.auditGroups
-        return ModViewSection("Server Activity") {
-            countRow("Messages", symbolName: "bubble.left", count: counts?.messages) {
-                model.searchModViewHistory(nil)
+        return VStack(alignment: .leading, spacing: Spacing.base) {
+            ModViewSectionTitle("Server Activity")
+            // Three numbers are three tiles: what a moderator opens this panel
+            // to read, at a size that can be read from across the row.
+            HStack(spacing: Spacing.base) {
+                ModViewStat(title: "Messages", symbolName: "bubble.left.fill", count: counts?.messages) {
+                    model.searchModViewHistory(nil)
+                }
+                ModViewStat(title: "Links", symbolName: "link", count: counts?.links) {
+                    model.searchModViewHistory(.link)
+                }
+                ModViewStat(title: "Media", symbolName: "photo.fill", count: counts?.media) {
+                    model.searchModViewHistory(.file)
+                }
             }
-            countRow("Links", symbolName: "link", count: counts?.links) {
-                model.searchModViewHistory(.link)
-            }
-            countRow("Media", symbolName: "photo", count: counts?.media) {
-                model.searchModViewHistory(.file)
-            }
+            ModViewGroup {
             ModViewRow(
                 symbolName: "list.bullet.rectangle",
                 title: "Audit Log",
@@ -249,20 +279,6 @@ private struct ModViewInfo: View {
                     ProgressView().controlSize(.small)
                 }
             }
-        }
-    }
-
-    private func countRow(
-        _ title: String,
-        symbolName: String,
-        count: Int?,
-        open: @escaping () -> Void
-    ) -> some View {
-        ModViewRow(symbolName: symbolName, title: title, open: (count ?? 0) > 0 ? open : nil) {
-            if let count {
-                Text(count.formatted())
-            } else {
-                ProgressView().controlSize(.small)
             }
         }
     }
@@ -558,13 +574,94 @@ private struct ModViewSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.base) {
-            Text(title)
-                .font(.system(.caption, weight: .semibold))
-                .foregroundStyle(Ink.tertiary)
-                .textCase(.uppercase)
-                .accessibilityAddTraits(.isHeader)
+            ModViewSectionTitle(title)
             ModViewGroup { content }
         }
+    }
+}
+
+/// A section's name. In the secondary ink at a readable weight: the pale
+/// tertiary capitals these were are the grey Alex called out (2026-10-13).
+private struct ModViewSectionTitle: View {
+    var title: String
+
+    init(_ title: String) { self.title = title }
+
+    var body: some View {
+        Text(title)
+            .font(.system(.subheadline, weight: .semibold))
+            .foregroundStyle(Ink.secondary)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The panel's own sizes.
+private enum ModViewMetrics {
+    /// A group's corner, and the identity card's.
+    static let corner: CGFloat = 14
+    /// The header's round controls.
+    static let control: CGFloat = 28
+    /// An act's circle.
+    static let action: CGFloat = 40
+}
+
+/// One of Server Activity's numbers: the count large, its name under it, and
+/// the whole tile a button where the count leads somewhere.
+private struct ModViewStat: View {
+    var title: String
+    var symbolName: String
+    var count: Int?
+    var open: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    private var leads: Bool { (count ?? 0) > 0 }
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                Image(symbol: symbolName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Ink.secondary)
+                Group {
+                    if let count {
+                        Text(count.formatted(.number.notation(.compactName)))
+                            .contentTransition(.numericText(value: Double(count)))
+                    } else {
+                        Text(verbatim: "–").foregroundStyle(Ink.tertiary)
+                    }
+                }
+                .font(.system(.title2, design: .rounded, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Ink.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                Text(title)
+                    .font(.system(.caption, weight: .medium))
+                    .foregroundStyle(Ink.secondary)
+                    .lineLimit(1)
+            }
+            .padding(Spacing.snug)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                isHovering && leads ? Palette.hoverFill : Palette.groupedFill,
+                in: .rect(cornerRadius: ModViewMetrics.corner, style: .continuous)
+            )
+            .contentShape(.rect(cornerRadius: ModViewMetrics.corner, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!leads)
+        .animation(motion.standard, value: count)
+        .animation(motion.fadeQuick, value: isHovering)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(title))
+        .accessibilityValue(Text(count.map { $0.formatted() } ?? "Loading"))
+        .help(leads ? "Search their \(title.lowercased())" : "")
     }
 }
 
@@ -575,7 +672,7 @@ private struct ModViewGroup<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             content
         }
-        .background(Palette.groupedFill, in: .rect(cornerRadius: Radius.chip))
+        .background(Palette.groupedFill, in: .rect(cornerRadius: ModViewMetrics.corner, style: .continuous))
     }
 }
 
@@ -632,38 +729,45 @@ private struct ModViewRow<Value: View>: View {
     }
 }
 
-/// One of Mod View's five acts: a square with a glyph, its name as the tip.
+/// One of Mod View's five acts: a glass circle with its name under it.
+///
+/// **Named, where they were five unlabelled squares.** A hammer and a clock
+/// side by side are a guess until hovered, and the acts here are a kick and a
+/// ban. Glass because they are the panel's controls (the HIG's rule: glass for
+/// controls, never for content); Ban's glyph is the destructive ink, the one
+/// act here that cannot be taken back with a click.
 private struct ModViewAction: View {
     var title: String
     var symbolName: String
     var isEnabled: Bool
     var act: () -> Void
 
-    @Environment(\.motion) private var motion
-    @State private var isHovering = false
-
     var body: some View {
         Button(action: act) {
-            Image(symbol: symbolName)
-                .font(.system(size: 15, weight: .semibold))
-                .frame(maxWidth: .infinity)
-                .frame(height: 40)
-                .background(
-                    isHovering && isEnabled ? Palette.hoverFill : Palette.groupedFill,
-                    in: .rect(cornerRadius: Radius.chip)
-                )
-                .contentShape(.rect(cornerRadius: Radius.chip))
+            VStack(spacing: Spacing.tight) {
+                Image(symbol: symbolName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(glyphStyle)
+                    .frame(width: ModViewMetrics.action, height: ModViewMetrics.action)
+                    .glassEffect(isEnabled ? .regular.interactive() : .regular, in: .circle)
+                Text(title)
+                    .font(.system(.caption2, weight: .medium))
+                    .foregroundStyle(isEnabled ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.tertiary))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(isEnabled ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.quaternary))
         .disabled(!isEnabled)
         .help(title)
         .accessibilityLabel(Text(title))
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-        .animation(motion.fadeQuick, value: isHovering)
+    }
+
+    private var glyphStyle: AnyShapeStyle {
+        guard isEnabled else { return AnyShapeStyle(Ink.tertiary) }
+        return title == "Ban" ? AnyShapeStyle(Palette.destructive) : AnyShapeStyle(Ink.primary)
     }
 }
 
@@ -684,8 +788,8 @@ private struct ModPermissionChip: View {
                 .foregroundStyle(Ink.primary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(Palette.surfaceRaised, in: .rect(cornerRadius: 7))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(Palette.surfaceRaised, in: .capsule)
     }
 }

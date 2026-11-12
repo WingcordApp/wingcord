@@ -522,6 +522,10 @@ extension AppModel {
             discovery?.openAppID == nil && discovery?.openStoreID == nil
         case .guildSurface(_, .channelsAndRoles), .guildSurface(_, .browseChannels):
             channelsAndRolesPresentation != nil
+        case .guildSurface(_, .members):
+            // The Members page, once its store is this server's: search, Sort
+            // and Prune are on the row. While it loads, the ordinary row.
+            memberSafety?.guildID == selectedGuildID && memberSafety != nil
         default:
             false
         }

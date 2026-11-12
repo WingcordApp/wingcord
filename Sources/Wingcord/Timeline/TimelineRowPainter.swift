@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreText
 import Foundation
 import SwiftUI
+import Synchronization
 import WingcordCore
 
 /// Draws one row into a context.
@@ -37,6 +38,17 @@ nonisolated enum TimelineRowPainter {
         /// Whether the pointer is on this row's reactions, which is what shows
         /// a bookmark control the message does not already wear.
         var isPointerOnReactions = false
+        /// Whether the reaction picker this row's add control raised is still
+        /// up. The control is the pointer's, and the pointer follows the
+        /// picker off the row — a control that left then took the picker's own
+        /// origin with it.
+        var pinsReactionControls = false
+        /// The chips whose count is rolling on a layer over the canvas, by
+        /// their place in the row: the canvas leaves their number to it.
+        var rollingReactions: Set<Int> = []
+        /// The chips that have just arrived or been pressed, and how long ago
+        /// in seconds — see `ReactionPop`.
+        var reactionPops: [Int: Double] = [:]
         var showsGutterTimestamp = false
         /// The time beside an author's name — off only under Hide Times, and
         /// back on under the pointer.
@@ -133,6 +145,10 @@ nonisolated enum TimelineRowPainter {
         /// time arrives after the row is already laid out and never reaches the
         /// card. Here it costs a redraw, which is all a colour change is.
         var activityAccent: CGColor?
+        /// The second of the card's two colours, and its app's cover — see
+        /// `InviteCardColours` and `ActivityCardCovers`.
+        var activityAccentEnd: CGColor?
+        var activityCover: CGImage?
         /// "00:08 · Adding videos · 1 playing", when the instance is live.
         ///
         /// **On the paint state, like the accent and for the same reason.** It
@@ -793,6 +809,8 @@ nonisolated enum TimelineRowPainter {
                 context: context,
                 style: style,
                 accent: state.activityAccent,
+                accentEnd: state.activityAccentEnd,
+                cover: state.activityCover,
                 status: state.activityInviteStatus,
                 isJoined: state.activityInviteIsJoined,
                 hovered: state.hoveredComponent,
@@ -910,9 +928,12 @@ nonisolated enum TimelineRowPainter {
         // were drawn at their row-space rect as though it were the canvas's,
         // which put them near the top of the transcript — over a channel's
         // welcome header, whenever that strip repainted in the same pass.
+        // Both controls are the pointer's — on the message, or on the picker
+        // the add control raised. See `visibleReactionControls`.
+        let showsControls = state.isHovered || state.isPointerOnReactions || state.pinsReactionControls
         let controls = row.visibleReactionControls(
-            canAddReaction: state.canAddReaction,
-            showsBookmark: state.isBookmarked || state.isPointerOnReactions
+            canAddReaction: state.canAddReaction && showsControls,
+            showsBookmark: state.isBookmarked || showsControls
         )
         for slot in controls {
             drawReactionControl(
@@ -935,7 +956,9 @@ nonisolated enum TimelineRowPainter {
                 scale: scale,
                 clock: state.animationTime,
                 isLayered: state.layered.reactions.contains(index),
-                effectStart: slot.kind == .burst ? state.burstEffects[slot.emoji.reactionKey] : nil
+                effectStart: slot.kind == .burst ? state.burstEffects[slot.emoji.reactionKey] : nil,
+                popElapsed: state.reactionPops[index],
+                drawsCount: !state.rollingReactions.contains(index)
             )
         }
 
@@ -1335,19 +1358,13 @@ nonisolated enum TimelineRowPainter {
         context: CGContext
     ) -> CGFloat {
         guard !string.isEmpty else { return 0 }
-        var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
-        if tracking != 0 { attributes[.kern] = tracking }
-        let line = CTLineCreateWithAttributedString(NSAttributedString(
-            string: string,
-            attributes: attributes
-        ))
-        var ascent: CGFloat = 0
-        CTLineGetTypographicBounds(line, &ascent, nil, nil)
-
-        // A truncating line needs a width to truncate against; without one it
-        // draws past the rect and over whatever is beside it.
-        let drawn = truncate(line, to: maxWidth, font: font, color: color) ?? line
-        let width = ceil(CTLineGetTypographicBounds(drawn, nil, nil, nil))
+        // Shaped once and kept — see `DrawnLineCache`. A truncating line needs
+        // a width to truncate against; without one it draws past the rect and
+        // over whatever is beside it.
+        let shaped = DrawnLineCache.shared.line(string, font: font, tracking: tracking, maxWidth: maxWidth)
+        let drawn = shaped.line
+        let ascent = shaped.ascent
+        let width = shaped.width
         let slack = max(0, maxWidth - width)
         let x: CGFloat = switch alignment {
         case .center: point.x + (slack / 2).rounded()
@@ -1359,6 +1376,9 @@ nonisolated enum TimelineRowPainter {
         context.textMatrix = .identity
         context.translateBy(x: x, y: point.y + ascent)
         context.scaleBy(x: 1, y: -1)
+        // The line carries no ink of its own: it takes the context's, so one
+        // shaped line serves a name at rest, lit, muted and unread.
+        context.setFillColor(color.cgColor)
         let tiles = Int((width / Self.gradientTile).rounded(.up)) + 1
         if let ramp = Self.ramp(gradient, tiles: tiles) {
             let phase = gradientPhase ?? 0
@@ -1451,19 +1471,6 @@ nonisolated enum TimelineRowPainter {
     /// the space reserved under it.
     static func capCenteredY(of font: NSFont, in rect: CGRect) -> CGFloat {
         rect.midY + font.capHeight / 2 - font.ascender
-    }
-
-    private static func truncate(
-        _ line: CTLine,
-        to width: CGFloat,
-        font: NSFont,
-        color: NSColor
-    ) -> CTLine? {
-        guard CTLineGetTypographicBounds(line, nil, nil, nil) > width else { return nil }
-        let ellipsis = CTLineCreateWithAttributedString(
-            NSAttributedString(string: "\u{2026}", attributes: [.font: font, .foregroundColor: color])
-        )
-        return CTLineCreateTruncatedLine(line, Double(width), .end, ellipsis)
     }
 
     // MARK: Pieces
@@ -2732,8 +2739,23 @@ nonisolated enum TimelineRowPainter {
         /// Whether the emoji plays on a layer over the canvas, which leaves its
         /// glyph box to that layer.
         isLayered: Bool = false,
-        effectStart: Double?
+        effectStart: Double?,
+        /// Seconds since this chip arrived or was pressed, while it pops.
+        popElapsed: Double? = nil,
+        /// False while the count rolls on a layer over the chip.
+        drawsCount: Bool = true
     ) {
+        // A chip that has just arrived, or just counted the reader in, pops:
+        // the whole chip, about its own centre.
+        let pop = popElapsed.map(ReactionPop.scale(at:)) ?? 1
+        if pop != 1 {
+            context.saveGState()
+            context.translateBy(x: frame.midX, y: frame.midY)
+            context.scaleBy(x: pop, y: pop)
+            context.translateBy(x: -frame.midX, y: -frame.midY)
+        }
+        defer { if pop != 1 { context.restoreGState() } }
+
         // A super reaction's effect shakes the chip it starts from, for half a
         // second. Everything below — glow, fill, count — shakes with it, as it
         // does in Discord, where the shaken element is the whole chip.
@@ -2818,15 +2840,21 @@ nonisolated enum TimelineRowPainter {
             // The reader's own chip carries an outline as well as a tint: on a
             // busy row the fill alone is one step of lightness against four
             // other chips, and "did my reaction land" is the only question the
-            // control answers.
-            if slot.isMine {
-                context.addPath(path)
-                context.setStrokeColor(
-                    NSColor.controlAccentColor.withAlphaComponent(0.75).cgColor
-                )
-                context.setLineWidth(1)
-                context.strokePath()
-            }
+            // control answers. Everybody else's carries a hairline — at this
+            // size a fill seven hundredths off its ground has no edge, and a
+            // tile with no edge reads as a smudge.
+            let inner = CGPath(
+                roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
+                cornerWidth: radius - 0.5, cornerHeight: radius - 0.5, transform: nil
+            )
+            context.addPath(inner)
+            context.setStrokeColor(
+                slot.isMine
+                    ? NSColor.controlAccentColor.withAlphaComponent(0.75).cgColor
+                    : ThemeInk.current.lift(isHovered ? 0.16 : 0.09)
+            )
+            context.setLineWidth(1)
+            context.strokePath()
         }
 
         let glyphRect = slot.glyphRect.offsetBy(
@@ -2839,16 +2867,16 @@ nonisolated enum TimelineRowPainter {
         }
 
         // A tapback carries a count only where there is more than one.
-        guard !slot.isTapback || slot.count > 1 else { return }
-        let onGlass = slot.isTapback || tint.rim != nil
+        guard drawsCount, !slot.isTapback || slot.count > 1 else { return }
+        let countFont = TimelineMetrics.reactionCountFont(style)
         drawText(
             String(slot.count),
-            font: style.metadataFont,
-            color: burst.map { SuperReactionInk.ink($0.accent) }
-                ?? (isSolid || (slot.isMine && onGlass) ? NSColor.white
-                    : slot.isMine ? NSColor.controlAccentColor
-                    : onGlass ? style.primaryColor : style.secondaryColor),
-            at: CGPoint(x: glyphRect.maxX + TimelineMetrics.reactionGlyphGap, y: frame.midY - 7),
+            font: countFont,
+            color: reactionCountColor(slot, style: style),
+            at: CGPoint(
+                x: glyphRect.maxX + TimelineMetrics.reactionGlyphGap,
+                y: frame.midY - ((countFont.ascender - countFont.descender) / 2).rounded()
+            ),
             maxWidth: max(
                 0,
                 frame.maxX - glyphRect.maxX
@@ -2857,6 +2885,23 @@ nonisolated enum TimelineRowPainter {
             ),
             context: context
         )
+    }
+
+    /// The ink a chip's count is drawn in — the painter's, and the roll's that
+    /// stands in for it while the number changes (`ReactionCountRolls`).
+    ///
+    /// A super reaction's is its emoji's accent; the reader's own is the
+    /// accent, or white where the chip is solid or glass; everybody else's is
+    /// the primary ink. **Not the secondary**: a count is the chip's whole
+    /// point, and pale grey numbers were the first thing wrong with these.
+    static func reactionCountColor(_ slot: ReactionSlot, style: MessageTextStyle) -> NSColor {
+        if slot.kind == .burst, let burst = slot.palette?.style(isLight: ThemeInk.current.isLight) {
+            return SuperReactionInk.ink(burst.accent)
+        }
+        let onGlass = slot.isTapback || BubbleTint.current.rim != nil
+        let isSolid = slot.isTapback && slot.isMine
+        if isSolid || (slot.isMine && onGlass) { return .white }
+        return slot.isMine ? .controlAccentColor : style.primaryColor
     }
 
     /// Moves the context to where a shaking chip is: offset, and turned about
@@ -3895,5 +3940,123 @@ nonisolated extension TimelineRowPainter {
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .aqua
             ? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.60)
             : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.75)
+    }
+}
+
+// MARK: - Lines shaped once
+
+/// The one-line labels the drawn surfaces set — a name, a status line, a chip's
+/// word, a time — shaped once and drawn many times.
+///
+/// **`drawText` shaped its string on every call**: an attributed string and a
+/// `CTLine`, and a second line for the ellipsis whenever the first was cut, for
+/// each label of each row of each repaint. A scroll repaints a row several
+/// times as it crosses the edge, a hover repaints it twice, and a presence
+/// landing repaints the roster — the same few hundred strings, shaped again
+/// each time. Shaping is the expensive half of setting a line; drawing a shaped
+/// one is a blit of glyphs.
+///
+/// - **No colour in the key, and none in the line.** The line is set with
+///   `kCTForegroundColorFromContextAttributeName`, so it takes the fill colour
+///   of the context it is drawn into. A name lit under the pointer, muted, or
+///   in a role's colour is one entry.
+/// - **Cut lines are filed by the width they were cut to**, whole points, and
+///   an uncut one under no width at all, so a name that fits is one entry
+///   whatever room it was offered.
+/// - **Bounded by count and emptied whole.** It is a cache of what is on
+///   screen now; a list scrolled through once has no claim on what it shaped.
+///
+/// Locked rather than confined to the main actor because the painters are
+/// `nonisolated`. A `CTLine` is immutable once made.
+nonisolated final class DrawnLineCache: Sendable {
+    static let shared = DrawnLineCache()
+
+    struct Shaped: @unchecked Sendable {
+        var line: CTLine
+        /// The drawn line's width, rounded up to a whole point.
+        var width: CGFloat
+        /// The uncut line's ascent, which is where its baseline goes.
+        var ascent: CGFloat
+    }
+
+    private struct Key: Hashable, @unchecked Sendable {
+        var string: String
+        var font: NSFont
+        var tracking: CGFloat
+        /// The width a cut line was cut to; nil for one drawn whole.
+        var fit: Int?
+    }
+
+    private struct State {
+        var lines: [Key: Shaped] = [:]
+        var hits = 0
+        var misses = 0
+    }
+
+    private let state = Mutex(State())
+    private static let limit = 4_096
+
+    /// How often a line was found already shaped, and how often it was not:
+    /// what a test reads to know the cache is used.
+    var counts: (hits: Int, misses: Int) {
+        state.withLock { ($0.hits, $0.misses) }
+    }
+
+    func removeAll() {
+        state.withLock { $0.lines.removeAll(keepingCapacity: true) }
+    }
+
+    func line(_ string: String, font: NSFont, tracking: CGFloat, maxWidth: CGFloat) -> Shaped {
+        let wholeKey = Key(string: string, font: font, tracking: tracking, fit: nil)
+        let whole = cached(wholeKey) ?? {
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: font,
+                NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
+            ]
+            if tracking != 0 { attributes[.kern] = tracking }
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: attributes))
+            var ascent: CGFloat = 0
+            let width = CTLineGetTypographicBounds(line, &ascent, nil, nil)
+            let shaped = Shaped(line: line, width: ceil(width), ascent: ascent)
+            store(shaped, under: wholeKey)
+            return shaped
+        }()
+        // Compared before rounding up, as the cut always was.
+        guard CTLineGetTypographicBounds(whole.line, nil, nil, nil) > Double(maxWidth) else { return whole }
+
+        let cutKey = Key(string: string, font: font, tracking: tracking, fit: Int(maxWidth.rounded(.down)))
+        if let cut = cached(cutKey) { return cut }
+        let ellipsis = CTLineCreateWithAttributedString(NSAttributedString(string: "\u{2026}", attributes: [
+            .font: font,
+            NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
+        ]))
+        // To the whole point the entry is filed under, so every width that
+        // shares the entry draws the same line.
+        let line = CTLineCreateTruncatedLine(whole.line, Double(cutKey.fit ?? 0), .end, ellipsis) ?? whole.line
+        let shaped = Shaped(
+            line: line,
+            width: ceil(CTLineGetTypographicBounds(line, nil, nil, nil)),
+            ascent: whole.ascent
+        )
+        store(shaped, under: cutKey)
+        return shaped
+    }
+
+    private func cached(_ key: Key) -> Shaped? {
+        state.withLock { state in
+            guard let found = state.lines[key] else {
+                state.misses += 1
+                return nil
+            }
+            state.hits += 1
+            return found
+        }
+    }
+
+    private func store(_ shaped: Shaped, under key: Key) {
+        state.withLock { state in
+            if state.lines.count >= Self.limit { state.lines.removeAll(keepingCapacity: true) }
+            state.lines[key] = shaped
+        }
     }
 }

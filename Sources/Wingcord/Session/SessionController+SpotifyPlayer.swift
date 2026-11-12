@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import WingcordCore
 import WingcordNet
@@ -25,6 +26,13 @@ extension SessionController {
     /// Starts following every linked Spotify account not already followed.
     /// Once a session is ready; a reconnect finds them still running.
     func followSpotify() {
+        if spotifyWakeObserver == nil {
+            spotifyWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.restartSpotifyAfterWake() }
+            }
+        }
         Task { [weak self] in
             guard let self else { return }
             let connections: [AccountConnection]
@@ -85,6 +93,10 @@ extension SessionController {
         spotifyClients.removeAll()
         spotifyPlaying.removeAll()
         model.spotifyNowPlaying = nil
+        if let observer = spotifyWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            spotifyWakeObserver = nil
+        }
         stopListeningAlong()
     }
 
@@ -134,6 +146,33 @@ extension SessionController {
     /// Discord asks for the devices and the player again (`655116`'s
     /// throttled `handleDeviceStateChange`). The devices matter to listening
     /// along; the player is answered on the socket.
+    /// Asks every followed account's player again, and starts following any
+    /// linked account that is not followed yet.
+    ///
+    /// **The live word from Spotify is a socket, and a socket can go quiet.**
+    /// Everything this client knows about what is playing arrived either at
+    /// launch — one read of the player — or over that socket; when it stopped
+    /// talking, nothing was read again until the next launch, which is "I have
+    /// to restart for Listen Along to show up". The socket now notices its own
+    /// silence (`SpotifyPlayerClient.listen`); this is the belt beside it,
+    /// called when the `+` menu opens and when the Mac wakes.
+    func refreshSpotify() {
+        followSpotify()
+        for accountID in spotifyClients.keys { spotifyDevicesChanged(accountID) }
+    }
+
+    /// The Mac woke: every socket it was holding is dead whether or not it
+    /// knows, so each account is followed afresh.
+    func restartSpotifyAfterWake() {
+        let accounts = Array(spotifyFollowers.keys)
+        guard !accounts.isEmpty else { return }
+        for accountID in accounts {
+            spotifyFollowers.removeValue(forKey: accountID)?.cancel()
+            spotifyClients[accountID] = nil
+        }
+        for accountID in accounts { follow(spotifyAccount: accountID) }
+    }
+
     private func spotifyDevicesChanged(_ accountID: String) {
         guard let client = spotifyClients[accountID] else { return }
         Task { [weak self] in
