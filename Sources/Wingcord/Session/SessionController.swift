@@ -35,7 +35,7 @@ final class SessionController {
     var linkedRolesInFlight: Set<GuildID> = []
 
     nonisolated static func trace(_ message: @autoclosure () -> String) {
-        DiagnosticLog.trace("session", message())
+        Log.debug(.app, .raw(message()))
     }
 
     /// The four fields of a fetched profile that decide what a card draws.

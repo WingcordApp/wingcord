@@ -131,7 +131,7 @@ extension AppModel {
     func resumeStoredSessionIfAvailable() async {
         guard case .signedOut = connectionState else { return }
         reloadAccounts()
-        DiagnosticLog.trace("app", "stored accounts: \(storedAccounts.count)")
+        Log.info(.auth, "stored accounts: \(storedAccounts.count)")
         guard let account = AccountList(storedAccounts).accountToResume else { return }
         resumeSession(for: account)
     }

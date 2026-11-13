@@ -178,6 +178,16 @@ public actor MediaSession {
         /// End-to-end encrypted. The code is the epoch authenticator, for
         /// comparing out of band with somebody on the other end.
         case endToEnd(verificationCode: String)
+
+        /// The state in words, for a log line — **never the verification
+        /// code**, which is for comparing with somebody, not for a report.
+        public var logWord: String {
+            switch self {
+            case .transportOnly: "transport only"
+            case .establishing: "establishing"
+            case .endToEnd: "end-to-end"
+            }
+        }
     }
 
     public struct Statistics: Sendable, Equatable {
@@ -454,6 +464,7 @@ public actor MediaSession {
     // MARK: Lifecycle
 
     public func start() {
+        Log.info(logArea, "\(role) session starting")
         emit(.state(.connecting))
         var line = "\(role) session server_id=\(connection.serverID) group=\(groupKey.snowflake)"
         if case .watch(_, let owner) = kind {
@@ -938,6 +949,8 @@ public actor MediaSession {
         }
         guard state != lastEncryptionState else { return }
         lastEncryptionState = state
+        stats.encryptionChanges += 1
+        Log.info(logArea, "\(role) encryption \(public: state.logWord)")
         emit(.encryption(state))
 
         // **The first frame a receiver can open must be a keyframe, and the
@@ -1916,12 +1929,109 @@ public actor MediaSession {
             emit(.statistics(statistics))
         }
 
+        accumulateStats(summary: summary, sent: sent, video: video, framesSubmitted: encode.submitted)
+
         window.ticks += 1
         if window.ticks % 2 == 0 { sendReports() }
         guard window.ticks % 4 == 0 else { return }
         VoiceTrace.flushDrops()
         VoiceTrace.write(mediaLine(summary: summary, sent: sent, video: video))
         window = Window()
+    }
+
+    // MARK: The stats line (docs/BUG-REPORTING.md D20)
+
+    /// What one stats line covers: twenty drains, ten seconds.
+    ///
+    /// **Its own window, beside the media line's**, because the two are
+    /// written at different rates and for different readers: the media line
+    /// every two seconds in detailed logging, for whoever is debugging the
+    /// stack; this one every ten, always, for whoever reads a report.
+    private struct StatsWindow {
+        var ticks = 0
+        var audioPackets = 0
+        var audioBytes = 0
+        var videoPackets = 0
+        var videoBytes = 0
+        var framesSubmitted = 0
+        var micPeak: Float = -100
+        var worstLoss = 0
+        var worstJitter: Double = 0
+        var encryptionChanges = 0
+    }
+
+    private var stats = StatsWindow()
+    /// The inbound counters at the last stats line. They only ever grow.
+    private var statsBaseline = (received: 0, datagrams: 0, drawn: 0)
+    private static let statsTicks = 20
+
+    /// A call writes to the voice area, a share and a watch to screen share's.
+    private var logArea: Log.Area { isCall ? .voice : .share }
+
+    private func accumulateStats(
+        summary: InboundStreams.Summary,
+        sent: AudioSendPath.Report,
+        video: VideoSendPath.Report,
+        framesSubmitted: Int
+    ) {
+        stats.ticks += 1
+        stats.audioPackets += sent.packets
+        stats.audioBytes += sent.bytes
+        stats.videoPackets += video.packets
+        stats.videoBytes += video.bytes
+        stats.framesSubmitted += framesSubmitted
+        stats.micPeak = max(stats.micPeak, sent.peak)
+        stats.worstLoss = max(stats.worstLoss, summary.lossPercent)
+        stats.worstJitter = max(stats.worstJitter, summary.jitterMilliseconds)
+        guard stats.ticks >= Self.statsTicks else { return }
+        Log.info(logArea, .raw(statsLine(summary: summary, gate: Self.gateDescription(sent))))
+        statsBaseline = (summary.received, summary.datagrams, summary.framesDrawn)
+        stats = StatsWindow()
+    }
+
+    /// `call 10s | opus out=33kbit/s mic=-21dB gate=open vp=on input=bluetooth
+    /// output=bluetooth | in=1488/1490pkt loss=0% jitter=9ms | video out=…`
+    ///
+    /// Numbers, codecs, states and the KIND of device — no media, no address,
+    /// no device name, no person.
+    private func statsLine(summary: InboundStreams.Summary, gate: String) -> String {
+        let seconds = Double(stats.ticks) / 2
+        func kbit(_ bytes: Int) -> Int { Int((Double(bytes) * 8 / seconds / 1_000).rounded()) }
+        func rate(_ count: Int) -> String { String(format: "%.1f", Double(count) / seconds) }
+        // A counter that went backwards was reset with its session's inbound
+        // half; what it holds now is the whole window.
+        func delta(_ now: Int, _ then: Int) -> Int { now >= then ? now - then : now }
+
+        var parts = ["\(role) \(Int(seconds))s"]
+        if let audio {
+            parts.append(
+                "opus out=\(kbit(stats.audioBytes))kbit/s mic=\(Int(stats.micPeak.rounded()))dB gate=\(gate)"
+                    + " vp=\(audio.isVoiceProcessing ? "on" : "off")"
+                    + " input=\(AudioDeviceCatalog.kind(uniqueID: preferences.inputDeviceUniqueID, input: true))"
+                    + " output=\(AudioDeviceCatalog.kind(uniqueID: preferences.outputDeviceUniqueID, input: false))"
+            )
+        }
+        if receivesMedia {
+            let received = delta(summary.received, statsBaseline.received)
+            let datagrams = delta(summary.datagrams, statsBaseline.datagrams)
+            var line = "in=\(received)/\(datagrams)pkt loss=\(stats.worstLoss)%"
+                + " jitter=\(Int(stats.worstJitter.rounded()))ms"
+            let drawn = delta(summary.framesDrawn, statsBaseline.drawn)
+            if drawn > 0 { line += " video=\(rate(drawn))fps" }
+            parts.append(line)
+        }
+        if sendsVideo, stats.videoPackets > 0 || stats.framesSubmitted > 0 {
+            var line = "video out=\(kbit(stats.videoBytes))kbit/s \(rate(stats.framesSubmitted))fps"
+            if let videoQuality {
+                line += " q=\(videoQuality.width)x\(videoQuality.height)@\(videoQuality.framerate)"
+            }
+            if let bitrate { line += " target=\(bitrate.bitrate / 1_000)kbit" }
+            parts.append(line)
+        }
+        var encryption = "encryption=" + lastEncryptionState.logWord
+        if stats.encryptionChanges > 0 { encryption += " (changed \(stats.encryptionChanges)x)" }
+        parts.append(encryption)
+        return parts.joined(separator: " | ")
     }
 
     /// What our streams had sent at the last report, so a stream that has gone

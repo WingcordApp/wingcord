@@ -2222,9 +2222,7 @@ final class TimelineCanvasView: NSView {
         case .voiceCard:
             break
         case .openMusicPlayer(let card, let rect):
-            DiagnosticLog.trace(
-                "spotify", "open chip hit \(card.key) wired=\(onOpenMusicPlayer != nil)"
-            )
+            Log.debug(.spotify, "open chip hit, wired=\(onOpenMusicPlayer != nil)")
             onOpenMusicPlayer?(card, rect)
         case .favoriteEmbedGIF(let embedIndex):
             guard row.embeds.indices.contains(embedIndex),

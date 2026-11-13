@@ -65,7 +65,7 @@ struct ProfileTabTests {
             profile: profile(
                 activity: Activity(kind: .playing, name: "Xcode"),
                 mutualServers: [
-                    MutualServer(id: GuildID(rawValue: 1), name: "Lumen Club", monogram: "S"),
+                    MutualServer(id: GuildID(rawValue: 1), name: "Lumen Club", monogram: "L"),
                 ]
             ),
             board: board,

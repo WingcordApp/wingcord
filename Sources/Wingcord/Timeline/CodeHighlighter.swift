@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import JavaScriptCore
 import Synchronization
+import WingcordCore
 
 /// highlight.js — the version Discord ships, 11.11.1, with every language it
 /// ships — run in JavaScriptCore, off the main actor, behind Discord's own
@@ -238,7 +239,10 @@ nonisolated final class CodeHighlighter: @unchecked Sendable {
                   let context = JSContext()
             else { return nil }
             context.exceptionHandler = { _, exception in
-                DiagnosticLog.trace("highlight", "exception: \(exception?.toString() ?? "?")")
+                // The exception's text can quote the code being highlighted —
+                // somebody's message — so only detailed logging carries it.
+                Log.fault(.ui, "the highlighter threw")
+                Log.debug(.ui, .raw("highlighter exception: \(exception?.toString() ?? "?")"))
             }
             context.evaluateScript(source, withSourceURL: url)
             context.evaluateScript(Self.glue)

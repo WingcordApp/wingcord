@@ -1,5 +1,6 @@
 import AVFAudio
 import Foundation
+import WingcordCore
 
 // MARK: - The system's mute gesture
 //
@@ -22,25 +23,49 @@ extension VoiceController {
     func adoptSystemMuteGesture() {
         let application = AVAudioApplication.shared
         do {
-            try application.setInputMuteStateChangeHandler { [weak self] shouldBeMuted in
-                // Called off the main actor. The answer is "yes" at once: the
-                // mute itself is one hop away and cannot fail.
-                Task { @MainActor [weak self] in
-                    guard let self, hasCallAudio else { return }
-                    // Unmuting while deafened would be a microphone nobody on
-                    // the call can answer; the press undeafens, as the mute
-                    // button does there.
-                    if !shouldBeMuted, model.isSelfDeafened {
-                        setDeafened(false)
-                    }
-                    setMuted(shouldBeMuted)
+            try application.setInputMuteStateChangeHandler(
+                Self.systemMuteHandler { [weak self] shouldBeMuted in
+                    self?.applySystemMute(shouldBeMuted)
                 }
-                return true
-            }
+            )
         } catch {
             VoiceControllerTrace.note("system mute gesture refused: \(error.localizedDescription)")
         }
         syncSystemMute()
+    }
+
+    /// The block the system calls on a press of the stem.
+    ///
+    /// **Built here, in a nonisolated function, and never inline in
+    /// `adoptSystemMuteGesture`.** The system calls it on a dispatch queue of
+    /// its own. A closure literal written inside a main-actor method is
+    /// main-actor isolated in Swift 6 — this target's default isolation — and
+    /// the compiler guards its entry with a runtime isolation check, which
+    /// traps on that queue: every voice join crashed with `SIGTRAP` in
+    /// `dispatch_assert_queue` the moment the system first called it
+    /// (2026-11-12, three reports). Made here, the closure has no isolation;
+    /// only the `Task` inside hops to the main actor.
+    ///
+    /// The answer is "yes" at once: the mute itself is one hop away and cannot
+    /// fail.
+    nonisolated static func systemMuteHandler(
+        _ apply: @escaping @Sendable @MainActor (Bool) -> Void
+    ) -> @Sendable (Bool) -> Bool {
+        { shouldBeMuted in
+            Task { @MainActor in apply(shouldBeMuted) }
+            return true
+        }
+    }
+
+    /// A press, on the main actor.
+    private func applySystemMute(_ shouldBeMuted: Bool) {
+        guard hasCallAudio else { return }
+        // Unmuting while deafened would be a microphone nobody on the call can
+        // answer; the press undeafens, as the mute button does there.
+        if !shouldBeMuted, model.isSelfDeafened {
+            setDeafened(false)
+        }
+        setMuted(shouldBeMuted)
     }
 
     /// Gives the gesture back at the end of a call, unmuted: a mute left on the
@@ -65,6 +90,6 @@ extension VoiceController {
 /// Where the gesture's one failure is written.
 enum VoiceControllerTrace {
     static func note(_ message: @autoclosure () -> String) {
-        DiagnosticLog.trace("voice", message())
+        Log.fault(.voice, .raw(message()))
     }
 }

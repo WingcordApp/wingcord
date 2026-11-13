@@ -223,7 +223,7 @@ struct ComposerContainer: View {
             // Fetched the first time a `/` is typed in this channel, and never
             // again: the index carries 183 commands in 119 KB and the reference
             // client asks for it once. `loadCommandIndex` is guarded per scope.
-            guard commandQuery != nil else { return }
+            guard commandQuery != nil, model.permissionGate.canUseCommands(in: channelID) else { return }
             await model.sessionController.loadCommandIndex(for: channelID)
         }
     }
@@ -320,16 +320,29 @@ struct ComposerContainer: View {
     /// **An edit is not a command.** The composer's field is borrowed for both,
     /// and a message being edited that happens to start with a slash must not
     /// open a command list over it.
+    ///
+    /// **Wingcord's own commands are offered wherever the composer is** —
+    /// `/bug` answers here, not in the channel — so a channel that refuses
+    /// application commands still lists them.
     private var commandQuery: String? {
         let box = model.messages(in: channelID)
         guard post == nil, box?.editing == nil, box?.command == nil else { return nil }
-        guard model.permissionGate.canUseCommands(in: channelID) else { return nil }
-        return CommandQuery.query(in: box?.draft ?? "")
+        guard let query = CommandQuery.query(in: box?.draft ?? "") else { return nil }
+        if model.permissionGate.canUseCommands(in: channelID) { return query }
+        return BuiltInCommand.matching(query).isEmpty ? nil : query
     }
 
+    /// The flyout's sections: the applications' and Wingcord's. A query that
+    /// names a built-in puts Wingcord first; a bare `/` keeps the applications
+    /// on top, nearest what the reader most often wants.
     private var commandSections: [CommandSection] {
         guard let commandQuery else { return [] }
-        return model.commandSections(in: channelID, matching: commandQuery)
+        let builtIns = BuiltInCommand.section(matching: commandQuery).map { [$0] } ?? []
+        let applications = model.permissionGate.canUseCommands(in: channelID)
+            ? model.commandSections(in: channelID, matching: commandQuery)
+            : []
+        let isBare = commandQuery.trimmingCharacters(in: .whitespaces).isEmpty
+        return isBare ? applications + builtIns : builtIns + applications
     }
 
     private var commandPrompt: CommandOptionPrompt? {
@@ -347,9 +360,26 @@ struct ComposerContainer: View {
     /// kept: it was `/8ba`, and a command bar with that still behind it would
     /// send it as text the moment the command is abandoned.
     private func pick(_ row: CommandRow) {
-        model.mutateBox(channelID) { box in
-            box.draft = ""
-            box.command = PendingCommand(command: row.command)
+        switch row.target {
+        case .application(let command):
+            model.mutateBox(channelID) { box in
+                box.draft = ""
+                box.command = PendingCommand(command: command)
+            }
+        case .builtIn(let command):
+            let argument = BuiltInCommand.invocation(in: model.messages(in: channelID)?.draft ?? "")?.argument ?? ""
+            model.mutateBox(channelID) { $0.draft = "" }
+            run(command, argument: argument)
+        }
+    }
+
+    /// Runs one of Wingcord's own commands. Nothing reaches Discord.
+    private func run(_ command: BuiltInCommand, argument: String) {
+        switch command {
+        case .bug:
+            Task { await BugReporter.shared.open(.slashCommand, kind: .bug, model: model, prefill: argument) }
+        case .idea:
+            Task { await BugReporter.shared.open(.slashCommand, kind: .idea, model: model, prefill: argument) }
         }
     }
 
@@ -620,6 +650,13 @@ struct ComposerContainer: View {
             return
         }
         let draft = model.messages(in: channelID)?.draft ?? ""
+        // `/bug …` sent with the list set aside is still Wingcord's, and never
+        // a message.
+        if let invocation = BuiltInCommand.invocation(in: draft) {
+            model.mutateBox(channelID) { $0.draft = "" }
+            run(invocation.command, argument: invocation.argument)
+            return
+        }
         model.sendMessage(draft, in: channelID, launch: launch)
     }
 }

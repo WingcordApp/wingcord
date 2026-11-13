@@ -151,7 +151,12 @@ struct CommandPalette: View {
     /// the list's one heading style, the one the emoji and mention lists use.
     private func sectionHeader(_ section: CommandSection, isFirst: Bool) -> some View {
         HStack(spacing: Spacing.snug) {
-            if section.isFrequent {
+            if section.isBuiltIn {
+                Image(nsImage: NSApplication.shared.applicationIconImage)
+                    .resizable()
+                    .frame(width: Metrics.commandRowIcon, height: Metrics.commandRowIcon)
+                    .accessibilityHidden(true)
+            } else if section.isFrequent {
                 Image(systemName: "clock")
                     .font(.system(.caption, weight: .semibold))
                     .foregroundStyle(Ink.tertiary)
@@ -205,11 +210,12 @@ private struct CommandPaletteRow: View {
             ApplicationMark(
                 url: row.iconURL,
                 monogram: row.monogram,
-                side: Metrics.commandRowIcon
+                side: Metrics.commandRowIcon,
+                symbolName: row.symbolName
             )
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
-                    Text("/\(row.command.name)")
+                    Text("/\(row.name)")
                         .font(.system(.subheadline, weight: .semibold))
                         .foregroundStyle(isSelected ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
                         .lineLimit(1)
@@ -231,8 +237,8 @@ private struct CommandPaletteRow: View {
                         .lineLimit(1)
                         .layoutPriority(-2)
                 }
-                if !row.command.summary.isEmpty {
-                    Text(row.command.summary)
+                if !row.summary.isEmpty {
+                    Text(row.summary)
                         .font(Typeface.rowSubtitle)
                         .foregroundStyle(Ink.tertiary)
                         .lineLimit(1)
@@ -244,8 +250,8 @@ private struct CommandPaletteRow: View {
         .accessibilityElement(children: .ignore)
         // The description only where there is one. An empty hint is a hint
         // VoiceOver still announces the pause for.
-        .accessibilityLabel(Text("/\(row.command.name), \(row.applicationName)"))
-        .accessibilityHint(row.command.summary.isEmpty ? Text("") : Text(row.command.summary))
+        .accessibilityLabel(Text("/\(row.name), \(row.applicationName)"))
+        .accessibilityHint(row.summary.isEmpty ? Text("") : Text(row.summary))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
@@ -261,14 +267,23 @@ struct ApplicationMark: View {
     var url: URL?
     var monogram: String
     var side: CGFloat
+    /// Drawn in place of the monogram — a built-in command's own symbol.
+    var symbolName: String? = nil
 
     var body: some View {
         RemoteImage(url: url, side: side) {
-            Text(monogram)
-                .font(.system(size: side * 0.42, weight: .semibold))
-                .foregroundStyle(Ink.secondary)
-                .frame(width: side, height: side)
-                .background(Palette.surfaceRaised)
+            Group {
+                if let symbolName {
+                    Image(systemName: symbolName)
+                        .font(.system(size: side * 0.5, weight: .semibold))
+                } else {
+                    Text(monogram)
+                        .font(.system(size: side * 0.42, weight: .semibold))
+                }
+            }
+            .foregroundStyle(Ink.secondary)
+            .frame(width: side, height: side)
+            .background(Palette.surfaceRaised)
         }
         .frame(width: side, height: side)
         .clipShape(.rect(cornerRadius: side * 0.28, style: .continuous))

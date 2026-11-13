@@ -97,7 +97,7 @@ enum DemoCaptureSelfTest {
 
     @MainActor
     private static func clip(bundleID: String, model: AppModel) async {
-        let note = { (line: String) in DiagnosticLog.trace("selftest", "clip: \(line)") }
+        let note = { (line: String) in Log.info(.demo, .raw("selftest clip: \(line)")) }
         note("screen capture allowed: \(CGPreflightScreenCaptureAccess())")
         guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
             return note("\(bundleID) is not running")
@@ -128,7 +128,7 @@ enum DemoCaptureSelfTest {
 
     @MainActor
     private static func record(model: AppModel) async {
-        let note = { (line: String) in DiagnosticLog.trace("selftest", "record: \(line)") }
+        let note = { (line: String) in Log.info(.demo, .raw("selftest record: \(line)")) }
         note("screen capture allowed: \(CGPreflightScreenCaptureAccess())")
         guard let display = NSScreen.main?.displayID else { return note("no display") }
         let package = ClipLibrary.availableURL(
@@ -167,15 +167,15 @@ enum DemoCaptureSelfTest {
     private static func callFullScreen(model: AppModel, mode: String) async {
         func note(_ step: String) {
             let window = MainWindow.workspaceWindow
-            DiagnosticLog.trace(
-                "fullscreen-selftest",
-                "\(step): isCallFullScreen=\(model.isCallFullScreen) windowFullScreen=\(window?.styleMask.contains(.fullScreen) == true) window=\(window?.identifier?.rawValue ?? "nil")"
+            Log.info(
+                .demo,
+                .raw("fullscreen-selftest \(step): isCallFullScreen=\(model.isCallFullScreen) windowFullScreen=\(window?.styleMask.contains(.fullScreen) == true) window=\(window?.identifier?.rawValue ?? "nil")")
             )
             for each in NSApp.windows where each.isVisible {
                 let content = each.contentView
-                DiagnosticLog.trace(
-                    "fullscreen-selftest",
-                    "  window \(each.identifier?.rawValue ?? "-") \(type(of: each)) level=\(each.level.rawValue) frame=\(each.frame) content=\(content.map { "\(type(of: $0)) \($0.frame)" } ?? "nil") subviews=\(content?.subviews.map { "\(type(of: $0)) \($0.frame)" } ?? [])"
+                Log.info(
+                    .demo,
+                    .raw("fullscreen-selftest   window \(each.identifier?.rawValue ?? "-") \(type(of: each)) level=\(each.level.rawValue) frame=\(each.frame) content=\(content.map { "\(type(of: $0)) \($0.frame)" } ?? "nil") subviews=\(content?.subviews.map { "\(type(of: $0)) \($0.frame)" } ?? [])")
                 )
             }
         }

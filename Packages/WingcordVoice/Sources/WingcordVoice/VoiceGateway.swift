@@ -1,4 +1,5 @@
 import Foundation
+import WingcordCore
 
 // MARK: - The voice gateway
 //
@@ -946,6 +947,11 @@ public actor VoiceGateway {
         VoiceTrace.write(
             "socket failed close=\(code) reason=\(reason.isEmpty ? "-" : reason) "
             + "error=\(error.localizedDescription)"
+        )
+        // Always, with its reason: INVARIANTS §1.5.
+        Log.info(
+            .voice,
+            "\(role) voice socket closed: code=\(code) reason=\(public: reason.isEmpty ? "-" : reason)"
         )
 
         // 4014 is "disconnected" — moved, kicked, or the channel deleted. 4006

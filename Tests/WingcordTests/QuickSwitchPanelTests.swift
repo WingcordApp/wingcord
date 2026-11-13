@@ -397,7 +397,7 @@ struct QuickSwitchPanelTests {
         let model = model()
         model.profileRequest = ProfileRequest(userID: friendID, anchor: .zero)
         model.toggleQuickSwitch()
-        model.setQuickSwitchText("*sakura")
+        model.setQuickSwitchText("*lumen")
         let row = try #require(rows(model).first)
 
         model.openQuickSwitchRow(row)

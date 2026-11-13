@@ -1,44 +1,49 @@
 import OSLog
 import Synchronization
+import WingcordCore
 
 // MARK: - What the voice stack says about itself
 //
-// One sink for the whole package, installed once at launch and `nil` in every
-// build nobody asked to trace. It exists because **every way this stack fails
-// is silent**: a handshake that stops advancing, a group that never
-// establishes, and a call that connects and carries no sound all present as
-// the same thing — a window with a control bar under it and nothing happening.
+// What the stack says goes to the app's log (`Log`, docs/BUG-REPORTING.md),
+// in the calls ring. It exists because **every way this stack fails is
+// silent**: a handshake that stops advancing, a group that never establishes,
+// and a call that connects and carries no sound all present as the same thing
+// — a window with a control bar under it and nothing happening.
 //
 // Two kinds of line, and the split is the whole design:
 //
 // - **Events** — the DAVE handshake is nine messages in a fixed order, and
 //   reading which one it stopped after is the diagnosis. One line each,
-//   formatted only when a sink is installed.
+//   written while detailed logging is on; **faults always**.
 // - **Drops** — a frame the transform refused. Those arrive fifty times a
 //   second per stream, so they are *counted* and flushed with each session's
-//   media line. A line each would cost more than the media path
-//   it is measuring, and would bury the nine lines that say why.
+//   media line, as one line and only when something was dropped. A line each
+//   would cost more than the media path it is measuring, and would bury the
+//   nine lines that say why.
 //
-// Free when off. `write` takes an autoclosure, so no message is built; `note`
-// checks the sink before it touches an atomic, so the real-time threads pay one
-// predictable branch on a null pointer.
+// `write` takes an autoclosure, so with detailed logging off no message is
+// built. `note` is one relaxed atomic add — counted always, because a call that
+// drops frames is the call somebody reports.
 public enum VoiceTrace {
-    /// Where the lines go, or `nil` for the builds nobody is watching.
+    /// An extra tap on every line, before it is scrubbed — for a test that
+    /// reads the handshake's order. `nil` in the app.
     ///
-    /// **Installed once, in `WingcordApp.init`, before a call can exist**, and
-    /// never moved afterwards — which is what makes reading it from the audio
-    /// and network threads safe without a lock.
+    /// **Set before a call can exist, and never moved during one** — which is
+    /// what makes reading it from the audio and network threads safe without
+    /// a lock.
     public nonisolated(unsafe) static var sink: (@Sendable (String) -> Void)?
 
-    /// Whether anything is listening.
-    static var isOn: Bool { sink != nil }
+    /// Whether an event line would be written anywhere.
+    static var isOn: Bool { sink != nil || Log.isDetailed }
 
     private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Voice")
 
-    /// Records one line.
+    /// Records one event line — detailed logging only.
     static func write(_ message: @autoclosure () -> String) {
-        guard let sink else { return }
-        sink(message())
+        guard isOn else { return }
+        let text = message()
+        sink?(text)
+        Log.debug(.voice, .raw(text))
     }
 
     /// Records one failure, to the trace **and** to the unified log.
@@ -53,8 +58,12 @@ public enum VoiceTrace {
     /// cost of a `String` is not what broke it.
     static func fault(_ message: @autoclosure () -> String) {
         let text = message()
-        log.error("\(text, privacy: .public)")
+        // Scrubbed for the unified log too: a sysdiagnose is a file somebody
+        // sends.
+        let scrubbed = Log.store?.scrubber.scrub(text) ?? text
+        log.error("\(scrubbed, privacy: .public)")
         sink?(text)
+        Log.fault(.voice, .raw(text))
     }
 
     // MARK: Frames the transform refused
@@ -101,9 +110,9 @@ public enum VoiceTrace {
     private static let transportUnparsed = Atomic<Int>(0)
     private static let transportRefused = Atomic<Int>(0)
 
-    /// Counts one dropped frame. Called from the real-time threads.
+    /// Counts one dropped frame. Called from the real-time threads: one
+    /// relaxed atomic add, no allocation, no lock.
     static func note(_ drop: Drop) {
-        guard isOn else { return }
         switch drop {
         case .sendUnkeyed: sendUnkeyed.add(1, ordering: .relaxed)
         case .sendFailed: sendFailed.add(1, ordering: .relaxed)
@@ -129,7 +138,6 @@ public enum VoiceTrace {
     /// diagnose the wrong one; naming it is cheaper than either the lie or the
     /// refactor.
     static func flushDrops() {
-        guard isOn else { return }
         let unkeyed = sendUnkeyed.exchange(0, ordering: .relaxed)
         let failed = sendFailed.exchange(0, ordering: .relaxed)
         let theirs = receiveUnkeyed.exchange(0, ordering: .relaxed)
@@ -149,6 +157,8 @@ public enum VoiceTrace {
         if refused > 0 { parts.append("\(refused) theirs refused") }
         if unparsed > 0 { parts.append("\(unparsed) not RTP") }
         if unopenable > 0 { parts.append("\(unopenable) transport would not open") }
-        write("dropped, across every session: " + parts.joined(separator: ", "))
+        let line = "dropped, across every session: " + parts.joined(separator: ", ")
+        sink?(line)
+        Log.info(.voice, .raw(line))
     }
 }

@@ -209,27 +209,54 @@ public actor DiscordREST {
     /// Diagnostic only, gated on the trace sink, and capped so a large response
     /// cannot flood the log.
     nonisolated static func traceProfileShape(_ data: Data) {
-        guard let sink = traceSink else { return }
+        guard isTracing else { return }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return
         }
-        sink("PROFILE keys: \(root.keys.sorted().joined(separator: ","))")
+        trace("PROFILE keys: \(root.keys.sorted().joined(separator: ","))")
         if let profile = root["user_profile"] as? [String: Any] {
-            sink("PROFILE user_profile keys: \(profile.keys.sorted().joined(separator: ","))")
+            trace("PROFILE user_profile keys: \(profile.keys.sorted().joined(separator: ","))")
             if let effect = profile["profile_effect"] {
-                sink("PROFILE profile_effect: \(effect)")
+                trace("PROFILE profile_effect: \(effect)")
             } else {
-                sink("PROFILE profile_effect: ABSENT")
+                trace("PROFILE profile_effect: ABSENT")
             }
         }
         for key in ["user", "guild_member_profile"] {
             guard let nested = root[key] as? [String: Any] else { continue }
-            sink("PROFILE \(key) keys: \(nested.keys.sorted().joined(separator: ","))")
+            trace("PROFILE \(key) keys: \(nested.keys.sorted().joined(separator: ","))")
         }
     }
 
-    /// Where diagnostic lines go. Installed by the app when tracing is on.
+    /// A developer's extra sink — stderr in a live test. The log is the
+    /// usual destination; see `trace`.
     nonisolated(unsafe) public static var traceSink: (@Sendable (String) -> Void)?
+
+    /// Whether a trace line would be written anywhere.
+    nonisolated static var isTracing: Bool { traceSink != nil || Log.isDetailed }
+
+    /// A protocol-level line — a response's shape, a refusal's body. Detailed
+    /// logging only; a refusal's status and code are written always, by
+    /// `traceRefusal`.
+    nonisolated static func trace(_ message: @autoclosure () -> String) {
+        guard isTracing else { return }
+        let text = message()
+        traceSink?(text)
+        Log.debug(.rest, .raw(text))
+    }
+
+    /// A request that never got an answer — offline, timed out, refused by the
+    /// TLS layer. **Not a cancellation**: a task dropped because the reader
+    /// moved on is not a fault, and there are dozens an hour.
+    nonisolated static func transportFailure(_ error: any Error, route: String) -> Failure {
+        let bridged = error as NSError
+        let cancelled = error is CancellationError
+            || (bridged.domain == NSURLErrorDomain && bridged.code == NSURLErrorCancelled)
+        if !cancelled {
+            Log.info(.rest, "no answer for \(public: route): \(error)")
+        }
+        return .transport(error.localizedDescription)
+    }
 
     /// Where a custom emoji came from.
     ///
@@ -733,6 +760,7 @@ public actor DiscordREST {
             return try Self.decoder.decode(T.self, from: data)
         } catch {
             Self.log.error("decode failed for \(route, privacy: .public): \(error)")
+            Log.fault(.rest, "could not decode \(public: route): \(error)")
             throw Failure.decoding(String(describing: error))
         }
     }
@@ -775,7 +803,7 @@ public actor DiscordREST {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw Failure.transport(error.localizedDescription)
+            throw Self.transportFailure(error, route: route)
         }
 
         guard let http = response as? HTTPURLResponse else {
@@ -825,6 +853,7 @@ public actor DiscordREST {
                 statusCode: retryHTTP.statusCode
             )
             guard (200..<300).contains(retryHTTP.statusCode) else {
+                Self.traceRefusal(status: retryHTTP.statusCode, route: route, data: retryData)
                 throw Self.apiFailure(status: retryHTTP.statusCode, data: retryData)
             }
             return retryData
@@ -838,6 +867,7 @@ public actor DiscordREST {
                 solution.apply(to: &request)
                 return try await sendSolved(request, route: route)
             }
+            Self.traceRefusal(status: http.statusCode, route: route, data: data)
             throw Self.apiFailure(status: http.statusCode, data: data)
         }
     }
@@ -872,7 +902,7 @@ public actor DiscordREST {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw Failure.transport(error.localizedDescription)
+            throw Self.transportFailure(error, route: route)
         }
         guard let http = response as? HTTPURLResponse else {
             throw Failure.transport("no HTTP response on captcha retry")
@@ -925,7 +955,7 @@ public actor DiscordREST {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw Failure.transport(error.localizedDescription)
+            throw Self.transportFailure(error, route: route)
         }
         guard let http = response as? HTTPURLResponse else {
             throw Failure.transport("no HTTP response")
@@ -950,10 +980,13 @@ public actor DiscordREST {
     /// and it is costing them again on `users/@me/scheduled-messages`. Gated on
     /// the sink, so it is free in a build nobody is tracing, and capped so a
     /// large error page cannot flood the log.
+    ///
+    /// **The status, the route and Discord's code are written always** — a
+    /// route is a template (`users/{id}/profile`), so the line names no one —
+    /// and the body only in detailed logging, where it is scrubbed.
     static func traceRefusal(status: Int, route: String, data: Data) {
-        guard let sink = traceSink else { return }
-        let body = String(data: data.prefix(400), encoding: .utf8) ?? "<\(data.count) bytes>"
-        sink("HTTP \(status) \(route): \(body)")
+        Log.info(.rest, "HTTP \(status) \(public: route) code=\(public: errorCode(in: data))")
+        trace("HTTP \(status) \(route): \(String(data: data.prefix(400), encoding: .utf8) ?? "<\(data.count) bytes>")")
     }
 
     /// Discord's code for a message refused by slowmode.
@@ -1117,7 +1150,7 @@ public actor DiscordREST {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw Failure.transport(error.localizedDescription)
+            throw Self.transportFailure(error, route: route)
         }
         guard let http = response as? HTTPURLResponse else {
             throw Failure.transport("no HTTP response")
@@ -1133,13 +1166,16 @@ public actor DiscordREST {
                 case 403: throw Failure.forbidden(code: Self.errorCode(in: data))
                 default: throw Failure.notFound
                 }
-            default: throw Self.apiFailure(status: http.statusCode, data: data)
+            default:
+                Self.traceRefusal(status: http.statusCode, route: route, data: data)
+                throw Self.apiFailure(status: http.statusCode, data: data)
             }
         }
         do {
             return try Self.decoder.decode(T.self, from: data)
         } catch {
             Self.log.error("decode failed for \(route, privacy: .public): \(error)")
+            Log.fault(.rest, "could not decode \(public: route): \(error)")
             throw Failure.decoding(String(describing: error))
         }
     }

@@ -447,17 +447,17 @@ nonisolated enum DemoMedia {
             try await soundTask?.value
             await writer.finishWriting()
         } catch {
-            DiagnosticLog.trace("demo", "clip encode failed: \(error)")
+            Log.info(.demo, "clip encode failed: \(error)")
             try? FileManager.default.removeItem(at: staging)
             return
         }
         guard writer.status == .completed else {
-            DiagnosticLog.trace("demo", "clip encode ended \(writer.status.rawValue)")
+            Log.info(.demo, "clip encode ended \(writer.status.rawValue)")
             try? FileManager.default.removeItem(at: staging)
             return
         }
         try? FileManager.default.moveItem(at: staging, to: file)
-        DiagnosticLog.trace("demo", "\(file.lastPathComponent) written")
+        Log.info(.demo, "\(public: file.lastPathComponent) written")
     }
 
     /// A bar sweeping left to right over a shifting ground: enough motion that a

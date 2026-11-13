@@ -249,13 +249,33 @@ final class ThemeStore {
     }
 
     /// The preset "Sync with computer" is drawing now.
-    ///
-    /// **Read while nothing is pinned**: `apply` lets go of the app's
-    /// appearance before resolving this choice, so the app's effective
-    /// appearance is the system's. Read under a pin it would be the pin.
     private static var following: ThemePreset {
-        let dark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return .following(systemIsDark: dark)
+        .following(systemIsDark: systemIsDark)
+    }
+
+    /// The Mac's own Light or Dark, as last read.
+    ///
+    /// **Read without touching the app's appearance.** `apply` used to let go of
+    /// the app's appearance to read the system's through it, and then pin one
+    /// for a wallpaper's room in the same pass — two writes, each of which
+    /// fires the appearance observer synchronously, which ran `apply` again,
+    /// which let go again: Automatic with the desktop or a picture behind the
+    /// window recursed until the main thread's stack ran out (2026-11-12, four
+    /// crashes choosing Automatic). Now the system's appearance is read from
+    /// the app's while nothing is pinned, from the system's own setting while
+    /// something is, and `apply` writes the app's appearance once.
+    private static var systemIsDark = readSystemIsDark(synchronizing: false)
+
+    private static func readSystemIsDark(synchronizing: Bool) -> Bool {
+        let application = NSApplication.shared
+        if application.appearance == nil {
+            return application.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+        // Pinned: the app's effective appearance is the pin, so ask the
+        // system's setting. In Auto it says Dark exactly while it is dark.
+        if synchronizing { CFPreferencesAppSynchronize(kCFPreferencesAnyApplication) }
+        let style = CFPreferencesCopyAppValue("AppleInterfaceStyle" as CFString, kCFPreferencesAnyApplication)
+        return (style as? String) == "Dark"
     }
 
     // MARK: Writing
@@ -364,9 +384,12 @@ final class ThemeStore {
     /// is what wakes SwiftUI, and a canvas that repaints in response has to find
     /// the new theme already installed or it draws one frame of the old ground.
     private func apply(notifyingDrawnSurfaces: Bool) {
-        // "Sync with computer" holds no appearance of its own: the system's is
-        // the room, so it is let through before the choice is resolved.
-        if choice == .system { Self.releaseAppearance() }
+        // While nothing is pinned the app's appearance is the system's, and
+        // reading it is free; under a pin the last reading stands, and the
+        // system's own change notification refreshes it.
+        if NSApplication.shared.appearance == nil {
+            Self.systemIsDark = Self.readSystemIsDark(synchronizing: false)
+        }
         let chosen = Self.colors(
             for: choice,
             customSeed: customSeed,
@@ -411,7 +434,16 @@ final class ThemeStore {
         // changes no colour, but it does change who owns the appearance — and
         // left unpinned, the next switch to Light would put the system's black
         // labels on its near-black ground.
-        if choice != .system || forcedDark || room != nil { Self.pinAppearance(resolved.appearance) }
+        //
+        // **One write, to where the appearance ends up**: pinned, or let
+        // through for "Sync with computer" with nothing behind the window to
+        // say otherwise. A second pass with nothing changed writes nothing,
+        // so the observer this write wakes cannot start a loop.
+        if choice != .system || forcedDark || room != nil {
+            Self.pinAppearance(resolved.appearance)
+        } else {
+            Self.releaseAppearance()
+        }
         BubbleTint.setLight(resolved.appearance == .light)
         guard resolved != colors || !isLoaded else { return }
         ThemeRuntime.install(resolved)
@@ -437,25 +469,38 @@ final class ThemeStore {
     private static func pinAppearance(_ appearance: ThemeAppearance) {
         let name: NSAppearance.Name = appearance == .light ? .aqua : .darkAqua
         guard NSApplication.shared.appearance?.name != name else { return }
-        NSApplication.shared.appearance = NSAppearance(named: name)
+        writeAppearance(NSAppearance(named: name))
     }
 
     /// Lets the system's appearance through — "Sync with computer".
     private static func releaseAppearance() {
         guard NSApplication.shared.appearance != nil else { return }
-        NSApplication.shared.appearance = nil
+        writeAppearance(nil)
+    }
+
+    /// Set while this store writes the app's appearance, so the observer that
+    /// write wakes — synchronously, inside the setter — is not taken for the
+    /// system moving.
+    private static var isWritingAppearance = false
+
+    private static func writeAppearance(_ appearance: NSAppearance?) {
+        isWritingAppearance = true
+        defer { isWritingAppearance = false }
+        NSApplication.shared.appearance = appearance
     }
 
     /// The system's appearance moved. Only "Sync with computer" follows it;
     /// every other choice has its own pinned.
     private func systemAppearanceDidChange() {
-        guard isLoaded, choice == .system else { return }
+        guard isLoaded, !Self.isWritingAppearance, choice == .system else { return }
+        Self.systemIsDark = Self.readSystemIsDark(synchronizing: true)
         apply(notifyingDrawnSurfaces: true)
     }
 
     private let defaults: UserDefaults
     @ObservationIgnored private var accentObserver: NSObjectProtocol?
     @ObservationIgnored private var appearanceObserver: NSKeyValueObservation?
+    @ObservationIgnored private var systemThemeObserver: NSObjectProtocol?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -499,6 +544,16 @@ final class ThemeStore {
         // `.shared`: this store is still being made, and reaching for the
         // singleton from inside its own initialiser waits on itself.
         appearanceObserver = NSApplication.shared.observe(\.effectiveAppearance) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.systemAppearanceDidChange() }
+        }
+        // **And the system's own word**, which is the only one that arrives
+        // while a wallpaper's room holds the app's appearance pinned: the app's
+        // effective appearance does not move then, whatever the Mac does.
+        systemThemeObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
             MainActor.assumeIsolated { self?.systemAppearanceDidChange() }
         }
 

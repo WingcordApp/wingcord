@@ -19,18 +19,43 @@ import WingcordNet
 /// presentation type here has none: `.equatable()` is worth nothing on a type
 /// that closes over the store.
 struct CommandRow: Hashable, Sendable, Identifiable {
+    /// What choosing the row does: fill in an application's command, or run
+    /// one of Wingcord's own (`BuiltInCommand`), which Discord never sees.
+    enum Target: Hashable, Sendable {
+        case application(SlashCommand)
+        case builtIn(BuiltInCommand)
+    }
+
     /// **Scoped to the section, not to the command.** A command in Frequently
     /// Used is drawn again under its own application, so the leaf id appears
     /// twice in one list — and two rows sharing an id is a `scrollTo` that lands
     /// on whichever `ForEach` kept.
     var id: String
-    var command: SlashCommand
+    var target: Target
     var applicationName: String
     var iconURL: URL?
     var monogram: String
+    /// A symbol in place of the monogram, for a row with no artwork to wait
+    /// for — a built-in.
+    var symbolName: String?
     /// What the row says about the command's parameters — `question` for a
     /// required one, `+2 optional` for the rest. Empty when it takes none.
     var hint: String
+
+    /// `8ball`, `base64 decode`, `bug`: what follows the slash.
+    var name: String {
+        switch target {
+        case .application(let command): command.name
+        case .builtIn(let command): command.name
+        }
+    }
+
+    var summary: String {
+        switch target {
+        case .application(let command): command.summary
+        case .builtIn(let command): command.summary
+        }
+    }
 }
 
 /// A titled group of rows.
@@ -42,6 +67,8 @@ struct CommandSection: Hashable, Sendable, Identifiable {
     /// application icon, because it is the one section that is not one
     /// application's.
     var isFrequent: Bool
+    /// Wingcord's own commands, drawn under the app's icon.
+    var isBuiltIn = false
     var rows: [CommandRow]
 }
 
@@ -189,7 +216,7 @@ extension AppModel {
         let name = application?.name ?? leaf.applicationID.description
         return CommandRow(
             id: section + "/" + leaf.id,
-            command: leaf,
+            target: .application(leaf),
             applicationName: name,
             iconURL: application?.iconHash.flatMap {
                 CDN.applicationIcon(id: leaf.applicationID, hash: $0, side: Metrics.commandRowIcon)

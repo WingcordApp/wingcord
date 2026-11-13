@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import MachO
 import OSLog
+import WingcordCore
 
 /// Catches the ways this app can die and leaves something worth reading.
 ///
@@ -183,6 +184,10 @@ nonisolated enum CrashReporter {
         raise(number)
     }
 
+    /// The line below, for the paths where allocating is allowed — a hang
+    /// marker, a report's summary.
+    static var mainImageLine: String { describeMainImage() }
+
     /// `image-base 0x… uuid …`: where the app's binary sits in memory, and
     /// which build it is.
     ///
@@ -274,6 +279,10 @@ nonisolated enum Breadcrumbs {
     /// Records one line. Safe from any thread; never allocates beyond the
     /// caller's own string.
     static func record(_ message: String) {
+        // Into the log too, where it outlives the run and the hundred-line
+        // ring. Breadcrumbs are the app's own words — states and failures,
+        // never anybody's names.
+        Log.info(.app, .raw(message))
         lock.lock()
         defer { lock.unlock() }
         let slot = cursor % slotCount

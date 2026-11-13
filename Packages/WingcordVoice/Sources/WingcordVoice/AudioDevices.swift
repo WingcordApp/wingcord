@@ -99,6 +99,54 @@ public enum AudioDeviceCatalog {
         return systemAggregatePrefixes.contains { uid.hasPrefix($0) }
     }
 
+    /// What a device is plugged in by — `bluetooth`, `usb`, `built-in` — or
+    /// the default device's when `uniqueID` is nil.
+    ///
+    /// **For a log line, which may say what kind of device a call is on and
+    /// never its name**: a device's name is very often its owner's ("Alex's
+    /// AirPods"), and the kind is what explains a call that sounds wrong.
+    public static func kind(uniqueID: String?, input: Bool) -> String {
+        // One call each way — the UID straight to its object, or the default —
+        // rather than walking every device: this is read every ten seconds of
+        // every call.
+        let id = uniqueID.flatMap(deviceID(forUniqueID:)) ?? defaultDeviceID(input: input)
+        guard id != 0, let transport = integerProperty(kAudioDevicePropertyTransportType, of: id) else {
+            return "unknown"
+        }
+        switch transport {
+        case kAudioDeviceTransportTypeBuiltIn: return "built-in"
+        case kAudioDeviceTransportTypeUSB: return "usb"
+        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: return "bluetooth"
+        case kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeAutoAggregate: return "aggregate"
+        case kAudioDeviceTransportTypeVirtual: return "virtual"
+        case kAudioDeviceTransportTypeHDMI, kAudioDeviceTransportTypeDisplayPort: return "display"
+        case kAudioDeviceTransportTypeThunderbolt: return "thunderbolt"
+        case kAudioDeviceTransportTypeAirPlay: return "airplay"
+        case kAudioDeviceTransportTypeContinuityCaptureWired,
+             kAudioDeviceTransportTypeContinuityCaptureWireless: return "continuity"
+        default: return "other"
+        }
+    }
+
+    /// A device's object from its unique id, by the system's own translation.
+    private static func deviceID(forUniqueID uniqueID: String) -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var uid = uniqueID as CFString
+        var id: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = withUnsafeMutablePointer(to: &uid) { qualifier in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject), &address,
+                UInt32(MemoryLayout<CFString>.size), qualifier, &size, &id
+            )
+        }
+        return status == noErr && id != kAudioObjectUnknown ? id : nil
+    }
+
     private static let systemAggregatePrefixes = [
         "CADefaultDeviceAggregate",
         "VPAUAggregateAudioDevice",

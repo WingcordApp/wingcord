@@ -17,12 +17,12 @@ struct ExpressionSourceTests {
         try JSONDecoder().decode(ExpressionSourceDTO.self, from: Data(json.utf8)).domain
     }
 
-    private let Orbit Hub = """
+    private let sampleGuild = """
     {"guild":{"id":"960000000000000001","name":"Orbit Hub",
       "icon":"80756ef1f066b1d3505158ea4cfcf66a",
       "emojis":[
         {"name":"DiscordKit","id":"1057967394723107016","animated":false,"available":true},
-        {"name":"Orbit Hub","id":"1050000000000000001","animated":false,"available":true},
+        {"name":"orbit","id":"1050000000000000001","animated":false,"available":true},
         {"name":"puffer","id":"1057969809863599024","animated":false,"available":true},
         {"name":"wumpus","id":"1057972025189167295","animated":false,"available":true}],
       "approximate_member_count":1916,"approximate_presence_count":596,
@@ -34,7 +34,7 @@ struct ExpressionSourceTests {
 
     @Test("A guild source carries everything the card draws")
     func guildSource() throws {
-        guard case .guild(let guild) = try #require(try decode(Orbit Hub)) else {
+        guard case .guild(let guild) = try #require(try decode(sampleGuild)) else {
             Issue.record("expected a guild")
             return
         }
@@ -52,13 +52,13 @@ struct ExpressionSourceTests {
     /// hover.
     @Test("The emoji sample is capped")
     func sampleIsCapped() throws {
-        guard case .guild(let guild) = try #require(try decode(Orbit Hub)) else {
+        guard case .guild(let guild) = try #require(try decode(sampleGuild)) else {
             Issue.record("expected a guild")
             return
         }
         #expect(guild.sampleEmoji.count == 4)
         #expect(guild.sampleEmoji.count <= ExpressionSourceDTO.sampleLimit)
-        #expect(guild.sampleEmoji[1].name == "Orbit Hub")
+        #expect(guild.sampleEmoji[1].name == "orbit")
         #expect(guild.sampleEmoji[1].id == EmojiID(rawValue: 1_050_000_000_000_000_001))
     }
 

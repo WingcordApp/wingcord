@@ -21,7 +21,7 @@ import Foundation
 /// Three parts, and a server can have any subset: a sentence from a person
 /// (usually the owner), a short list of first things to do, and a list of
 /// channels worth reading. The Counter-Strike capture has a welcome message and
-/// four actions and **no resources**; Orbit Hub has all three.
+/// four actions and **no resources**; another capture has all three.
 public struct ServerGuide: Hashable, Sendable {
     public var guildID: GuildID
     /// Whether the server has actually turned this on. A server can carry the

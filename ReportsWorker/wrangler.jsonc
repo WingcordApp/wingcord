@@ -1,0 +1,75 @@
+// Wingcord's reports service — docs/BUG-REPORTING.md §9.
+//
+// Bug reports and feature ideas arrive from the app (and later the website),
+// land in a private R2 bucket and a D1 index, and are posted to a private
+// Discord channel by the "Wingcord" bot. Nothing here is secret:
+// the bot token and the download-link key are Worker secrets
+// (`wrangler secret put`), declared under `secrets` so a deploy without them
+// fails instead of running half-configured.
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "wingcord-reports",
+	"main": "src/index.ts",
+	// The newest date the installed runtime knows (workerd 2026-11-10).
+	"compatibility_date": "2026-11-10",
+	"compatibility_flags": ["nodejs_compat"],
+
+	// Only reports.wingcord.app answers: no workers.dev address, no preview URLs.
+	"workers_dev": false,
+	"preview_urls": false,
+	"routes": [{ "pattern": "reports.wingcord.app", "custom_domain": true }],
+
+	// The bundle and screenshot of each report. A 90-day lifecycle rule on the
+	// bucket deletes what nothing else has (set at deploy, §7).
+	"r2_buckets": [{ "binding": "BUCKET", "bucket_name": "wingcord-reports" }],
+
+	// The index, in Eastern Europe beside the bucket (created 2026-11-13).
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "wingcord-reports",
+			"database_id": "6311002c-8081-49dc-b0d1-2f6d1015e12b",
+			"migrations_dir": "migrations"
+		}
+	],
+
+	// A burst limit per address, counted by Cloudflare and never written down.
+	// Per location and approximate by design; the per-install and daily limits
+	// in D1 are the exact ones.
+	"ratelimits": [
+		{
+			"name": "IP_LIMITER",
+			"namespace_id": "1001",
+			"simple": { "limit": 10, "period": 60 }
+		}
+	],
+
+	// Every 15 minutes: post what the inbox has not had yet. Daily at 03:17 UTC:
+	// the 90-day clean-up.
+	"triggers": { "crons": ["*/15 * * * *", "17 3 * * *"] },
+
+	"vars": {
+		"PUBLIC_ORIGIN": "https://reports.wingcord.app",
+		// The "Wingcord" application and Alex's server. None of these is secret:
+		// the public key is what checks Discord's signatures.
+		"DISCORD_APPLICATION_ID": "1570681774474928230",
+		"DISCORD_PUBLIC_KEY": "181e4fab02ee5827af7c9b0cdb6b3a9393151e0e64e830eb471ac9d5bc300156",
+		"DISCORD_GUILD_ID": "1569246334869831760",
+		// The private inbox channel.
+		"DISCORD_INBOX_CHANNEL_ID": "1570659886629388451",
+		// The two public forums published reports go to (phase 7).
+		"DISCORD_BUGS_FORUM_ID": "1570702237506871306",
+		"DISCORD_IDEAS_FORUM_ID": "1569694924104925216",
+		"INSTALL_HOURLY_CAP": "5",
+		"DAILY_CAP": "200"
+	},
+	"secrets": { "required": ["DISCORD_BOT_TOKEN", "LINK_KEY"] },
+
+	"observability": {
+		"enabled": true,
+		// No invocation logs: they carry each request's metadata, and this service
+		// keeps no addresses. Its own lines name events and report ids only.
+		"logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": false },
+		"traces": { "enabled": true, "head_sampling_rate": 0.1 }
+	}
+}

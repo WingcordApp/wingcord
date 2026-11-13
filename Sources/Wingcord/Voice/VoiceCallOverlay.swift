@@ -14,7 +14,7 @@ import WingcordCore
 // transcript, so messages read through the call. The band is the call's own
 // surface, the transcript is pushed down by its height rather than covered by
 // it, and a hairline closes it off — reference 22, and Alex: "the call overlay
-// could be a blur, like on Lumen Club".
+// could be a blur, like on [another client]".
 struct VoiceCallOverlay: View {
     var presentation: VoicePresentation
     var effects: [UserID: String]

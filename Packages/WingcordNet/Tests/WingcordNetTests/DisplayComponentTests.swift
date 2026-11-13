@@ -149,10 +149,10 @@ struct DisplayComponentTests {
     @Test("An embed carries its components as a tree")
     func embedComponents() throws {
         let json = """
-        {"type":"components","url":"https://sakura.example","components":[
+        {"type":"components","url":"https://lumen.example","components":[
           {"type":17,"components":[
             {"type":10,"content":"## Lumen Club"},
-            {"type":1,"components":[{"type":2,"style":5,"label":"Website","url":"https://sakura.example"}]}
+            {"type":1,"components":[{"type":2,"style":5,"label":"Website","url":"https://lumen.example"}]}
           ]}
         ]}
         """
@@ -166,13 +166,13 @@ struct DisplayComponentTests {
         #expect(children.first == .text("## Lumen Club"))
     }
 
-    /// **The capture itself** — `the components capture`, the card as
+    /// **The capture itself** — the components capture, the card as
     /// Discord's unfurler sent it, every field intact: ids, spoiler flags, the
     /// picture's placeholder, content type and alt text.
-    @Test("The captured Lumen Club card decodes whole")
-    func capturedLumen Club() throws {
+    @Test("The captured card decodes whole")
+    func capturedCard() throws {
         let json = #"""
-        {"type": "components", "url": "https://example.com/", "content_scan_version": 4, "components": [{"type": 17, "id": 1, "accent_color": 15702980, "components": [{"type": 10, "id": 2, "content": "# Lumen Club\nYour Discord servers, chats, and calls in an app that feels at home on the Mac—with familiar keyboard shortcuts, native menus, and lower memory use. Currently in alpha for macOS 27 and later."}, {"type": 12, "id": 3, "items": [{"media": {"id": "1551005927971902216", "url": "https://example.com/preview.png", "proxy_url": "https://images-ext-1.discordapp.net/external/example/https/example.com/preview.png", "width": 3200, "height": 1680, "placeholder": "iAcGDIAYRWhwlnl5h3jXj3X5uA==", "placeholder_version": 1, "content_type": "image/png", "loading_state": 1, "flags": 0}, "description": "Lumen Club running on a MacBook beneath the Lumen Club wordmark", "spoiler": false}]}, {"type": 1, "id": 4, "components": [{"type": 2, "id": 5, "style": 5, "label": "Website", "url": "https://example.com"}, {"type": 2, "id": 6, "style": 5, "label": "GitHub", "url": "https://github.com/example/lumen"}, {"type": 2, "id": 7, "style": 5, "label": "Discord", "url": "https://discord.gg/example"}]}], "spoiler": false}]}
+        {"type": "components", "url": "https://example.com/", "content_scan_version": 4, "components": [{"type": 17, "id": 1, "accent_color": 15702980, "components": [{"type": 10, "id": 2, "content": "# Lumen\nA made-up app's card: a heading, a picture and three links, as Discord's unfurler sends them."}, {"type": 12, "id": 3, "items": [{"media": {"id": "1551005927971902216", "url": "https://example.com/preview.png", "proxy_url": "https://images-ext-1.discordapp.net/external/example/https/example.com/preview.png", "width": 3200, "height": 1680, "placeholder": "iAcGDIAYRWhwlnl5h3jXj3X5uA==", "placeholder_version": 1, "content_type": "image/png", "loading_state": 1, "flags": 0}, "description": "Lumen running on a MacBook beneath the Lumen wordmark", "spoiler": false}]}, {"type": 1, "id": 4, "components": [{"type": 2, "id": 5, "style": 5, "label": "Website", "url": "https://example.com"}, {"type": 2, "id": 6, "style": 5, "label": "GitHub", "url": "https://github.com/example/lumen"}, {"type": 2, "id": 7, "style": 5, "label": "Discord", "url": "https://discord.gg/example"}]}], "spoiler": false}]}
         """#
         let embed = try JSONDecoder().decode(EmbedDTO.self, from: Data(json.utf8)).domain
         guard case .container(let accent, let children)? = embed.components.first else {
@@ -187,7 +187,7 @@ struct DisplayComponentTests {
         }
         #expect(items.first?.width == 3200)
         #expect(items.first?.placeholder == "iAcGDIAYRWhwlnl5h3jXj3X5uA==")
-        #expect(items.first?.altText == "Lumen Club running on a MacBook beneath the Lumen Club wordmark")
+        #expect(items.first?.altText == "Lumen running on a MacBook beneath the Lumen wordmark")
         #expect(items.first?.isVideo == false)
         #expect(items.first?.isSpoiler == false)
         guard case .row(let row) = children[2] else {

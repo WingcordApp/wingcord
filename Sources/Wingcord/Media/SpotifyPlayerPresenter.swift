@@ -20,9 +20,7 @@ struct SpotifyPlayerPresenter: ViewModifier {
     func body(content: Content) -> some View {
         content.overlay {
             if let session = model.spotifyPlayer {
-                let _ = DiagnosticLog.trace(
-                    "spotify", "panel presenting \(session.card.key) anchor=\(session.anchor)"
-                )
+                let _ = Log.debug(.spotify, .raw("panel presenting anchor=\(session.anchor)"))
                 GeometryReader { proxy in
                     ZStack(alignment: .topLeading) {
                         // Outside-click and Escape, with no event monitor and

@@ -1527,9 +1527,9 @@ private struct StoragePane: View {
             )
             CardDivider()
             SettingsValueRow(
-                title: "Crash reports and traces",
+                title: "Crash reports and the log",
                 value: report.map { SettingsMeterRow.bytes($0.reports) } ?? "—",
-                help: "Saved on this Mac. Never sent anywhere."
+                help: "Kept on this Mac. They leave it only in a bug report you send."
             )
             CardDivider()
             SettingsActionRow(
@@ -1649,6 +1649,7 @@ private struct StorageReport: Sendable {
 
 private struct DiagnosticsPane: View {
     @Environment(AppModel.self) private var model
+    @Bindable private var logging = DetailedLogging.shared
 
     var body: some View {
         SettingsCard {
@@ -1665,25 +1666,56 @@ private struct DiagnosticsPane: View {
             SettingsValueRow(title: "Folders", value: "\(model.folders.count)")
         }
 
-        SettingsGroup("Logging") {
+        // docs/BUG-REPORTING.md D21, D23, D24 and D28: the ways in from here,
+        // the switch a tester is asked to turn on, and what became of what
+        // they sent.
+        SettingsGroup("Bugs and ideas") {
             SettingsCard {
-                SettingsValueRow(
-                    title: "Session trace",
-                    value: DiagnosticLog.isEnabled ? "Recording" : "Off",
-                    help: "Turn on with: defaults write dev.wingcord.Wingcord traceSession -bool YES"
+                SettingsActionRow(
+                    "Report a bug",
+                    help: "Say what went wrong. The report adds what the app was doing, and you can read all of it first.",
+                    actionTitle: "Report…"
+                ) {
+                    Task { await BugReporter.shared.open(.settings, kind: .bug, model: model) }
+                }
+                CardDivider()
+                SettingsActionRow(
+                    "Suggest a feature",
+                    help: "Say what you'd like Wingcord to do, and why. The developer reads every idea.",
+                    actionTitle: "Suggest…"
+                ) {
+                    Task { await BugReporter.shared.open(.settings, kind: .idea, model: model) }
+                }
+                CardDivider()
+                SettingsActionRow(
+                    "Your reports",
+                    help: "What you've sent from this Mac, and what became of it.",
+                    actionTitle: "Show…"
+                ) {
+                    BugReporter.shared.openHistory()
+                }
+                CardDivider()
+                SettingsToggle(
+                    title: "Detailed logging for 10 minutes",
+                    help: "Records every step of the connection and of calls, for when you are asked to make a problem happen again. Turns itself off.",
+                    isOn: $logging.isOnBinding
                 )
+                if logging.isOn {
+                    CardDivider()
+                    DetailedLoggingTimeLeftRow(logging: logging)
+                }
                 CardDivider()
                 SettingsActionRow(
                     "Report folder",
-                    help: "Crash reports and the session trace are written here.",
+                    help: "The log, crash reports and what macOS noticed, kept on this Mac.",
                     actionTitle: "Reveal"
                 ) {
                     NSWorkspace.shared.activateFileViewerSelecting([CrashReporter.reportDirectory])
                 }
             }
             SettingsFootnote(
-                "The trace writes down every step a connection takes, so one that never comes up can be pinned down.",
-                symbolName: "waveform.path.ecg"
+                "The log is always on and never leaves this Mac on its own: about 4 MB, without names, messages or addresses.",
+                symbolName: "lock.shield"
             )
         }
     }
@@ -1752,11 +1784,13 @@ private struct AboutPane: View {
 // MARK: - Bundle
 
 extension Bundle {
-    var shortVersion: String {
+    // Nonisolated: the log's launch line and a bug report read these off the
+    // main actor, and the Info.plist is read-only.
+    nonisolated var shortVersion: String {
         infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
     }
 
-    var buildVersion: String {
+    nonisolated var buildVersion: String {
         infoDictionary?["CFBundleVersion"] as? String ?? "—"
     }
 }

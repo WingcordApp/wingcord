@@ -410,10 +410,7 @@ struct ProfileIdentityPanel: View {
             // on the record. Gated on the trace sink and cold: a banner reports
             // twice in its life.
             .onChange(of: bannerIsPlaying) { _, playing in
-                DiagnosticLog.trace(
-                    "profile",
-                    "banner latch \(playing) plays=\(bannerPlays) \(url.lastPathComponent)"
-                )
+                Log.debug(.ui, "banner latch \(playing) plays=\(bannerPlays) \(public: url.lastPathComponent)")
             }
         }
     }

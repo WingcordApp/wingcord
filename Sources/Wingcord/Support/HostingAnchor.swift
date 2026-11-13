@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import WingcordCore
 
 /// Where SwiftUI's root view starts, inside the window's hosting view.
 ///
@@ -26,10 +27,7 @@ enum PresentationOrigin {
         // from a layout observer and the guard keeps it honest.
         guard origin != value else { return }
         value = origin
-        DiagnosticLog.trace(
-            "anchor",
-            String(format: "swiftui root origin=(%.1f,%.1f)", origin.x, origin.y)
-        )
+        Log.debug(.ui, .raw(String(format: "anchor: swiftui root origin=(%.1f,%.1f)", origin.x, origin.y)))
     }
 }
 
@@ -88,7 +86,7 @@ extension NSView {
         host: NSView,
         result: CGRect
     ) {
-        guard DiagnosticLog.isEnabled else { return }
+        guard Log.isDetailed else { return }
         let window = view.window
         let content = window?.contentView
         let strip = (content?.bounds.height ?? 0) - (window?.contentLayoutRect.height ?? 0)
@@ -102,7 +100,7 @@ extension NSView {
         line += " layoutRect=" + brief(window?.contentLayoutRect ?? .zero)
         line += " strip=" + String(format: "%.1f", strip)
         line += " result=" + brief(result)
-        DiagnosticLog.trace("anchor", line)
+        Log.debug(.ui, .raw("anchor: " + line))
     }
 
     private static func brief(_ rect: CGRect) -> String {

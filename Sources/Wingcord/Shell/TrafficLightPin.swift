@@ -38,6 +38,12 @@ enum TrafficLightPin {
         objc_setAssociatedObject(button, &targetKey, Box(target), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         guard let current: AnyClass = object_getClass(button) else { return false }
         if NSStringFromClass(current).hasPrefix(prefix) { return true }
+        // **Never on top of key-value observing's own subclass.** KVO puts the
+        // object's class back when its last observer goes, which would drop
+        // this one underneath it — or leave KVO restoring a class that is no
+        // longer the object's. The caller's corrections cover the rare button
+        // that is being observed.
+        if NSStringFromClass(current).hasPrefix("NSKVONotifying_") { return false }
         guard let pinned = subclass(of: current) else { return false }
         object_setClass(button, pinned)
         return true

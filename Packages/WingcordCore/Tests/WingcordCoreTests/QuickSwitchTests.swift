@@ -18,7 +18,7 @@ struct QuickSwitchTests {
         #expect(QuickSwitchQuery.parse("@alex").needle == "alex")
         #expect(QuickSwitchQuery.parse("#general").filter == .textChannels)
         #expect(QuickSwitchQuery.parse("!lounge").filter == .voiceChannels)
-        #expect(QuickSwitchQuery.parse("*sakura").filter == .servers)
+        #expect(QuickSwitchQuery.parse("*lumen").filter == .servers)
         #expect(QuickSwitchQuery.parse("$gta").filter == .games)
     }
 

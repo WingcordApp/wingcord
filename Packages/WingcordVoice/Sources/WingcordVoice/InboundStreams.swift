@@ -157,6 +157,9 @@ final class InboundStreams: Sendable {
         /// question of whether media is arriving but unreadable, or not
         /// arriving at all.
         var datagramsReceived = 0
+        /// Every picture handed to a view since the session began — the call's
+        /// stats line reads its frame rate from the difference.
+        var framesDrawnTotal = 0
         /// Every (SSRC, payload type) that opened, and how many times.
         ///
         /// **The reading that says whether media is arriving somewhere nobody
@@ -932,6 +935,7 @@ final class InboundStreams: Sendable {
             return nil
         }
         state.video.drawn += 1
+        state.framesDrawnTotal += 1
         return sample
     }
 
@@ -1188,6 +1192,8 @@ final class InboundStreams: Sendable {
         var datagrams = 0
         var lossPercent = 0
         var jitterMilliseconds: Double = 0
+        /// Pictures drawn since the session began.
+        var framesDrawn = 0
     }
 
     func statistics() -> Summary {
@@ -1207,7 +1213,8 @@ final class InboundStreams: Sendable {
                 received: state.packetsReceived,
                 datagrams: datagrams,
                 lossPercent: worstLoss,
-                jitterMilliseconds: worstJitter
+                jitterMilliseconds: worstJitter,
+                framesDrawn: state.framesDrawnTotal
             )
         }
     }

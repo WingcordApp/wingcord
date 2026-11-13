@@ -33,9 +33,19 @@ public actor GatewaySocket {
         }
     }()
 
+    /// Whether a trace line would be written anywhere: the stderr sink a
+    /// developer turns on, or the log while detailed logging is on.
+    nonisolated static var isTracing: Bool { traceSink != nil || Log.isDetailed }
+
+    /// A protocol-level line: every frame, every key list. **Detailed logging
+    /// only** — it is a line per frame, which the always-on log must never be
+    /// (docs/BUG-REPORTING.md §4); the connection's lifecycle is written with
+    /// `Log.info` where it happens.
     nonisolated static func trace(_ message: @autoclosure () -> String) {
-        guard let traceSink else { return }
-        traceSink(message())
+        guard isTracing else { return }
+        let text = message()
+        traceSink?(text)
+        Log.debug(.gateway, .raw(text))
     }
 
     public enum Event: Sendable {
@@ -195,6 +205,7 @@ public actor GatewaySocket {
         request.setValue("https://discord.com", forHTTPHeaderField: "Origin")
 
         Self.trace("opening \(url.absoluteString)")
+        Log.info(.gateway, "opening the gateway, attempt \(reconnectAttempt + 1)")
         let socket = session.webSocketTask(with: request)
         // **The default cap is 1 MB, and READY is bigger than that.**
         //
@@ -288,6 +299,7 @@ public actor GatewaySocket {
             let envelope = try? JSONDecoder().decode(FrameEnvelope.self, from: data)
             let name = envelope?.t ?? "op \(envelope?.op ?? -1)"
             Self.trace("DECODE FAILED for \(name) (\(data.count) bytes): \(error)")
+            Log.fault(.gateway, "could not decode \(public: name) (\(bytes: data.count)): \(error)")
             Self.log.error("gateway decode failed for \(name, privacy: .public): \(error)")
 
             if envelope?.t == "READY" {
@@ -331,7 +343,10 @@ public actor GatewaySocket {
                     + " | large=\(assets?["large_image"] ?? "-")"
                     + " | buttons=\((activity["buttons"] as? [Any])?.count ?? 0)"
             }
-            trace(
+            // **The developer's stderr only, never the log**: these are the
+            // reader's own activity lines — a game, a song, an editor's file
+            // name — and a report must not carry them.
+            traceSink?(
                 "own session \(info?["client"] ?? "?")/\(info?["os"] ?? "?") \(session["status"] ?? "?"): "
                     + (activities.isEmpty ? "no activities" : activities.joined(separator: " ;; "))
             )
@@ -341,7 +356,7 @@ public actor GatewaySocket {
     /// Names the top-level keys of a READY payload, and the settings shape
     /// inside it. Diagnostic only, and gated on the trace sink being installed.
     nonisolated private static func traceReadyShape(_ data: Data) {
-        guard traceSink != nil else { return }
+        guard isTracing else { return }
         guard
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let body = root["d"] as? [String: Any]
@@ -417,7 +432,7 @@ public actor GatewaySocket {
     /// whose stream this is gets read, and its grammar is one of the things
     /// being captured.
     nonisolated private static func traceStreamFrame(_ name: String, _ data: Data) {
-        guard traceSink != nil else { return }
+        guard isTracing else { return }
         guard
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             var body = root["d"] as? [String: Any]
@@ -448,6 +463,7 @@ public actor GatewaySocket {
             return result
         } catch {
             Self.trace("inflate failed: \(error)")
+            Log.fault(.gateway, "the compression stream failed: \(error)")
             Self.log.error("inflate failed: \(error)")
             // A corrupt stream cannot be recovered by continuing to read it —
             // the shared dictionary is now wrong for every following frame.
@@ -474,11 +490,13 @@ public actor GatewaySocket {
             scheduleReconnect(reason: "server asked for a reconnect", resumable: true)
 
         case .invalidSession(let resumable):
+            Log.info(.gateway, "session invalidated, resumable=\(resumable)")
             if !resumable { sessionID = nil; sequence = nil }
             scheduleReconnect(reason: "session invalidated", resumable: resumable)
 
         case .ready(let ready):
             Self.trace("READY guilds=\(ready.guilds?.count ?? 0) dms=\(ready.private_channels?.count ?? 0)")
+            Log.info(.gateway, "READY guilds=\(ready.guilds?.count ?? 0) dms=\(ready.private_channels?.count ?? 0)")
             reconnectAttempt = 0
             sessionID = ready.session_id
             resumeURL = ready.resume_gateway_url
@@ -503,6 +521,7 @@ public actor GatewaySocket {
             continuation?.yield(.readySupplemental(snapshot))
 
         case .resumed:
+            Log.info(.gateway, "resumed")
             reconnectAttempt = 0
             continuation?.yield(.resumed)
 
@@ -1189,6 +1208,12 @@ public actor GatewaySocket {
             "socket failed: close=\(closeCode.rawValue) reason=\(closeReason ?? "-") "
             + "domain=\(nsError.domain) code=\(nsError.code)"
         )
+        // INVARIANTS §1.5: never a close code without its reason.
+        Log.info(
+            .gateway,
+            "socket closed: code=\(closeCode.rawValue) reason=\(public: closeReason ?? "-") "
+                + "error=\(public: nsError.domain) \(nsError.code)"
+        )
 
         if let outcome = CloseOutcome(closeCode: closeCode.rawValue) {
             switch outcome {
@@ -1278,6 +1303,7 @@ public actor GatewaySocket {
         // After enough attempts it says so and stops.
         if reconnectAttempt > Self.maximumReconnectAttempts {
             Self.trace("giving up after \(reconnectAttempt) attempts")
+            Log.fault(.gateway, "gave up after \(reconnectAttempt) attempts: \(public: reason)")
             continuation?.yield(.disconnected(
                 reason: "Could not reach Discord after several attempts. \(reason)",
                 willRetry: false
@@ -1290,6 +1316,10 @@ public actor GatewaySocket {
         // jitter every client returns simultaneously.
         let base = min(pow(2, Double(min(reconnectAttempt, 6))), 60)
         let delay = base * Double.random(in: 0.8...1.2)
+        Log.info(
+            .gateway,
+            "reconnecting in \(delay, digits: 1)s, attempt \(reconnectAttempt), resume=\(resumable): \(public: reason)"
+        )
         continuation?.yield(.disconnected(reason: reason, willRetry: true))
 
         reconnectTask = Task { [weak self] in

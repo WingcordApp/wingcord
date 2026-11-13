@@ -14,11 +14,11 @@ struct GuildSurfaceTests {
 
     // MARK: Server Guide
 
-    /// Orbit Hub's, which has all three parts.
-    private let Orbit HubGuide = """
+    /// A guide with all three parts.
+    private let fullGuide = """
     {"guild_id":"960000000000000001","enabled":true,
      "welcome_message":{"author_ids":["717245560237175262"],
-       "message":"Hello [@username], glad to meet you here! This is a place where Orbit Hub-related discussions happen."},
+       "message":"Hello [@username], glad to meet you here! This is a place where app-related discussions happen."},
      "new_member_actions":[
        {"channel_id":"964741354341188645","action_type":1,"title":"Tell us about yourself or anything!","description":"","emoji":{"id":null,"name":"\\ud83d\\udc4b\\ud83c\\udffc","animated":false}},
        {"channel_id":"1019953514271314269","action_type":0,"title":"Report an issue","description":"","emoji":{"id":null,"name":"\\ud83d\\udc1b","animated":false}},
@@ -49,7 +49,7 @@ struct GuildSurfaceTests {
 
     @Test("A guide decodes its three parts, in order")
     func guideDecodes() throws {
-        let value = try guide(Orbit HubGuide, 960_000_000_000_000_001)
+        let value = try guide(fullGuide, 960_000_000_000_000_001)
         #expect(value.isEnabled)
         #expect(value.actions.count == 3)
         #expect(value.resources.count == 2)
@@ -67,7 +67,7 @@ struct GuildSurfaceTests {
     /// never arrive.
     @Test("An empty description is no description")
     func emptyDescriptionIsNil() throws {
-        let value = try guide(Orbit HubGuide, 1)
+        let value = try guide(fullGuide, 1)
         #expect(value.actions.allSatisfy { $0.detail == nil })
     }
 

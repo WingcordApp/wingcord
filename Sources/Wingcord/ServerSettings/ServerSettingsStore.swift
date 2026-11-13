@@ -1363,6 +1363,6 @@ final class ServerSettingsStore {
     }
 
     private static func trace(_ message: @autoclosure () -> String) {
-        DiagnosticLog.trace("serverSettings", message())
+        Log.debug(.settings, .raw(message()))
     }
 }

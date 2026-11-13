@@ -7,7 +7,7 @@ import WingcordCore
 @Suite("Media placeholder")
 struct MediaPlaceholderTests {
 
-    /// The Lumen Club card's picture, 3200×1680 (`the components capture`).
+    /// A captured card's picture, 3200×1680 (the components capture).
     @Test("A wide picture's placeholder is 32 wide and keeps roughly its shape")
     func wide() throws {
         let pixels = try #require(MediaPlaceholder.decode(base64: "iAcGDIAYRWhwlnl5h3jXj3X5uA=="))

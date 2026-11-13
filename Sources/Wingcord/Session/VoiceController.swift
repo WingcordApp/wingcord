@@ -392,7 +392,7 @@ final class VoiceController {
             }
             rejoinAttempts += 1
             Self.log.error("voice handshake stalled; re-asking")
-            SessionController.trace("voice handshake stalled, re-asking")
+            Log.info(.voice, "the voice handshake stalled; asking again")
             resendJoin(channelID: channelID, guildID: guildID)
             armWatchdog(channelID: channelID, guildID: guildID)
         }
@@ -440,7 +440,7 @@ final class VoiceController {
         guard let channelID = model.connectedVoiceChannelID else { return }
         guard !model.voiceQuality.isConnected else { return }
         let guildID = model.channelIndex[channelID]?.guildID
-        SessionController.trace("gateway returned while voice was down; re-asking")
+        Log.info(.voice, "the gateway came back while voice was down; asking again")
         rejoinAttempts = 0
         resendJoin(channelID: channelID, guildID: guildID)
         armWatchdog(channelID: channelID, guildID: guildID)
@@ -513,7 +513,7 @@ final class VoiceController {
     }
 
     func apply(server: VoiceServer) {
-        SessionController.trace("voice server: \(server.endpoint) for \(server.serverID)")
+        Log.info(.voice, "voice server assigned: \(public: server.endpoint)")
         pendingServer = server
         connectIfReady()
     }
@@ -709,7 +709,7 @@ final class VoiceController {
             )
             return
         }
-        SessionController.trace("voice handshake starting")
+        Log.info(.voice, "voice handshake starting")
 
         let channel = joiningChannelID.flatMap { model.channelIndex[$0] }
         let engine = MediaSession(
@@ -800,7 +800,7 @@ final class VoiceController {
                 }
             case .failed(let reason):
                 Self.log.error("voice failed: \(reason, privacy: .public)")
-                SessionController.trace("voice failed: \(reason)")
+                Log.fault(.voice, "the call failed: \(public: reason)")
                 model.voiceQuality.isConnected = false
                 // **Say why.** A call that closes itself a second after it
                 // opened, with nothing on screen to say what happened, reads as
@@ -1102,7 +1102,7 @@ final class VoiceController {
                 do {
                     try await capture.update(quality: quality)
                 } catch {
-                    SessionController.trace("share quality refused: \(error)")
+                    Log.fault(.share, "share quality refused: \(error)")
                 }
             }
         }
@@ -1182,7 +1182,7 @@ final class VoiceController {
         draftShare = nil
         model.screenShareSource = nil
         model.goLivePreview = .empty
-        SessionController.trace("share preview stopped: \(reason)")
+        Log.info(.share, "share preview stopped: \(public: reason)")
     }
 
     private func discardDraft() {
@@ -1217,7 +1217,7 @@ final class VoiceController {
         // picture once the session routes it.
         capture.route(ScreenShareCapture.Outputs(stopped: { [weak self] reason in
             Task { @MainActor in
-                SessionController.trace("stream capture ended: \(reason)")
+                Log.info(.share, "stream capture ended: \(public: reason)")
                 self?.stopScreenShare()
             }
         }))
@@ -1413,7 +1413,7 @@ final class VoiceController {
             model.voiceRevision &+= 1
 
         case .state(.failed(let reason)):
-            SessionController.trace("stream watch failed: \(reason)")
+            Log.fault(.share, "watching a stream failed: \(public: reason)")
             model.reportActionFailure(reason)
             stopWatchingStream()
 
@@ -1485,7 +1485,7 @@ final class VoiceController {
             model.voiceRevision &+= 1
 
         case .state(.failed(let reason)):
-            SessionController.trace("stream failed: \(reason)")
+            Log.fault(.share, "the stream failed: \(public: reason)")
             // Said out loud, for the reason a failed call is: a share that
             // stops a second after it started, with nothing on screen to say
             // why, reads as the feature being broken.
@@ -1501,10 +1501,11 @@ final class VoiceController {
             // the app then draws nowhere, so it goes to the trace: that is
             // where "is this share actually end-to-end encrypted" gets
             // answered until a shield of its own exists.
-            SessionController.trace("stream encryption: \(state)")
+            // The state's word only: an end-to-end state carries its verification code.
+            Log.info(.share, "stream encryption: \(public: state.logWord)")
 
         case .captureEnded(let reason):
-            SessionController.trace("stream capture ended: \(reason)")
+            Log.info(.share, "stream capture ended: \(public: reason)")
             stopScreenShare()
 
         default:

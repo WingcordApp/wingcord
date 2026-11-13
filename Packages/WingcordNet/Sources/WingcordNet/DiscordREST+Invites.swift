@@ -188,7 +188,7 @@ struct InviteDTO: Decodable, Sendable {
     var expires_at: String?
     var approximate_member_count: Int?
     var approximate_presence_count: Int?
-    /// The server's profile — captured on `invites.har`'s Lumen Club invite,
+    /// The server's profile — captured on `invites.har`'s server invite,
     /// the same object `/guilds/{id}/profile` answers with. Discord's current
     /// server card is drawn from nothing else.
     var profile: GuildProfileDTO?

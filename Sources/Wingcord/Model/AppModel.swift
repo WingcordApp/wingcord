@@ -1960,7 +1960,8 @@ final class AppModel {
     /// `WebContent` processes, and there is no arrangement in which somebody
     /// wanted either.
     func openSpotifyPlayer(_ card: SpotifyUnfurl, anchor: CGRect) {
-        DiagnosticLog.trace("spotify", "open player \(card.key) anchor=\(anchor)")
+        // Not the card's key: it names what the reader is listening to.
+        Log.debug(.spotify, .raw("open player anchor=\(anchor)"))
         spotifyPlayerStorage?.stop()
         // The drawn preview and the real player are two ways to hear the same
         // thing, so one starting stops the other.

@@ -23,26 +23,23 @@ struct WingcordApp: App {
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: .main
-        ) { _ in CrashReporter.finishCleanly() }
+        ) { _ in
+            AppLog.finish()
+            CrashReporter.finishCleanly()
+        }
         // What the system saw of earlier runs — a hang, a crash it caught —
         // filed beside the app's own reports.
         SystemDiagnostics.shared.start()
-        if DiagnosticLog.isEnabled {
-            GatewaySocket.traceSink = { message in
-                DiagnosticLog.trace("gateway", message)
-            }
-            DiscordREST.traceSink = { message in
-                DiagnosticLog.trace("rest", message)
-            }
-            // **The voice handshake is four steps, DAVE's is nine more, and
-            // every way either fails is silent**, so the whole stack gets a
-            // sink. Without this a call that never comes up produces exactly
-            // as much evidence as one that does: none.
-            VoiceTrace.sink = { message in
-                DiagnosticLog.trace("voice", message)
-            }
-        }
-        DiagnosticLog.trace("app", "launched")
+        // **The log, before anything else can write to it** — the network and
+        // voice packages write straight into it (docs/BUG-REPORTING.md D18).
+        AppLog.start()
+        // How the last run ended — a crash, a hang somebody force-quit — read
+        // before this run can leave anything of its own (D19, D21).
+        PreviousRun.review()
+        // Stalls and hangs on the main thread, from here on (D19).
+        MainThreadWatchdog.shared.start()
+        // A detailed-logging window a relaunch interrupted carries on (D23).
+        DetailedLogging.shared.restore()
         // The theme, before anything can paint with it.
         //
         // `Palette` would build this store lazily on its first read anyway, but
@@ -154,6 +151,9 @@ struct WingcordApp: App {
                 // game page — and a switcher that opened underneath the surface
                 // it was summoned from would be invisible.
                 .presentsQuickSwitcher()
+                // Help ▸ Report a Bug…, `/bug`, and the question after a crash
+                // (docs/BUG-REPORTING.md D21).
+                .presentsBugReport()
                 // **After every presenter**, so a card is over whatever raised
                 // it — a profile, the switcher, the events.
                 .hostsModals(publish: { model.isModalShown = $0 })
@@ -586,6 +586,15 @@ struct WingcordCommands: Commands {
         // whose whole content is that it does nothing. These are the three
         // things somebody opening this menu can actually be given today.
         CommandGroup(replacing: .help) {
+            // The HIG's place for an app's own feedback item: first, apart
+            // from the rest (docs/BUG-REPORTING.md D21).
+            Button("Report a Bug…") {
+                Task { await BugReporter.shared.open(.menu, kind: .bug, model: model) }
+            }
+            Button("Suggest a Feature…") {
+                Task { await BugReporter.shared.open(.menu, kind: .idea, model: model) }
+            }
+            Divider()
             Button("Keyboard Shortcuts…") { SettingsWindow.open(.shortcuts) }
             Button("Reveal Logs in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([CrashReporter.reportDirectory])

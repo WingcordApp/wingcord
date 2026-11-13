@@ -157,7 +157,7 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
     }
 
     nonisolated static func trace(_ message: @autoclosure () -> String) {
-        DiagnosticLog.trace("activity", message())
+        Log.debug(.games, .raw("activity: " + message()))
     }
 
     private func handle(_ frame: ActivityFrameMessage) {

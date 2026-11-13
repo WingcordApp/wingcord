@@ -57,7 +57,7 @@ nonisolated enum EventCalendarFile {
             try Data(contents.utf8).write(to: file)
             NSWorkspace.shared.open(file)
         } catch {
-            DiagnosticLog.trace("events", "calendar file failed: \(error.localizedDescription)")
+            Log.info(.app, "the calendar file could not be written: \(error)")
         }
     }
 

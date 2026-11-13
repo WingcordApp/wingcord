@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Observation
 import WingcordVoice
+import WingcordCore
 
 // MARK: - The settings pane's own microphone
 //
@@ -91,7 +92,7 @@ final class VoiceTestRig {
                 processing: settings.resolvedProcessing
             )
         } catch {
-            DiagnosticLog.trace("voice", "mic check engine would not start: \(error)")
+            Log.fault(.voice, "the mic check's engine would not start: \(error)")
             return
         }
         isRunning = true

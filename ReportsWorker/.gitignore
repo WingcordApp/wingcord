@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+dist/
+# Local secrets for `wrangler dev` — never committed; deployed secrets are set with `wrangler secret put`.
+.dev.vars*
+.env*

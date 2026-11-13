@@ -75,12 +75,12 @@ final class MessageNotifier: NSObject {
         hasRequestedAuthorization = true
         do {
             isAuthorized = try await centre.requestAuthorization(options: [.alert, .sound, .badge])
-            DiagnosticLog.trace("notify", "authorised: \(isAuthorized)")
+            Log.info(.notify, "authorised: \(isAuthorized)")
         } catch {
             // A refusal is not a failure worth telling anybody about — they
             // refused. The app works; it simply stays quiet.
             isAuthorized = false
-            DiagnosticLog.trace("notify", "authorisation failed: \(error)")
+            Log.info(.notify, "authorisation failed: \(error)")
         }
     }
 

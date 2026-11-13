@@ -661,7 +661,7 @@ private struct TravellingToolbarTitle: View {
 /// for attention.
 ///
 /// **The pill hugs its label — its width IS the text's width**, so "Lumen Club"
-/// and "Krxqz | Cfgs, Clients and more" are visibly different objects rather
+/// and "Pixel Forge | Mods, Tools and more" are visibly different objects rather
 /// than the same slab with different contents. `.fixedSize()` before the glass
 /// is what does it: the material has to be applied to the final hugged geometry,
 /// and a `.frame(maxWidth:)` anywhere above it defeats the whole effect.
