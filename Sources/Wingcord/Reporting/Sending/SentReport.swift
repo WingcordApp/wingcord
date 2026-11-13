@@ -22,6 +22,17 @@ nonisolated struct SentReport: Codable, Identifiable, Hashable, Sendable {
             case .expired: "Expired"
             }
         }
+
+        /// An idea is added rather than fixed, and not planned rather than
+        /// not fixed — the words its forum post wears (docs/BUG-REPORTING.md D27).
+        func title(for kind: ReportKind) -> String {
+            guard kind == .idea else { return title }
+            switch self {
+            case .fixed: return "Added"
+            case .wontfix: return "Not Planned"
+            default: return title
+            }
+        }
     }
 
     /// Where a published report can be followed (phase 7).

@@ -32,7 +32,7 @@ struct SentReportRow: View {
                 Link(destination: post) { Image(systemName: "bubble.left.and.bubble.right") }
                     .help("Open it in the Wingcord Discord server")
             }
-            ReportStatusPill(status: report.status)
+            ReportStatusPill(status: report.status, kind: report.kind)
         }
         .padding(.vertical, Spacing.snug)
         .contentShape(Rectangle())

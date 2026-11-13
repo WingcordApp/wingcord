@@ -2,10 +2,11 @@
 //
 // Bug reports and feature ideas arrive from the app (and later the website),
 // land in a private R2 bucket and a D1 index, and are posted to a private
-// Discord channel by the "Wingcord" bot. Nothing here is secret:
-// the bot token and the download-link key are Worker secrets
-// (`wrangler secret put`), declared under `secrets` so a deploy without them
-// fails instead of running half-configured.
+// Discord channel by the "Wingcord" bot; Alex publishes the confirmed ones as
+// GitHub issues and forum posts (phase 7). Nothing here is secret: the bot
+// token, the download-link key and the GitHub App's key and webhook secret
+// are Worker secrets (`wrangler secret put`), declared under `secrets` so a
+// deploy without them fails instead of running half-configured.
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
 	"name": "wingcord-reports",
@@ -57,13 +58,22 @@
 		"DISCORD_GUILD_ID": "1569246334869831760",
 		// The private inbox channel.
 		"DISCORD_INBOX_CHANNEL_ID": "1570659886629388451",
-		// The two public forums published reports go to (phase 7).
+		// The two public forums published reports go to (phase 7). Their tags are
+		// found by name — Bug, Crash, Fixed, Won't Fix; Idea, Planned, Added, Not
+		// Planned (FORUM_TAGS in src/config.ts).
 		"DISCORD_BUGS_FORUM_ID": "1570702237506871306",
 		"DISCORD_IDEAS_FORUM_ID": "1569694924104925216",
+		// Where published reports become issues (phase 7).
+		"GITHUB_REPOSITORY": "WingcordApp/wingcord",
+		// The "Wingcord Reports" GitHub App's client ID — public, it names the App
+		// in its tokens. Filled in by scripts/github-app.py when the App is made.
+		"GITHUB_APP_CLIENT_ID": "Iv23liQWVF9bNaXU6Lt7",
 		"INSTALL_HOURLY_CAP": "5",
 		"DAILY_CAP": "200"
 	},
-	"secrets": { "required": ["DISCORD_BOT_TOKEN", "LINK_KEY"] },
+	"secrets": {
+		"required": ["DISCORD_BOT_TOKEN", "LINK_KEY", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET"]
+	},
 
 	"observability": {
 		"enabled": true,

@@ -5,8 +5,17 @@
 // so `[x](url)` is not a link, `<@id>` not a mention, `https://` not even
 // clickable — and every message carries `allowed_mentions: { parse: [] }`.
 
-import { AREA_TITLES, LIMITS, type Origin } from "./config";
+import { AREA_TITLES, LIMITS, type IssueState, type Origin } from "./config";
 import { pendingParts, type RepeatRow, type ReportRow } from "./store";
+
+/** Where a published report lives (phase 7). */
+export interface Published {
+	number: number;
+	state: IssueState;
+	issueUrl: string;
+	/** Null while the post is still to be made. */
+	postUrl: string | null;
+}
 
 export interface Embed {
 	title: string;
@@ -49,9 +58,16 @@ function variant(report: ReportRow): Variant {
 	return report.crash_kind ?? "bug";
 }
 
-export function inboxMessage(report: ReportRow, latest: RepeatRow | null, now: number): MessageBody {
+export function inboxMessage(
+	report: ReportRow,
+	latest: RepeatRow | null,
+	now: number,
+	published: Published | null = null,
+): MessageBody {
 	const kind = variant(report);
 	const open = report.status === "open";
+	// Open on GitHub, whether the inbox finished publishing or not.
+	const live = published !== null && published.state === "open" && (open || report.status === "published");
 	const fields: Embed["fields"] = [];
 
 	if (report.details) {
@@ -62,14 +78,24 @@ export function inboxMessage(report: ReportRow, latest: RepeatRow | null, now: n
 	}
 	if (report.crash_kind) fields.push({ name: kind === "hang" ? "Freeze" : "Crash", value: crashText(report) });
 	fields.push({ name: "Mac", value: macText(report) });
+	if (report.reporter) fields.push({ name: "Sent by", value: `<@${report.reporter}>`, inline: true });
 	fields.push({ name: "Files", value: filesText(report, now) });
 	if (report.count > 1) fields.push({ name: `Seen ${report.count} times`, value: repeatText(report, latest) });
-	if (!open) fields.push({ name: "Status", value: statusText(report) });
+	if (published) fields.push({ name: "Published", value: publishedText(report, published) });
+	if (!open) fields.push({ name: "Status", value: statusText(report, published) });
 
 	const buttons: Button[] = [];
-	if (open) {
-		const hasFiles = report.bundle_size !== null || report.screenshot_size !== null;
+	const hasFiles = report.bundle_size !== null || report.screenshot_size !== null;
+	if (open && report.issue_number === null) {
+		buttons.push({ type: 2, style: 1, label: "Publish…", custom_id: `publish:${report.id}` });
+		buttons.push({ type: 2, style: 2, label: "Same as…", custom_id: `same:${report.id}` });
+	} else if (open && live) {
+		// The issue was made and something after it failed: the press makes only what's missing.
+		buttons.push({ type: 2, style: 1, label: "Finish Publishing", custom_id: `publish:${report.id}` });
+	}
+	if (open || live) {
 		buttons.push({ type: 2, style: 2, label: "Download", custom_id: `download:${report.id}`, disabled: !hasFiles });
+		// On a published report, Solve closes its issue (D27).
 		buttons.push({ type: 2, style: 3, label: "Solve", custom_id: `solve:${report.id}` });
 	}
 
@@ -79,7 +105,7 @@ export function inboxMessage(report: ReportRow, latest: RepeatRow | null, now: n
 			{
 				title: `${MARKS[kind]} ${report.id} · ${AREA_TITLES[report.area]}`,
 				description: report.summary ? clip(escapeMarkdown(report.summary), 1500) : "*No words left — expired.*",
-				color: open ? COLORS[kind] : COLORS.closed,
+				color: open || live ? COLORS[kind] : COLORS.closed,
 				fields,
 				footer: { text: originText(report.origin, report.kind) },
 				timestamp: new Date(report.created_at * 1000).toISOString(),
@@ -91,7 +117,13 @@ export function inboxMessage(report: ReportRow, latest: RepeatRow | null, now: n
 }
 
 function macText(report: Pick<ReportRow, "app_version" | "app_build" | "macos" | "model" | "chip">): string {
-	const parts = [`Wingcord ${report.app_version} (${report.app_build})`, `macOS ${report.macos}`];
+	// The forums' form leaves the versions to the sender, who may not give them.
+	const parts = [
+		report.app_version
+			? `Wingcord ${report.app_version}${report.app_build ? ` (${report.app_build})` : ""}`
+			: "Wingcord version not given",
+	];
+	if (report.macos) parts.push(`macOS ${report.macos}`);
 	if (report.model) parts.push(report.model);
 	if (report.chip) parts.push(report.chip);
 	return parts.join(" · ");
@@ -112,7 +144,10 @@ function crashText(report: ReportRow): string {
 }
 
 function filesText(report: ReportRow, now: number): string {
-	if (report.status !== "open") return "Deleted when it was closed.";
+	if (report.status !== "open" && report.status !== "published") return "Deleted when it was closed.";
+	if (report.status === "published" && report.bundle_size === null && report.screenshot_size === null && report.closed_at) {
+		return "Deleted when its issue was closed.";
+	}
 	const waiting = pendingParts(report);
 	const late = report.created_at < now - LIMITS.partsGraceSeconds;
 	const lines: string[] = [];
@@ -133,18 +168,27 @@ function repeatText(report: ReportRow, latest: RepeatRow | null): string {
 	return lines.join("\n");
 }
 
-function statusText(report: ReportRow): string {
+function publishedText(report: ReportRow, published: Published): string {
+	const issue = `[#${published.number}](${published.issueUrl}) on GitHub`;
+	if (!published.postUrl) return `${issue} · the forum post isn't made yet`;
+	const post = `[the post](${published.postUrl}) in ${report.kind === "idea" ? "#suggestions" : "#bug-reports"}`;
+	return `${issue} · ${post}`;
+}
+
+function statusText(report: ReportRow, published: Published | null): string {
 	const by = report.closed_by ? ` by <@${report.closed_by}>` : "";
 	const when = report.closed_at ? ` <t:${report.closed_at}:R>` : "";
+	const idea = report.kind === "idea";
 	switch (report.status) {
 		case "solved":
 			return `Solved${by}${when}.`;
 		case "published":
-			return "Published.";
+			if (published?.state === "duplicate") return `Closed on GitHub as a duplicate${when}.`;
+			return published?.state === "open" ? "Published — Solve closes the issue." : "Published.";
 		case "fixed":
-			return `Fixed${when}.`;
+			return `${idea ? "Added" : "Fixed"}${by}${when}.`;
 		case "wontfix":
-			return `Won't fix${when}.`;
+			return `${idea ? "Not planned" : "Won't fix"}${when}.`;
 		default:
 			return "Open.";
 	}
@@ -164,6 +208,8 @@ function originText(origin: Origin, kind: ReportRow["kind"]): string {
 			return "Sent after a freeze";
 		case "web":
 			return "From wingcord.app";
+		case "discord":
+			return kind === "idea" ? "From the #suggestions form" : "From the #bug-reports form";
 	}
 }
 

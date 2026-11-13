@@ -35,9 +35,9 @@ export type Validation =
 	| { ok: true; value: ReportInput }
 	| { ok: false; field: string; problem: string };
 
-const VERSION = /^\d{1,4}(\.\d{1,4}){0,3}$/;
-const BUILD = /^\d{1,9}$/;
-const MACOS = /^\d{1,3}(\.\d{1,3}){0,2}$/;
+export const VERSION = /^\d{1,4}(\.\d{1,4}){0,3}$/;
+export const BUILD = /^\d{1,9}$/;
+export const MACOS = /^\d{1,3}(\.\d{1,3}){0,2}$/;
 /** `Mac17,2`, `MacBookPro18,3`, `VirtualMac2,1`. */
 const MODEL = /^[A-Za-z]{2,24}\d{1,3},\d{1,3}$/;
 const CHIP = /^[A-Za-z0-9 ()®™.,@-]{1,64}$/;

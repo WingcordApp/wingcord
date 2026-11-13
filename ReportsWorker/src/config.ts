@@ -40,15 +40,70 @@ export const AREA_TITLES: Record<Area, string> = {
 	other: "Something Else",
 };
 
-/** Where the sheet was opened — `web` is the website's form (phase 8). */
+/** Where the sheet was opened — what a sender may claim. `web` is the website's form (phase 8). */
 export const ORIGINS = ["menu", "command", "settings", "afterCrash", "afterHang", "web"] as const;
-export type Origin = (typeof ORIGINS)[number];
+/** …and `discord`: the pinned posts' form (phase 7), which only the Worker itself records. */
+export type Origin = (typeof ORIGINS)[number] | "discord";
 
 export const PARTS = ["bundle", "screenshot"] as const;
 export type Part = (typeof PARTS)[number];
 
 export const STATUSES = ["open", "solved", "published", "fixed", "wontfix"] as const;
 export type Status = (typeof STATUSES)[number];
+
+/** A published issue's state, as GitHub's events leave it (D27, D34). */
+export const ISSUE_STATES = ["open", "fixed", "wontfix", "duplicate"] as const;
+export type IssueState = (typeof ISSUE_STATES)[number];
+
+// MARK: Publishing (phase 7)
+
+/** GitHub's REST API, as the App calls it. */
+export const GITHUB = {
+	api: "https://api.github.com",
+	web: "https://github.com",
+	version: "2022-11-28",
+	userAgent: "wingcord-reports (https://wingcord.app)",
+} as const;
+
+/** The organization's issue types (Bug, Feature and Task exist on WingcordApp). */
+export const ISSUE_TYPES: Record<Kind, string> = { bug: "Bug", idea: "Feature" };
+
+/** The repository's labels: `bug` `crash` `idea` `planned` exist; the area labels come with phase 7. */
+export const LABELS = { bug: "bug", idea: "idea", crash: "crash", planned: "planned" } as const;
+
+/** An area's label on GitHub. A crash has the `crash` label instead; "Something Else" has none. */
+export const AREA_LABELS: Record<Area, string | null> = {
+	messages: "area: messages",
+	voice: "area: voice",
+	video: "area: video",
+	screenShare: "area: screen share",
+	notifications: "area: notifications",
+	profiles: "area: profiles",
+	servers: "area: servers & channels",
+	appearance: "area: appearance",
+	settings: "area: settings",
+	performance: "area: speed & freezes",
+	crash: null,
+	signIn: "area: signing in",
+	other: null,
+};
+
+/**
+ * The forums' tags by name, as they are in the server (§7): `#bug-reports`
+ * has Bug, Crash, Fixed and Won't Fix; `#suggestions` Idea, Planned, Added
+ * and Not Planned. Their ids are read from the forum when needed, and names
+ * are matched without regard to case or the kind of apostrophe.
+ */
+export const FORUM_TAGS = {
+	bug: "Bug",
+	crash: "Crash",
+	fixed: "Fixed",
+	wontfix: "Won't Fix",
+	idea: "Idea",
+	planned: "Planned",
+	added: "Added",
+	notPlanned: "Not Planned",
+} as const;
 
 export interface PartSpec {
 	contentType: string;
@@ -92,6 +147,20 @@ export const LIMITS = {
 	/** A post that was claimed and never finished is retried after this. */
 	inboxClaimSeconds: 10 * 60,
 	retentionDays: 90,
+	/** A post's name on Discord, and so the issue's title. */
+	title: 100,
+	/** A form's text field (Discord's own limit). */
+	formText: 4000,
+	/** A GitHub event: an issue's is tens of KB. */
+	webhookBytes: 1024 * 1024,
+	/** How long a press of Publish… holds its report. */
+	publishClaimSeconds: 120,
+	/** Inbox messages redrawn after one change to an issue — the free plan allows 50 calls out. */
+	redraws: 20,
+	/** The Macs listed under "Seen on". */
+	seen: 20,
+	/** The open issues Same as… offers (a select holds 25). */
+	sameAsChoices: 25,
 } as const;
 
 /** The two crons in wrangler.jsonc. */

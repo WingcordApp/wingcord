@@ -45,7 +45,7 @@ export async function sha256Hex(text: string): Promise<string> {
 	return hex(await crypto.subtle.digest("SHA-256", encoder.encode(text)));
 }
 
-export async function hmacHex(secret: string, message: string): Promise<string> {
+export async function hmacHex(secret: string, message: string | Uint8Array): Promise<string> {
 	const key = await crypto.subtle.importKey(
 		"raw",
 		encoder.encode(secret),
@@ -53,7 +53,8 @@ export async function hmacHex(secret: string, message: string): Promise<string> 
 		false,
 		["sign"],
 	);
-	return hex(await crypto.subtle.sign("HMAC", key, encoder.encode(message)));
+	const bytes = typeof message === "string" ? encoder.encode(message) : message;
+	return hex(await crypto.subtle.sign("HMAC", key, bytes));
 }
 
 /** Equal without saying where they differ: both are hashed to one length first. */
@@ -91,4 +92,62 @@ export function concat(...parts: Uint8Array[]): Uint8Array {
 		offset += part.byteLength;
 	}
 	return joined;
+}
+
+/** Standard base 64, whitespace ignored. */
+export function fromBase64(text: string): Uint8Array {
+	return Uint8Array.from(atob(text.replace(/\s+/g, "")), (character) => character.charCodeAt(0));
+}
+
+// MARK: The GitHub App's key
+
+/**
+ * A private key in PEM as Web Crypto takes it (PKCS #8). GitHub hands an
+ * App's key out as PKCS #1 (`BEGIN RSA PRIVATE KEY`), which Web Crypto
+ * cannot import, so that is wrapped in PKCS #8's envelope here; a key
+ * already in PKCS #8 passes through. A secret pasted with its line breaks
+ * written as `\n` is read too.
+ */
+export function pkcs8FromPem(pem: string): Uint8Array {
+	const text = pem.replace(/\\n/g, "\n");
+	const match = /-----BEGIN (RSA )?PRIVATE KEY-----([^-]+)-----END (RSA )?PRIVATE KEY-----/.exec(text);
+	if (!match) throw new Error("the GitHub App's key is not a PEM private key");
+	const der = fromBase64(match[2]!);
+	return match[1] ? wrapPkcs1(der) : der;
+}
+
+/** PrivateKeyInfo ::= SEQUENCE { version 0, AlgorithmIdentifier { rsaEncryption, NULL }, OCTET STRING { the PKCS #1 key } } */
+function wrapPkcs1(pkcs1: Uint8Array): Uint8Array {
+	const version = Uint8Array.of(0x02, 0x01, 0x00);
+	// SEQUENCE { OID 1.2.840.113549.1.1.1, NULL }
+	const algorithm = Uint8Array.of(0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00);
+	return derElement(0x30, concat(version, algorithm, derElement(0x04, pkcs1)));
+}
+
+function derElement(tag: number, content: Uint8Array): Uint8Array {
+	const length = content.byteLength;
+	let header: Uint8Array;
+	if (length < 0x80) {
+		header = Uint8Array.of(tag, length);
+	} else {
+		const bytes: number[] = [];
+		for (let rest = length; rest > 0; rest = Math.floor(rest / 256)) bytes.unshift(rest % 256);
+		header = Uint8Array.of(tag, 0x80 | bytes.length, ...bytes);
+	}
+	return concat(header, content);
+}
+
+/** A JSON Web Token signed with RS256, as GitHub asks of an App. */
+export async function signJwt(pem: string, claims: Record<string, unknown>): Promise<string> {
+	const key = await crypto.subtle.importKey(
+		"pkcs8",
+		pkcs8FromPem(pem),
+		{ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+	const head = base64url(encoder.encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
+	const body = base64url(encoder.encode(JSON.stringify(claims)));
+	const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, encoder.encode(`${head}.${body}`));
+	return `${head}.${body}.${base64url(new Uint8Array(signature))}`;
 }

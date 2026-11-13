@@ -1,0 +1,35 @@
+name: Feature idea
+description: Something you'd like Wingcord to do.
+labels: ["idea"]
+type: Feature
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like Wingcord to do?
+      placeholder: Pin a conversation to the top of the sidebar
+    validations:
+      required: true
+  - type: textarea
+    id: use
+    attributes:
+      label: How would you use it?
+      placeholder: I keep three chats open all day and lose them among the rest
+  # The area's label is added from this answer (.github/workflows/issue-triage.yml).
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where in Wingcord?
+      options:
+        - Messages
+        - Voice
+        - Video
+        - Screen Share
+        - Notifications
+        - Profiles
+        - Servers & Channels
+        - Appearance
+        - Settings
+        - Speed & Freezes
+        - Signing In
+        - Something Else

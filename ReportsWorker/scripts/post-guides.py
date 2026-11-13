@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """The two pinned, locked how-to posts in the public forums, as the
-"Wingcord" bot: each an embed with links under it. Run by Alex, from Terminal:
+"Wingcord" bot: each an embed with a button and links under it. The button —
+Report a bug, or Suggest a feature — opens a form for anyone in the server
+(phase 7, docs/BUG-REPORTING.md D32); it needs the Worker that answers it, so
+this is run again after that deploy. Run by Alex, from Terminal:
 
     python3 ~/Desktop/Wingcord-macOS/ReportsWorker/scripts/post-guides.py
 
@@ -25,7 +28,7 @@ PINNED = 1 << 1
 COLOR = 0xFF7B1C
 TRACKER = "https://github.com/WingcordApp/wingcord"
 
-BUG_GUIDE = """Found something that doesn't work? Report it from Wingcord: **Help ▸ Report a Bug…**, or type `/bug` in any message box — it's never sent to Discord.
+BUG_GUIDE = """Found something that doesn't work? Report it from Wingcord: **Help ▸ Report a Bug…**, or type `/bug` in any message box — it's never sent to Discord. Can't open Wingcord? Press **Report a bug** below.
 
 **How it works**
 1. Say what happened, and how to make it happen again if you know.
@@ -37,7 +40,7 @@ BUG_GUIDE = """Found something that doesn't work? Report it from Wingcord: **Hel
 
 -# Offline? Use **Save Report…** and send the file when you're asked for it. Security problems: send them from the app only — they reach the developer privately."""
 
-IDEA_GUIDE = """Have an idea for Wingcord? Send it from the app: **Help ▸ Suggest a Feature…**, or type `/idea` in any message box — it's never sent to Discord.
+IDEA_GUIDE = """Have an idea for Wingcord? Send it from the app: **Help ▸ Suggest a Feature…**, or type `/idea` in any message box — it's never sent to Discord. Or press **Suggest a feature** below.
 
 **How it works**
 1. Say what you'd like Wingcord to do, and how you'd use it — the situation you're in matters more than the exact solution.
@@ -53,12 +56,18 @@ def link(label, url):
     return {"type": 2, "style": 5, "label": label, "url": url}
 
 
+def form(label, custom_id, emoji):
+    """A button the Worker answers with a form (reports.wingcord.app/discord)."""
+    return {"type": 2, "style": 1, "label": label, "custom_id": custom_id, "emoji": {"name": emoji}}
+
+
 GUIDES = [
     {
         "forum": BUGS_FORUM,
         "title": "📌 How to report a bug",
         "embed": {"title": "🐛 Report a bug", "description": BUG_GUIDE, "color": COLOR},
         "links": [
+            form("Report a bug", "guide:bug", "🐞"),
             link("Browse the tracker", f"{TRACKER}/issues?q=is%3Aissue%20label%3Abug"),
             link("Report on GitHub", f"{TRACKER}/issues/new?template=bug_report.yml"),
         ],
@@ -68,6 +77,7 @@ GUIDES = [
         "title": "📌 How to suggest a feature",
         "embed": {"title": "💡 Suggest a feature", "description": IDEA_GUIDE, "color": COLOR},
         "links": [
+            form("Suggest a feature", "guide:idea", "💡"),
             link("Browse ideas", f"{TRACKER}/issues?q=is%3Aissue%20label%3Aidea"),
             link("Suggest on GitHub", f"{TRACKER}/issues/new?template=feature_idea.yml"),
         ],

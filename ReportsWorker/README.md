@@ -6,9 +6,11 @@ The service behind Help ▸ Report a Bug… and Suggest a Feature…: a Cloudfla
 ```
 POST /v1/reports                         the report's JSON → { id, key, upload, repeat }
 PUT  /v1/reports/:id/bundle|screenshot   each part it announced, with the key
-GET  /v1/reports/:id                     its status, with the key
+GET  /v1/reports/:id                     its status and, once published, its links — with the key
 GET  /v1/files/:id/bundle|screenshot     a signed ten-minute download link (Alex's)
-POST /discord                            the inbox's buttons (Discord interactions)
+GET  /v1/published/:id.png               a screenshot published with an issue (public)
+POST /discord                            the inbox's buttons and forms, the pinned posts' form
+POST /github                             the GitHub App's events (signed)
 ```
 
 ## Run it here
@@ -21,8 +23,9 @@ npx wrangler d1 migrations apply wingcord-reports --local
 npm run dev              # http://localhost:8787, local bucket and database
 ```
 
-`wrangler dev` reads `.dev.vars` (ignored by git) for the two secrets, e.g. `LINK_KEY=local-dev-only` and an
-empty `DISCORD_BOT_TOKEN`, which leaves the inbox off.
+`wrangler dev` reads `.dev.vars` (ignored by git) for the four secrets, e.g. `LINK_KEY=local-dev-only`, an empty
+`DISCORD_BOT_TOKEN`, which leaves the inbox off, and empty `GITHUB_APP_PRIVATE_KEY` and `GITHUB_WEBHOOK_SECRET`,
+which leave publishing off. The tests bring their own values (`vitest.config.ts`).
 
 ## Deploy (Alex approves each first deploy — it is public-facing)
 
@@ -42,3 +45,25 @@ empty `DISCORD_BOT_TOKEN`, which leaves the inbox off.
 The bot is invited with exactly what it uses — view channels, send messages and in threads, embed links,
 attach files, add reactions, read history, manage threads:
 `https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot&permissions=292057893952`
+
+## Phase 7: publishing (Alex approves the deploy)
+
+Publish… and Same as… in the inbox, GitHub's events back to the forum, and the pinned posts' form
+(`docs/BUG-REPORTING.md` D30–D38, §12). In order — each step is safe to repeat:
+
+1. The new tables: `npx wrangler d1 migrations apply wingcord-reports --remote` (`0002_publishing.sql` adds
+   `issues` and two columns; the code running now ignores them).
+2. The public tracker's labels: `../scripts/github/labels.sh` (priority, `needs triage`, the areas).
+3. The GitHub App: `python3 scripts/github-app.py` — the browser opens GitHub's Create GitHub App page for
+   WingcordApp, filled in; press **Create GitHub App**, then **Install** (WingcordApp/wingcord is already
+   chosen). The script puts the App's key and webhook secret into the Worker with `wrangler secret bulk` (which
+   redeploys the code running now, with them added) and its client ID into `wrangler.jsonc`.
+4. `npx wrangler deploy`.
+5. The buttons on the pinned posts: `python3 scripts/post-guides.py` (Alex, with the bot token).
+6. The public tracker's files — issue forms, triage workflow, CodeRabbit's settings:
+   `../scripts/github/sync-public.sh`, then again with `--push`. CodeRabbit itself is installed from
+   coderabbit.ai, on WingcordApp/wingcord only.
+
+If the App's key is ever replaced (the App's page ▸ Generate a private key), put the downloaded `.pem` with
+`npx wrangler secret put GITHUB_APP_PRIVATE_KEY < key.pem` and delete the file; GitHub's PKCS #1 form is
+read as it is.

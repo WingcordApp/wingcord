@@ -44,7 +44,12 @@ describe("a report arriving", () => {
 		expect(post.authorization).toBe("Bot test-bot-token");
 		expect(post.body.allowed_mentions).toEqual({ parse: [] });
 		expect(post.body.embeds[0].title).toBe(`🐞 ${created.id} · Voice`);
-		expect(post.body.components[0].components.map((button: any) => button.label)).toEqual(["Download", "Solve"]);
+		expect(post.body.components[0].components.map((button: any) => button.label)).toEqual([
+			"Publish…",
+			"Same as…",
+			"Download",
+			"Solve",
+		]);
 		expect(report?.inbox_message_id).toMatch(/^\d+$/);
 	});
 

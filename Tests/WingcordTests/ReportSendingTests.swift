@@ -199,15 +199,25 @@ struct ReportSendingTests {
     func status() async throws {
         let server = StubServer { request, _ in
             request.url?.path() == "/v1/reports/WC-CCCC"
-                ? (200, #"{"id":"WC-CCCC","kind":"bug","status":"fixed","count":3,"links":{"issue":"https://github.com/example/wingcord/issues/12"}}"#)
+                ? (200, #"{"id":"WC-CCCC","kind":"bug","status":"fixed","count":3,"links":{"issue":"https://github.com/example/wingcord/issues/12","post":"https://discord.com/channels/1/2"}}"#)
                 : (404, #"{"error":"not_found"}"#)
         }
         let fixed = try await server.uploader.status(of: sentReport(id: "WC-CCCC"))
         #expect(fixed.status == .fixed)
         #expect(fixed.links.issue?.absoluteString == "https://github.com/example/wingcord/issues/12")
+        #expect(fixed.links.post?.absoluteString == "https://discord.com/channels/1/2")
         let gone = try await server.uploader.status(of: sentReport(id: "WC-DDDD"))
         #expect(gone.status == .expired)
         #expect(server.requests.first?.authorization == "Bearer key-for-WC-CCCC")
+    }
+
+    @Test("An idea reads Added or Not Planned where a bug reads Fixed or Won't Fix")
+    func statusWords() {
+        #expect(SentReport.Status.fixed.title(for: .bug) == "Fixed")
+        #expect(SentReport.Status.fixed.title(for: .idea) == "Added")
+        #expect(SentReport.Status.wontfix.title(for: .bug) == "Won't Fix")
+        #expect(SentReport.Status.wontfix.title(for: .idea) == "Not Planned")
+        #expect(SentReport.Status.published.title(for: .idea) == "Published")
     }
 
     // MARK: Your Reports

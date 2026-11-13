@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit on the public tracker, WingcordApp/wingcord (docs/BUG-REPORTING.md
+# D38). Installed there only: free on a public repository, and the private one
+# keeps its code to itself.
+#
+# Issues: it comments on each new one with what it finds (possible duplicates,
+# related issues), and it sets a bug's priority — only that. The area, type,
+# crash and `planned` labels, and the forums' tags, come from the reports
+# Worker, the issue forms and Alex. Pull requests: reviewed once there is code
+# to review.
+language: en-US
+tone_instructions: "Plain, direct English in full sentences. No emoji, no jokes."
+
+reviews:
+  profile: chill
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+
+chat:
+  auto_reply: true
+
+issue_enrichment:
+  auto_enrich:
+    enabled: true
+  # No implementation plans on issues.
+  planning:
+    enabled: false
+  labeling:
+    auto_apply_labels: true
+    labeling_instructions:
+      - label: "priority: critical"
+        instructions: >-
+          Only for a bug (labelled bug or crash), never for an idea (labelled idea), and only if the issue has no
+          priority label yet; apply one priority label at most. Wingcord crashes or freezes at launch or for
+          everyone, loses or corrupts something people wrote or set, stops people signing in or joining calls at
+          all, or exposes private data such as tokens or messages; or the issue says it was reported 10 or more
+          times.
+      - label: "priority: high"
+        instructions: >-
+          Only for a bug (labelled bug or crash), never for an idea, and only if the issue has no priority label
+          yet; apply one priority label at most. A crash or freeze in a particular situation; a core feature that
+          fails with no way around it — sending or reading messages, voice or video calls, screen sharing,
+          notifications; a form answer of "It crashes, freezes or loses something" or "It stops me doing
+          something"; or the issue says it was reported 5 or more times.
+      - label: "priority: medium"
+        instructions: >-
+          Only for a bug (labelled bug or crash), never for an idea, and only if the issue has no priority label
+          yet; apply one priority label at most. Something misbehaves but there is a way around it, a visual
+          problem in a view people use often, or slowness that doesn't stop anyone; the usual priority for a bug
+          that fits no other description, and for a form answer of "It's annoying, but there's a way around it".
+      - label: "priority: low"
+        instructions: >-
+          Only for a bug (labelled bug or crash), never for an idea, and only if the issue has no priority label
+          yet; apply one priority label at most. Cosmetic problems (spacing, colours, wording), rare edge cases and
+          small polish; a form answer of "It only looks wrong".

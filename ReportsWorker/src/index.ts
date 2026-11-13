@@ -4,10 +4,13 @@
 //   PUT  /v1/reports/:id/bundle|screenshot   each announced part, with the key
 //   GET  /v1/reports/:id                its status, with the key
 //   GET  /v1/files/:id/bundle|screenshot     a signed ten-minute download link
-//   POST /discord                       the inbox's buttons
+//   GET  /v1/published/:id.png          a screenshot published with an issue (public)
+//   POST /discord                       the inbox's buttons and forms, and the pinned posts' form
+//   POST /github                        the GitHub App's events
 
 import { handleScheduled } from "./cron";
-import { handleDownload, handleUpload } from "./files";
+import { handleGitHubEvent } from "./events";
+import { handleDownload, handlePublished, handleUpload } from "./files";
 import { logError, notAllowed, problem } from "./http";
 import { handleCreate, handleStatus } from "./intake";
 import { handleInteraction } from "./interactions";
@@ -17,6 +20,7 @@ const ID = "(WC-[0-9A-HJKMNP-TV-Z]{4,5})";
 const REPORT = new RegExp(`^/v1/reports/${ID}$`);
 const REPORT_PART = new RegExp(`^/v1/reports/${ID}/(bundle|screenshot)$`);
 const FILE = new RegExp(`^/v1/files/${ID}/(bundle|screenshot)$`);
+const PUBLISHED = new RegExp(`^/v1/published/${ID}\\.png$`);
 
 async function route(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const url = new URL(request.url);
@@ -34,7 +38,11 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
 	match = FILE.exec(path);
 	if (match) return method === "GET" ? handleDownload(url, env, match[1]!, match[2] as Part) : notAllowed("GET");
 
-	if (path === "/discord") return method === "POST" ? handleInteraction(request, env) : notAllowed("POST");
+	match = PUBLISHED.exec(path);
+	if (match) return method === "GET" ? handlePublished(env, match[1]!) : notAllowed("GET");
+
+	if (path === "/discord") return method === "POST" ? handleInteraction(request, env, ctx) : notAllowed("POST");
+	if (path === "/github") return method === "POST" ? handleGitHubEvent(request, env, ctx) : notAllowed("POST");
 
 	if (path === "/" && method === "GET") {
 		return new Response("Wingcord's reports. Send one from Wingcord: Help ▸ Report a Bug…\n", {

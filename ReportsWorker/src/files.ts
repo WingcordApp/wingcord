@@ -20,6 +20,15 @@ export function objectKeys(id: string): string[] {
 	return PARTS.map((part) => objectKey(id, part));
 }
 
+/**
+ * A published report's screenshot (D26): copied here from `screenshots/`,
+ * outside the prefixes the 90-day rule empties, because a GitHub issue shows
+ * it from here for as long as the issue exists.
+ */
+export function publishedKey(id: string): string {
+	return `published/${id}.png`;
+}
+
 /** `PUT /v1/reports/:id/:part` — with the key the report was created with. */
 export async function handleUpload(
 	request: Request,
@@ -96,5 +105,20 @@ export async function handleDownload(url: URL, env: Env, id: string, part: Part)
 	headers.set("Content-Disposition", `attachment; filename="${id}${PART_SPECS[part].extension}"`);
 	headers.set("Cache-Control", "private, no-store");
 	headers.set("X-Content-Type-Options", "nosniff");
+	return new Response(object.body, { headers });
+}
+
+// MARK: Published screenshots
+
+/** `GET /v1/published/:id.png` — public: a screenshot Alex published with an issue. */
+export async function handlePublished(env: Env, id: string): Promise<Response> {
+	const object = await env.BUCKET.get(publishedKey(id));
+	if (!object) return problem(404, "not_found");
+	const headers = new Headers();
+	headers.set("Content-Type", "image/png");
+	headers.set("Content-Length", String(object.size));
+	headers.set("Cache-Control", "public, max-age=86400");
+	headers.set("X-Content-Type-Options", "nosniff");
+	headers.set("Content-Security-Policy", "default-src 'none'");
 	return new Response(object.body, { headers });
 }

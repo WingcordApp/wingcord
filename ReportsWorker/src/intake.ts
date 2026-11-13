@@ -8,7 +8,7 @@
 
 import { caps, LIMITS, nowSeconds, type Status } from "./config";
 import { randomKey, sha256Hex } from "./crypto";
-import { postInbox, refreshInbox } from "./discord";
+import { postInbox, publishedInfo, refreshInbox } from "./discord";
 import { bearer, json, log, mediaType, problem, readLimited } from "./http";
 import { addRepeat, countAttempt, findOpenCrash, insertReport, reportForKey } from "./store";
 import { validateReport } from "./validate";
@@ -74,13 +74,19 @@ export async function handleStatus(request: Request, env: Env, id: string): Prom
 	const found = await reportForKey(env.DB, await sha256Hex(key));
 	if (!found || found.report.id !== id) return problem(404, "not_found");
 	const report = found.report;
+	// A report counted into an issue is followed there: its GitHub issue and its forum post (D28).
+	const published = report.status === "open" || report.status === "solved" ? null : await publishedInfo(env, report);
+	const links: { issue?: string; post?: string } = {};
+	if (published) {
+		links.issue = published.issueUrl;
+		if (published.postUrl) links.post = published.postUrl;
+	}
 	return json({
 		id: report.id,
 		kind: report.kind,
 		status: publicStatus(report.status),
 		count: report.count,
-		// Phase 7 fills these in when a report is published.
-		links: {},
+		links,
 	});
 }
 

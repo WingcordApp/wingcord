@@ -34,6 +34,8 @@ function report(overrides: Partial<ReportRow> = {}): ReportRow {
 		forum_post_id: null,
 		closed_at: null,
 		closed_by: null,
+		publishing_at: null,
+		reporter: null,
 		...overrides,
 	};
 }

@@ -4,3 +4,5 @@ dist/
 # Local secrets for `wrangler dev` — never committed; deployed secrets are set with `wrangler secret put`.
 .dev.vars*
 .env*
+# Python caches from the scripts.
+__pycache__/

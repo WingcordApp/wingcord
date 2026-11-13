@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in Wingcord doesn't work as it should.
+labels: ["bug"]
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Reporting from the app works better:** Help ▸ Report a Bug… adds what Wingcord was doing — without names, messages, addresses or tokens — which this form can't.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      placeholder: The call went quiet a minute after I joined
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to make it happen again
+      placeholder: |
+        1. Join a voice channel
+        2. Turn on the camera
+  # The area's label is added from this answer (.github/workflows/issue-triage.yml).
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where in Wingcord?
+      options:
+        - Messages
+        - Voice
+        - Video
+        - Screen Share
+        - Notifications
+        - Profiles
+        - Servers & Channels
+        - Appearance
+        - Settings
+        - Speed & Freezes
+        - Crash
+        - Signing In
+        - Something Else
+  # Read by CodeRabbit when it sets the priority (.coderabbit.yaml).
+  - type: dropdown
+    id: impact
+    attributes:
+      label: How much does it get in the way?
+      options:
+        - It crashes, freezes or loses something
+        - It stops me doing something
+        - It's annoying, but there's a way around it
+        - It only looks wrong
+  - type: input
+    id: version
+    attributes:
+      label: Wingcord version
+      description: In Wingcord ▸ About Wingcord.
+      placeholder: 1.0 (1)
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "27.3"

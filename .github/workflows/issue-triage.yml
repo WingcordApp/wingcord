@@ -1,0 +1,59 @@
+# The public tracker's issues, sorted as they come in (docs/BUG-REPORTING.md
+# D38). An issue someone opens from a form gets the label of the area they
+# chose and `needs triage`; closing an issue takes `needs triage` off. Issues
+# the reports bot publishes were looked at in the Discord inbox first, so they
+# are left alone. Priority is CodeRabbit's (.coderabbit.yaml).
+#
+# It lives in this repository so the public copy of the code carries it, and
+# runs only on the public tracker.
+name: Issue triage
+
+on:
+  issues:
+    types: [opened, closed]
+
+permissions:
+  issues: write
+
+jobs:
+  triage:
+    if: github.repository == 'WingcordApp/wingcord'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          # The issue's words are read as data from the event, never written into a command.
+          script: |
+            const issue = context.payload.issue;
+            const { owner, repo } = context.repo;
+            const has = (name) => (issue.labels ?? []).some((label) => label.name === name);
+
+            if (context.payload.action === "closed") {
+              if (has("needs triage")) {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number: issue.number, name: "needs triage" });
+              }
+              return;
+            }
+            if (issue.user.type === "Bot") return;
+
+            // A form's answer reads "### Where in Wingcord?", a blank line, then the choice.
+            const areas = {
+              "Messages": "area: messages",
+              "Voice": "area: voice",
+              "Video": "area: video",
+              "Screen Share": "area: screen share",
+              "Notifications": "area: notifications",
+              "Profiles": "area: profiles",
+              "Servers & Channels": "area: servers & channels",
+              "Appearance": "area: appearance",
+              "Settings": "area: settings",
+              "Speed & Freezes": "area: speed & freezes",
+              "Crash": "crash",
+              "Signing In": "area: signing in",
+            };
+            const answer = /^### Where in Wingcord\?[ \t]*\r?\n\s*([^\r\n]+)/m.exec(issue.body ?? "");
+            const labels = ["needs triage"];
+            const area = answer ? areas[answer[1].trim()] : undefined;
+            if (area) labels.push(area);
+            await github.rest.issues.addLabels({ owner, repo, issue_number: issue.number, labels });

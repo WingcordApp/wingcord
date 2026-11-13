@@ -2,60 +2,60 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
-    <key>CFBundleExecutable</key>
-    <string>Wingcord</string>
-    <key>CFBundleIdentifier</key>
-    <string>dev.wingcord.Wingcord</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>Wingcord</string>
-    <key>CFBundleDisplayName</key>
-    <string>Wingcord</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>27.0</string>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSSupportsAutomaticGraphicsSwitching</key>
-    <true/>
-    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.social-networking</string>
-    <key>UTExportedTypeDeclarations</key>
-    <array>
-        <dict>
-            <key>UTTypeIdentifier</key>
-            <string>dev.wingcord.take</string>
-            <key>UTTypeDescription</key>
-            <string>Wingcord Recording</string>
-            <key>UTTypeConformsTo</key>
-            <array>
-                <string>com.apple.package</string>
-                <string>public.composite-content</string>
-            </array>
-            <key>UTTypeTagSpecification</key>
-            <dict>
-                <key>public.filename-extension</key>
-                <array>
-                    <string>wingcordtake</string>
-                </array>
-            </dict>
-        </dict>
-    </array>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Wingcord uses the microphone for voice channels, voice messages and screen recordings.</string>
-    <key>NSCameraUsageDescription</key>
-    <string>Wingcord uses the camera for video calls and screen recordings.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>Wingcord asks your browser which tab is playing, so your activity can show the video and link to it.</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Wingcord</string>
+	<key>CFBundleExecutable</key>
+	<string>Wingcord</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.wingcord.Wingcord</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Wingcord</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.social-networking</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>27.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Wingcord asks your browser which tab is playing, so your activity can show the video and link to it.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Wingcord uses the camera for video calls and screen recordings.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Wingcord uses the microphone for voice channels, voice messages and screen recordings.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.package</string>
+				<string>public.composite-content</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Wingcord Recording</string>
+			<key>UTTypeIdentifier</key>
+			<string>dev.wingcord.take</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>wingcordtake</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>
