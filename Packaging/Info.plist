@@ -57,5 +57,7 @@
 			</dict>
 		</dict>
 	</array>
+	<key>WingcordPrerelease</key>
+	<string>Beta 1</string>
 </dict>
 </plist>

@@ -170,6 +170,11 @@ describe("versions as people type them", () => {
 		expect(readVersions("1.0 on macOS 27.3")).toEqual({ app: "1.0", build: "", macos: "27.3", asTyped: null });
 		expect(readVersions("1.0, 27.3")).toEqual({ app: "1.0", build: "", macos: "27.3", asTyped: null });
 		expect(readVersions("wingcord v1.0.2")).toEqual({ app: "1.0.2", build: "", macos: null, asTyped: null });
+		// Pre-releases, however they're written, as the app writes them.
+		expect(readVersions("Wingcord 1.0 Beta 1")).toEqual({ app: "1.0 Beta 1", build: "", macos: null, asTyped: null });
+		expect(readVersions("1.0 beta 2 (7), macOS 27.3")).toEqual({ app: "1.0 Beta 2", build: "7", macos: "27.3", asTyped: null });
+		expect(readVersions("1.0b1 on 27.3")).toEqual({ app: "1.0 Beta 1", build: "", macos: "27.3", asTyped: null });
+		expect(readVersions("Wingcord 1.0 RC 1")).toEqual({ app: "1.0 RC 1", build: "", macos: null, asTyped: null });
 		// macOS alone; what's left is nothing worth keeping.
 		expect(readVersions("27.3")).toEqual({ app: null, build: null, macos: "27.3", asTyped: null });
 		// Words that aren't versions are kept as written.

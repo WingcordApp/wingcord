@@ -47,7 +47,7 @@ nonisolated struct SystemFacts: Codable, Sendable, Equatable {
         let workspace = NSWorkspace.shared
         let isDark = NSApp?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         return SystemFacts(
-            appVersion: bundle.shortVersion,
+            appVersion: bundle.displayVersion,
             appBuild: bundle.buildVersion,
             bundleIdentifier: bundle.bundleIdentifier ?? "none",
             macOS: process.operatingSystemVersionString,

@@ -13,6 +13,8 @@ nonisolated struct ReportSubmission: Encodable, Equatable, Sendable {
     struct App: Encodable, Equatable, Sendable {
         var version: String
         var build: String
+        /// "Beta 1" while the app is a pre-release; left out of the JSON otherwise.
+        var prerelease: String? = nil
     }
 
     struct Crash: Encodable, Equatable, Sendable {
@@ -70,7 +72,8 @@ nonisolated struct ReportSubmission: Encodable, Equatable, Sendable {
             origin: origin(of: draft.origin),
             app: App(
                 version: bundle.shortVersion.wholeMatch(of: versionPattern) != nil ? bundle.shortVersion : "0",
-                build: bundle.buildVersion.wholeMatch(of: buildPattern) != nil ? bundle.buildVersion : "0"
+                build: bundle.buildVersion.wholeMatch(of: buildPattern) != nil ? bundle.buildVersion : "0",
+                prerelease: bundle.prerelease.flatMap { $0.wholeMatch(of: prereleasePattern) != nil ? $0 : nil }
             ),
             macOS: macOS(system),
             model: model.wholeMatch(of: modelPattern) != nil ? model : nil,
@@ -110,6 +113,7 @@ nonisolated struct ReportSubmission: Encodable, Equatable, Sendable {
     // `Regex` is not `Sendable`, so it cannot be a stored static.
     private static var versionPattern: Regex<(Substring, Substring?)> { /\d{1,4}(\.\d{1,4}){0,3}/ }
     private static var buildPattern: Regex<Substring> { /\d{1,9}/ }
+    private static var prereleasePattern: Regex<(Substring, Substring)> { /(Alpha|Beta|RC) \d{1,3}/ }
     private static var modelPattern: Regex<Substring> { /[A-Za-z]{2,24}\d{1,3},\d{1,3}/ }
     private static var chipPattern: Regex<Substring> { /[A-Za-z0-9 ()®™.,@-]{1,64}/ }
 }

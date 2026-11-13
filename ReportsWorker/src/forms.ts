@@ -68,7 +68,7 @@ export function reportForm(kind: Kind): Modal {
 		label(
 			"Wingcord and macOS versions",
 			"Wingcord ▸ About Wingcord, and Apple menu ▸ About This Mac.",
-			textInput("versions", SHORT, { required: false, maxLength: 80, placeholder: "Wingcord 1.0 (1), macOS 27.3" }),
+			textInput("versions", SHORT, { required: false, maxLength: 80, placeholder: "Wingcord 1.0 Beta 1, macOS 27.3" }),
 		),
 		label("A screenshot", "A PNG up to 4 MB. If the report is published, it may be too.", fileUpload("screenshot", [".png"])),
 	]);
@@ -185,12 +185,26 @@ async function fetchPicture(env: Env, id: string, url: string): Promise<void> {
 	await showInInbox(env, id);
 }
 
+/** A version's number, and a pre-release after it: "1.0 Beta 1", "1.0 beta2", "1.0b1", "1.0 RC 1". */
+const NUMBER = String.raw`(\d{1,4}(?:\.\d{1,4}){0,3})`;
+const PRE = String.raw`(?:\s*(alpha|beta|rc)\s*(\d{1,3})|(a|b)(\d{1,3}))?`;
+
+/** " Beta 1" from the pre-release groups that start at `at`, or nothing. */
+function prereleaseName(match: RegExpExecArray, at: number): string {
+	const word = (match[at] ?? match[at + 2])?.toLowerCase();
+	const count = match[at + 1] ?? match[at + 3];
+	if (!word || !count) return "";
+	const name = word === "alpha" || word === "a" ? "Alpha" : word === "rc" ? "RC" : "Beta";
+	return ` ${name} ${Number(count)}`;
+}
+
 /**
- * The versions as a sender types them: "Wingcord 1.0 (42), macOS 27.3",
- * "1.0 on 27.3", "Wingcord 1.2"… The app's own "1.0 (42)" first; then a
- * version after the word Wingcord, or one under 10 (macOS's are 10 and up),
- * with no build. Whatever is left that couldn't be read is handed back as
- * typed, for Alex to see.
+ * The versions as a sender types them: "Wingcord 1.0 Beta 1 (42), macOS
+ * 27.3", "1.0 beta 1 on 27.3", "Wingcord 1.2"… The app's own "1.0 (42)"
+ * first; then a version after the word Wingcord, or one under 10 (macOS's
+ * are 10 and up), with no build. A pre-release's name comes along as the app
+ * writes it ("Beta 1"). Whatever is left that couldn't be read is handed
+ * back as typed, for Alex to see.
  */
 export function readVersions(typed: string): { app: string | null; build: string | null; macos: string | null; asTyped: string | null } {
 	const cleaned = cleanText(typed, 120).replace(/\s+/g, " ");
@@ -199,18 +213,21 @@ export function readVersions(typed: string): { app: string | null; build: string
 	let rest = cleaned;
 	let app: string | null = null;
 	let build: string | null = null;
-	const full = /(\d{1,4}(?:\.\d{1,4}){0,3})\s*\(\s*(\d{1,9})\s*\)/.exec(rest);
-	const named = /wingcord\s*v?(\d{1,4}(?:\.\d{1,4}){0,3})\b/i.exec(rest);
-	const small = /(?:^|[^\d.])(\d(?:\.\d{1,4}){1,3})(?![\d.])/.exec(rest);
+	let number: string | null = null;
+	const full = new RegExp(`${NUMBER}${PRE}\\s*\\(\\s*(\\d{1,9})\\s*\\)`, "i").exec(rest);
+	const named = new RegExp(`wingcord\\s*v?${NUMBER}${PRE}(?![\\d.])`, "i").exec(rest);
+	const small = new RegExp(`(?:^|[^\\d.])(\\d(?:\\.\\d{1,4}){1,3})${PRE}(?![\\d.])`, "i").exec(rest);
 	if (full) {
-		[app, build] = [full[1]!, full[2]!];
+		[number, build] = [full[1]!, full[6]!];
+		app = number + prereleaseName(full, 2);
 		rest = rest.replace(full[0], " ");
 	} else if (named ?? small) {
 		const match = (named ?? small)!;
-		[app, build] = [match[1]!, ""];
+		[number, build] = [match[1]!, ""];
+		app = number + prereleaseName(match, 2);
 		rest = rest.replace(match[0], " ");
 	}
-	if (app && !(VERSION.test(app) && (build === "" || BUILD.test(build!)))) [app, build] = [null, null];
+	if (number && !(VERSION.test(number) && (build === "" || BUILD.test(build!)))) [app, build] = [null, null];
 
 	const system = /mac\s?os(?:\s+[a-z]+)?\s+(\d{1,3}(?:\.\d{1,3}){0,2})\b/i.exec(rest) ?? /(?:^|[^\d.])(\d{2}(?:\.\d{1,3}){0,2})(?![\d.])/.exec(rest);
 	let macos: string | null = system?.[1] ?? null;

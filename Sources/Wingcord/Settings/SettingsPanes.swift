@@ -1749,7 +1749,7 @@ private struct AboutPane: View {
         )
 
         SettingsCard {
-            SettingsValueRow(title: "Version", value: Bundle.main.shortVersion)
+            SettingsValueRow(title: "Version", value: Bundle.main.displayVersion)
             CardDivider()
             SettingsValueRow(title: "Build", value: Bundle.main.buildVersion)
         }
@@ -1792,5 +1792,20 @@ extension Bundle {
 
     nonisolated var buildVersion: String {
         infoDictionary?["CFBundleVersion"] as? String ?? "—"
+    }
+
+    /// A pre-release's name, shown beside the version — "Beta 1" — from
+    /// `WingcordPrerelease` in Info.plist. A release has none: the version
+    /// itself stays numeric, as Apple and Sparkle expect.
+    nonisolated var prerelease: String? {
+        guard let name = infoDictionary?["WingcordPrerelease"] as? String,
+              !name.trimmingCharacters(in: .whitespaces).isEmpty
+        else { return nil }
+        return name
+    }
+
+    /// The version as people read it: "1.0 Beta 1", or "1.0".
+    nonisolated var displayVersion: String {
+        prerelease.map { "\(shortVersion) \($0)" } ?? shortVersion
     }
 }

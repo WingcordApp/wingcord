@@ -82,6 +82,7 @@ describe("a report arriving", () => {
 			[{ area: "everything" }, "area"],
 			[{ origin: "telepathy" }, "origin"],
 			[{ app: { version: "1.0" } }, "app"],
+			[{ app: { version: "1.0", build: "42", prerelease: "Beta 1 @everyone" } }, "app"],
 			[{ macOS: "Sequoia" }, "macOS"],
 			[{ model: "<script>" }, "model"],
 			[{ chip: "Apple M5\n@everyone" }, "chip"],
@@ -99,6 +100,14 @@ describe("a report arriving", () => {
 		const frames = crashReport("b".repeat(16));
 		(frames.crash as any).frames = ["0 Wingcord\u0007"];
 		expect((await send(createRequest(frames))).status).toBe(400);
+	});
+
+	it("keeps a pre-release's name with its version, wherever the version shows", async () => {
+		const discord = fakeDiscord();
+		const created = await create(bugReport({ app: { version: "1.0", build: "42", prerelease: "Beta 1" }, attachments: [] }));
+		expect((await row(created.id))?.app_version).toBe("1.0 Beta 1");
+		const mac = discord[0]!.body.embeds[0].fields.find((field: any) => field.name === "Mac").value;
+		expect(mac).toBe("Wingcord 1.0 Beta 1 (42) · macOS 27.3 · Mac17,2 · Apple M5");
 	});
 
 	it("refuses what is not JSON, or too much of it", async () => {

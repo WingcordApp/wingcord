@@ -38,6 +38,8 @@ export type Validation =
 export const VERSION = /^\d{1,4}(\.\d{1,4}){0,3}$/;
 export const BUILD = /^\d{1,9}$/;
 export const MACOS = /^\d{1,3}(\.\d{1,3}){0,2}$/;
+/** A pre-release's name beside the version, as the app's Info.plist gives it: "Beta 1". */
+export const PRERELEASE = /^(Alpha|Beta|RC) \d{1,3}$/;
 /** `Mac17,2`, `MacBookPro18,3`, `VirtualMac2,1`. */
 const MODEL = /^[A-Za-z]{2,24}\d{1,3},\d{1,3}$/;
 const CHIP = /^[A-Za-z0-9 ()®™.,@-]{1,64}$/;
@@ -70,6 +72,8 @@ export function validateReport(raw: unknown): Validation {
 	if (!isRecord(app) || !matches(VERSION, app.version) || !matches(BUILD, app.build)) {
 		return fail("app", "needs version and build");
 	}
+	const prerelease = optional(PRERELEASE, app.prerelease);
+	if (prerelease === undefined) return fail("app", "not a pre-release name");
 	if (!matches(MACOS, raw.macOS)) return fail("macOS", "not a macOS version");
 
 	const model = optional(MODEL, raw.model);
@@ -102,7 +106,8 @@ export function validateReport(raw: unknown): Validation {
 			details,
 			area: raw.area,
 			origin: raw.origin,
-			appVersion: app.version,
+			// "1.0 Beta 1": the version as people read it, wherever it is shown.
+			appVersion: prerelease ? `${app.version} ${prerelease}` : app.version,
 			appBuild: app.build,
 			macOS: raw.macOS,
 			model,

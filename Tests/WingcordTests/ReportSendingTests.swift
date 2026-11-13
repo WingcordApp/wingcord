@@ -211,6 +211,19 @@ struct ReportSendingTests {
         #expect(server.requests.first?.authorization == "Bearer key-for-WC-CCCC")
     }
 
+    @Test("A pre-release's name goes beside the version, and only when there is one")
+    func prereleaseInTheJSON() throws {
+        let encoder = JSONEncoder()
+        let beta = try JSONSerialization.jsonObject(
+            with: encoder.encode(ReportSubmission.App(version: "1.0", build: "1", prerelease: "Beta 1"))
+        ) as? [String: String]
+        #expect(beta == ["version": "1.0", "build": "1", "prerelease": "Beta 1"])
+        let release = try JSONSerialization.jsonObject(
+            with: encoder.encode(ReportSubmission.App(version: "1.0", build: "2"))
+        ) as? [String: String]
+        #expect(release == ["version": "1.0", "build": "2"])
+    }
+
     @Test("An idea reads Added or Not Planned where a bug reads Fixed or Won't Fix")
     func statusWords() {
         #expect(SentReport.Status.fixed.title(for: .bug) == "Fixed")

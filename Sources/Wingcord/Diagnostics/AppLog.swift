@@ -34,7 +34,7 @@ nonisolated enum AppLog {
         let system = ProcessInfo.processInfo.operatingSystemVersion
         Log.info(
             .app,
-            "launched \(public: bundle.shortVersion) (\(public: bundle.buildVersion))"
+            "launched \(public: bundle.displayVersion) (\(public: bundle.buildVersion))"
                 + " on macOS \(system.majorVersion).\(system.minorVersion).\(system.patchVersion)"
                 + " \(public: SystemFacts.machineModel()), detailed=\(Log.isDetailed)"
         )
