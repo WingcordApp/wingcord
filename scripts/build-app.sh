@@ -137,6 +137,8 @@ cp -R "$BUNDLE" "$APP/Contents/Resources/"
 # the BSD licences all ask for their notice to go wherever the binary does.
 # Plain text, so Help › Acknowledgements opens it on any Mac.
 cp "$ROOT/THIRD-PARTY-NOTICES.md" "$APP/Contents/Resources/Acknowledgements.txt"
+# Wingcord's own licence, which Settings › About opens.
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/Licence.txt"
 
 # ── Release notes ──────────────────────────────────────────────────────────
 # A release carries its own notes, which Settings › About shows (`release.sh`

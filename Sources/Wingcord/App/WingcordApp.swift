@@ -687,6 +687,9 @@ nonisolated struct LaunchOptions: Sendable {
     /// The first-launch welcome, whether it's been seen or not: `--welcome`. Implies
     /// `--signed-out` in the demo.
     var forcesWelcome = false
+    /// The sign-in ground a build without MetalForge's effect draws, in one that has
+    /// it: `--plain-backdrop` (`SignInBackdrop`).
+    var forcesPlainBackdrop = false
     /// `--demo` at the sign-in screen rather than signed in: `--signed-out`. Its
     /// sign-in is scripted (`DemoSignInService`) and lands in the usual fixtures.
     var startsSignedOut = false
@@ -719,6 +722,7 @@ nonisolated struct LaunchOptions: Sendable {
             usesSyntheticMicrophone: arguments.contains("--synthetic-microphone"),
             forcesReducedMotion: arguments.contains("--reduce-motion"),
             forcesWelcome: arguments.contains("--welcome"),
+            forcesPlainBackdrop: arguments.contains("--plain-backdrop"),
             startsSignedOut: arguments.contains("--signed-out") || arguments.contains("--welcome")
                 || arguments.contains("--saved-accounts"),
             hasSavedAccounts: arguments.contains("--saved-accounts"),

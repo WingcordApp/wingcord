@@ -15,9 +15,9 @@ struct InviteCodeTests {
     /// event on it is another card.
     @Test("An invite with an event on it is keyed with the event")
     func eventCodes() {
-        let text = "https://discord.gg/wingcord?event=1323893975486496490 and discord.gg/wingcord"
+        let text = "https://discord.gg/wingcord?event=1323893975484369279 and discord.gg/wingcord"
         let codes = InviteCard.codes(in: text)
-        #expect(codes == ["wingcord?event=1323893975486496490", "wingcord"])
+        #expect(codes == ["wingcord?event=1323893975484369279", "wingcord"])
         #expect(InviteCard.code(ofKey: codes[0]) == "wingcord")
         #expect(InviteCard.eventID(ofKey: codes[0]) == 1_323_893_975_484_369_279)
         #expect(InviteCard.code(ofKey: "wingcord") == "wingcord")

@@ -80,7 +80,7 @@ struct InviteCardDecodeTests {
     /// the event whole, which is what the card turns into.
     private static let withEvent = captured.dropLast() + """
     ,
-     "guild_scheduled_event":{"id":"1323893975486496490","guild_id":"1520000000000000001",
+     "guild_scheduled_event":{"id":"1323893975484369279","guild_id":"1520000000000000001",
        "name":"Movie night","scheduled_start_time":"2026-10-09T19:00:00+00:00","status":1,
        "entity_type":2,"channel_id":"1520000000000000002","creator_id":"987654321987654321"}}
     """
@@ -110,12 +110,12 @@ struct InviteCardDecodeTests {
     @Test("A link's event is asked for on the invite's own route")
     func eventQuery() async throws {
         let (rest, token) = await RequestRecorder.client(body: Self.captured)
-        _ = try await rest.inviteCard("LumenClub?event=1323893975486496490")
+        _ = try await rest.inviteCard("LumenClub?event=1323893975484369279")
         let request = try #require(RequestRecorder.requests(for: token).first)
         #expect(request.path == "/api/v9/invites/LumenClub")
         #expect(request.queryItems.map(\.name) == [
             "with_counts", "with_expiration", "guild_scheduled_event_id", "with_permissions",
         ])
-        #expect(request.query["guild_scheduled_event_id"] == "1323893975486496490")
+        #expect(request.query["guild_scheduled_event_id"] == "1323893975484369279")
     }
 }

@@ -1743,12 +1743,15 @@ private struct AboutPane: View {
     @State private var mover = MoveToApplications.shared
 
     var body: some View {
-        SettingsHero(
-            symbolName: "bubble.left.and.bubble.right.fill",
-            tint: Color(hex: 0x5865F2),
-            title: "Wingcord",
-            subtitle: "A native macOS client for Discord"
-        )
+        SettingsHero(title: "Wingcord", subtitle: "A native macOS client for Discord") {
+            // Wingcord's own icon, as the Dock draws it. The artwork carries its
+            // own margin, so it's drawn larger than a 64-point symbol tile.
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 80, height: 80)
+                .accessibilityHidden(true)
+        }
 
         SettingsCard {
             SettingsValueRow(title: "Version", value: Bundle.main.displayVersion)
@@ -1810,10 +1813,17 @@ private struct AboutPane: View {
             }
         }
 
-        // **No Source or Licence tiles until the code is public**: they pointed
-        // at github.com/wingcord, an account that isn't the project's.
+        // **No Source tile until the code is public** (it once pointed at
+        // github.com/wingcord, an account that isn't the project's). The licence
+        // is here already: the GPL asks an interactive program to show its notice
+        // (section 0, "Appropriate Legal Notices"), and a fork must keep it.
         SettingsGroup("Project") {
             SettingsTileRow(tiles: [
+                .init(
+                    id: "licence", title: "Licence",
+                    caption: "GNU GPL, version 3 or later",
+                    symbolName: "doc.text.fill"
+                ) { openLicence() },
                 .init(
                     id: "lottie", title: "Lottie",
                     caption: "Plays Discord\u{2019}s animated stickers",
@@ -1825,7 +1835,28 @@ private struct AboutPane: View {
                     symbolName: "sparkles"
                 ) { open("https://sparkle-project.org") },
             ])
+            Text(verbatim: Self.legalNotice)
+                .font(SettingsType.footnote)
+                .foregroundStyle(Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Spacing.tight)
+                .padding(.top, Spacing.tight)
         }
+    }
+
+    /// Wingcord's copyright and licence, in the GPL's own terms: who holds it, that
+    /// it may be shared and changed, that there's no warranty — and the Licence tile
+    /// above shows the text.
+    static let legalNotice = "\u{00A9} 2026 arkanalex. Wingcord is free software: you may share and change it "
+        + "under the GNU General Public License, version 3 or (at your option) any later version. "
+        + "It comes with no warranty."
+
+    /// The GPL's text, which `scripts/build-app.sh` puts in the bundle beside the
+    /// acknowledgements.
+    private func openLicence() {
+        guard let url = Bundle.main.url(forResource: "Licence", withExtension: "txt") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private var lastCheck: String {

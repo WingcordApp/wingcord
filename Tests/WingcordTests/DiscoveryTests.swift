@@ -513,7 +513,7 @@ struct DiscoveryAppCardTests {
         var app = ActivityApp(
             id: id,
             name: "Nekotina",
-            botBannerHash: "a_5b4d978e173354ec88cba5888a8a457f"
+            botBannerHash: "a_7ec0920422783afa8a6f1f5fdd822aa9"
         )
         let card = AppModel.directoryCard(for: app)
         let film = try #require(card.animatedBannerURL)
@@ -532,7 +532,7 @@ struct DiscoveryAppCardTests {
         #expect(AppModel.directoryCard(for: app).animatedBannerURL == nil)
 
         // Neither has an artwork that is not the profile banner.
-        app.botBannerHash = "a_5b4d978e173354ec88cba5888a8a457f"
+        app.botBannerHash = "a_7ec0920422783afa8a6f1f5fdd822aa9"
         app.tileAssetID = "embeddedcover"
         #expect(AppModel.directoryCard(for: app).animatedBannerURL == nil)
     }

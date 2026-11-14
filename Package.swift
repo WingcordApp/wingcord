@@ -1,4 +1,5 @@
 // swift-tools-version: 6.4
+import Foundation
 import PackageDescription
 
 // The app. Everything with a pixel in it lives here.
@@ -7,6 +8,19 @@ import PackageDescription
 // model or a store is main-actor unless it says otherwise — which is what the
 // UI layer wants, and which makes every escape from the main actor an explicit,
 // greppable `nonisolated`. The two library targets deliberately do NOT set it.
+/// MetalForge's sign-in effect, in Wingcord's own builds only (`SignInBackdrop`):
+/// its code is used under the owner's MetalForge subscription, which forbids
+/// publishing it, so the public copy of the source leaves the folder out — and a
+/// build without it draws a ground of Wingcord's own instead.
+let hasMetalForge = FileManager.default.fileExists(
+    atPath: Context.packageDirectory + "/Sources/Wingcord/Welcome/MetalForge"
+)
+let metalForgeDefine: [SwiftSetting] = hasMetalForge ? [.define("WINGCORD_METALFORGE")] : []
+let metalForgeResources: [Resource] = hasMetalForge
+    // SwiftPM compiles a processed `.metal` into the bundle's `default.metallib`.
+    ? [.process("Welcome/MetalForge/SignInBackdrop.metal")]
+    : []
+
 let package = Package(
     name: "Wingcord",
     platforms: [.macOS(.v27)],
@@ -83,15 +97,11 @@ let package = Package(
                 .copy("Resources/Art"),
                 // highlight.js 11.11.1, every language — see `CodeHighlighter`.
                 .copy("Resources/Highlight"),
-                // The sign-in backdrop: MetalForge's wallpaper and particles.
-                // SwiftPM compiles a processed `.metal` into the bundle's
-                // `default.metallib` itself, with no build step of ours.
-                .process("Welcome/Shaders/SignInBackdrop.metal"),
-            ],
+            ] + metalForgeResources,
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
                 .swiftLanguageMode(.v6),
-            ],
+            ] + metalForgeDefine,
             // SwiftPM links with `@loader_path` alone, which finds Sparkle
             // beside the binary in `.build` but not in an app bundle, where it
             // sits in Contents/Frameworks.
@@ -102,7 +112,7 @@ let package = Package(
         .testTarget(
             name: "WingcordTests",
             dependencies: ["Wingcord"],
-            swiftSettings: [.defaultIsolation(MainActor.self)]
+            swiftSettings: [.defaultIsolation(MainActor.self)] + metalForgeDefine
         ),
     ]
 )

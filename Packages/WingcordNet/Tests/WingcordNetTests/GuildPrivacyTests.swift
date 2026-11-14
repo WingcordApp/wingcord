@@ -54,7 +54,7 @@ struct GuildPrivacyTests {
             + "AAJgGFS2CwEAgCqtJngDCgAIhdUt5ws8QMT6CuXMDwAwhLrIIkcQRwAEBNpbMg48AAzmk+iMCgoA"
             + "DBwgKrALbjDEwhvrwg0UIETKxiTmDwpwwgKW6eoMCgCCfGhpswUVMATA5jcWDgoABM6ItCYICgAE"
             + "HbsoQgsAAEDaybthCB4wBMbL+3IOCjAEQNQXVA4+QERtq8NPDkcAAvcrc1INAEDAINyMMQEBAERa"
-            + "N9kwCTJAQqbR+vMMC4CCi/0hBw0LAESZCaPsB4tVtcRMWXIVfND8reX6XRXy0hQtNy01FR4QxMJO"
+            + "N9kwCTJAQqbR+vMMC4CCi/0hBw0LAESZCaPsB4tVtcRMWXIVfND8reX6XRXeEAAtNy01FR4QxMJO"
             + "/+QUCgDAbtD6eRNlAETs7ShDEygAgIocBEsTWxBEUYRdohBcAIAA0HTKEYogRBmd3t8NCgCCppTi"
             + "qwh6CKLhtar373EOkgEAsgECCAHoAQGAAgM="
 

@@ -3,7 +3,7 @@ import SwiftUI
 /// The first thing Wingcord shows, once (docs/LOGIN-ONBOARDING.md D2–D4).
 ///
 /// **The lockup isn't drawn here**: it's the backdrop's particles, gathering
-/// into the wings and "Wingcord" (`EmberRenderer`). This is what goes over
+/// into the wings and "Wingcord" (`SignInBackdrop`). This is what goes over
 /// them — the name for VoiceOver, and Get Started once the lockup has formed.
 /// Get Started's glass is the email field's: pressed, it travels and becomes it.
 struct WelcomeView: View {
@@ -48,7 +48,7 @@ struct WelcomeView: View {
         }
         .task {
             // As the lockup finishes gathering; at once where nothing gathers.
-            let delay = motion.reduceMotion ? 0.5 : EmberRenderer.lockupFormedAt - 0.35
+            let delay = motion.reduceMotion ? 0.5 : SignInBackdrop.lockupFormedAt - 0.35
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
             withAnimation(motion.panel) { showsButton = true }

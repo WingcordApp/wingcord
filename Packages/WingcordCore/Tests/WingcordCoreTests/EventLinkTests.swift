@@ -7,7 +7,7 @@ struct EventLinkTests {
 
     @Test("An event link names the server and the event")
     func eventLink() throws {
-        let link = try #require(EventLink.parse("https://discord.com/events/603970300668805120/1323893975486496490"))
+        let link = try #require(EventLink.parse("https://discord.com/events/603970300668805120/1323893975484369279"))
         #expect(link.guildID == GuildID(rawValue: 603_970_300_668_805_120))
         #expect(link.eventID == 1_323_893_975_484_369_279)
         #expect(link.occurrence == nil)
@@ -16,7 +16,7 @@ struct EventLinkTests {
     @Test("One date of a series rides on the end")
     func occurrenceLink() throws {
         let link = try #require(EventLink.parse(
-            "https://canary.discord.com/events/603970300668805120/1323893975486496490/1588436611891200000/"
+            "https://canary.discord.com/events/603970300668805120/1323893975484369279/1588436611891200000/"
         ))
         #expect(link.occurrence == 1_588_436_611_891_200_000)
     }
@@ -33,9 +33,9 @@ struct EventLinkTests {
     @Test("A message's event links, in order, each once, with their dates")
     func linksInText() {
         let text = """
-        tonight https://discord.com/events/603970300668805120/1323893975486496490 and \
-        (discord.com/events/603970300668805120/1323893975486496491/1588436611891200000), \
-        again https://ptb.discord.com/events/603970300668805120/1323893975486496490/
+        tonight https://discord.com/events/603970300668805120/1323893975484369279 and \
+        (discord.com/events/603970300668805120/1323893975487238721/1588436611891200000), \
+        again https://ptb.discord.com/events/603970300668805120/1323893975484369279/
         """
         #expect(EventLink.links(in: text) == [
             EventLink(guildID: GuildID(rawValue: 603_970_300_668_805_120), eventID: 1_323_893_975_484_369_279),
@@ -49,8 +49,8 @@ struct EventLinkTests {
 
     @Test("Another host's page, or a path that goes on, draws no card")
     func linksElsewhere() {
-        #expect(EventLink.links(in: "https://example.com/events/603970300668805120/1323893975486496490").isEmpty)
-        #expect(EventLink.links(in: "https://discord.com/events/603970300668805120/1323893975486496490/more").isEmpty)
+        #expect(EventLink.links(in: "https://example.com/events/603970300668805120/1323893975484369279").isEmpty)
+        #expect(EventLink.links(in: "https://discord.com/events/603970300668805120/1323893975484369279/more").isEmpty)
     }
 
     @Test("Ten a message, as every code link")

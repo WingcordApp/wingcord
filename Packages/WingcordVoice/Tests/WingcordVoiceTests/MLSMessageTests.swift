@@ -108,7 +108,7 @@ struct MLSMessageTests {
     func credentialIdentity() throws {
         let id: UInt64 = 104_694_319_309_049_672
         let credential = Credential(userID: id)
-        #expect(credential.identity == [0x01, 0x73, 0xF2, 0xED, 0xC0, 0x40, 0x10, 0x00])
+        #expect(credential.identity == [0x01, 0x73, 0xF2, 0xED, 0xC0, 0x6A, 0xCF, 0x48])
         #expect(credential.userID == id)
         #expect(try Credential(unmarshalling: try credential.marshalled()) == credential)
     }

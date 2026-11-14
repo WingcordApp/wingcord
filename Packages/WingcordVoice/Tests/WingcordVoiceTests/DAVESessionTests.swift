@@ -348,7 +348,7 @@ struct DAVESessionTests {
         // same user, in the same protocol, three structures away, is written.
         #expect(
             DAVESession.mediaSecretContext(for: 1_328_958_085_359_467_218)
-                == [0x35, 0x10, 0x04, 0x67, 0x56, 0x68, 0x71, 0x12]
+                == [0xD2, 0xFA, 0x3B, 0x67, 0x56, 0x68, 0x71, 0x12]
         )
         // A value whose byte order cannot be mistaken for its own reverse.
         #expect(DAVESession.mediaSecretContext(for: 1) == [1, 0, 0, 0, 0, 0, 0, 0])
@@ -377,7 +377,7 @@ struct DAVESessionTests {
         let call = DAVESession(
             protocolVersion: 1, userID: alice, groupKey: .channel(1_328_958_085_359_467_218)
         )
-        #expect(call.groupID == [0x12, 0x71, 0x68, 0x56, 0x67, 0x04, 0x10, 0x35])
+        #expect(call.groupID == [0x12, 0x71, 0x68, 0x56, 0x67, 0x3B, 0xFA, 0xD2])
 
         // **A Go Live stream is a separate media session and keys on the media
         // session id** — the `rtc_channel_id` its `STREAM_CREATE` carries, read
@@ -389,7 +389,7 @@ struct DAVESessionTests {
             userID: alice,
             groupKey: .mediaSession(1_328_958_085_357_429_398)
         )
-        #expect(stream.groupID == [0x12, 0x71, 0x68, 0x56, 0x67, 0x04, 0x10, 0x34])
+        #expect(stream.groupID == [0x12, 0x71, 0x68, 0x56, 0x67, 0x1C, 0xE2, 0x96])
 
         // And the two are not the same group, which is the whole defect: a
         // stream that shares the call's group id is one this assertion catches

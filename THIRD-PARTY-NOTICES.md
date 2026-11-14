@@ -126,17 +126,23 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## MetalForge
 
-The sign-in screen's ember wallpaper and its particle logo are adapted from
-MetalForge shaders (the "Wallpaper" gradient and "metallogo"), used under the
-project owner's MetalForge subscription:
+In Wingcord's own builds, the sign-in screen's ember wallpaper and its particle
+logo are adapted from MetalForge shaders (the "Wallpaper" gradient and
+"metallogo"), used under the project owner's MetalForge subscription
+(https://metalforge.xyz/terms):
 
-- `Sources/Wingcord/Welcome/Shaders/SignInBackdrop.metal` — `wallpaperGradient`'s
+- `Sources/Wingcord/Welcome/MetalForge/SignInBackdrop.metal` — `wallpaperGradient`'s
   arithmetic, unchanged, split into a half-size field pass and a full-size
   vignette and grain pass; `metallogoVertex` and `metallogoFragment`, with an
   offset, an opacity and an exit added.
-- `Sources/Wingcord/Welcome/EmberRenderer.swift` and `ParticleLockup.swift` —
-  the renderer and the mask sampling, ported from iOS to macOS and reshaped to
+- `Sources/Wingcord/Welcome/MetalForge/EmberRenderer.swift` and `ParticleLockup.swift`
+  — the renderer and the mask sampling, ported from iOS to macOS and reshaped to
   gather into Wingcord's wings and wordmark.
+
+MetalForge's terms let this code ship inside the app and forbid publishing it,
+so the `Welcome/MetalForge` folder is not part of Wingcord's public source. A
+build without it draws a sign-in background of Wingcord's own
+(`PlainEmberBackdrop`).
 
 ## Lottie
 
@@ -332,3 +338,35 @@ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
 LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Display-name fonts
+
+The faces of Discord's display-name styles that Wingcord ships, in
+`Sources/Wingcord/Resources/Fonts`, are each licensed under the SIL Open Font
+License, Version 1.1 (https://openfontlicense.org). Each face's licence, with its
+copyright notice, travels beside it in `Fonts/Licences/` — in the app, inside
+`Wingcord_Wingcord.bundle`. None of them is modified, and none is sold on its own.
+
+- Cherry Bomb One (`CherryBombOne-Regular.ttf`) — Copyright 2019 The Cherry Bomb
+  Project Authors (https://github.com/satsuyako/CherryBomb).
+- Chicle (`Chicle-Regular.ttf`) — Copyright (c) 2007 Angel Koziupa and Alejandro
+  Paul (sudtipos@sudtipos.com), with Reserved Font Name "Chicle".
+- Kalam (`Kalam-Bold.ttf`) — Copyright (c) 2014 Indian Type Foundry
+  (info@indiantypefoundry.com).
+- MuseoModerno (`MuseoModerno-Medium.ttf`) — Copyright 2020 The MuseoModerno Project
+  Authors (https://github.com/Omnibus-Type/MuseoModerno).
+- Néo-Castel (`Neo-castel.ttf`) — Copyright (c) 2023 Max Lillo
+  (https://maxlilllo.tumblr.com), with Reserved Font Name "Ébullition"; under the
+  OIFL, Bye Bye Binary's inclusive French rewrite of the SIL Open Font License 1.1
+  (`Fonts/Licences/NeoCastel.txt`, as the font's author ships it).
+- New Rocker (`NewRocker-Regular.ttf`) — Copyright (c) 2012 Pablo Impallari, Brenda
+  Gallo and Rodrigo Fuenzalida (www.impallari.com).
+- Orbitron (`Orbitron-Bold.ttf`) — Copyright 2018 The Orbitron Project Authors
+  (https://github.com/theleagueof/orbitron), with Reserved Font Name "Orbitron".
+- Pixelify Sans (`PixelifySans-Regular.ttf`) — Copyright 2021 The Pixelify Sans
+  Project Authors (https://github.com/eifetx/Pixelify-Sans).
+- Playpen Sans (`PlaypenSans-Bold.ttf`) — Copyright 2023 The Playpen Sans Project
+  Authors (https://github.com/TypeTogether/Playpen-Sans).
+- Sinistre (`Sinistre-Regular.ttf`) — Copyright (c) 2023 Jules Durand & Collletttivo
+  (https://www.collletttivo.it).
+- Zilla Slab (`ZillaSlab-SemiBold.ttf`) — Copyright 2017 The Mozilla Foundation.

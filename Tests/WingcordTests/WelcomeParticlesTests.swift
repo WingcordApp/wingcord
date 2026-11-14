@@ -2,6 +2,9 @@ import Foundation
 import Testing
 @testable import Wingcord
 
+// MetalForge's particles exist only in builds that have its folder (`SignInBackdrop`).
+#if WINGCORD_METALFORGE
+
 /// The welcome's particles: where they gather, and when they swarm between the
 /// word and the wings (docs/LOGIN-ONBOARDING.md §6).
 @MainActor
@@ -74,3 +77,5 @@ struct WelcomeParticlesTests {
         #expect(EmberRenderer.swap(at: EmberRenderer.lockupFormedAt) == 0)
     }
 }
+
+#endif
