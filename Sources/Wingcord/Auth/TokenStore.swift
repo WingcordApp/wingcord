@@ -16,7 +16,17 @@ import Security
 /// restored onto another machine.
 nonisolated enum TokenStore {
     private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Auth")
-    private static let service = "dev.wingcord.Wingcord.token"
+
+    /// The Keychain service every token is filed under.
+    ///
+    /// **A copy that tests the updater names its own** (`WingcordKeychainService`,
+    /// written into its Info.plist by `scripts/release.sh make --test`). It is
+    /// signed with a throwaway certificate, so reading the real app's tokens
+    /// would put the "wants to use your confidential information" prompt up
+    /// over the reader's own sign-in — and a test must never be able to answer
+    /// it, overwrite a token or list the accounts. No shipped build has the key.
+    private static let service = Bundle.main.object(forInfoDictionaryKey: "WingcordKeychainService") as? String
+        ?? "dev.wingcord.Wingcord.token"
 
     enum Failure: Error {
         case keychain(OSStatus)

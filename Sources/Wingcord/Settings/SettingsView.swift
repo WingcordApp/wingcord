@@ -169,14 +169,9 @@ private struct SettingsPaneAction {
             title = "Refresh"
             symbolName = "arrow.clockwise"
             perform = { model, _ in model.sessionController.refreshConnectedApps() }
-        case .about:
-            title = "Release Notes"
-            symbolName = "doc.text"
-            perform = { _, openURL in
-                if let url = URL(string: "https://github.com/wingcord/wingcord/releases") {
-                    openURL(url)
-                }
-            }
+        // About has no toolbar act: its release notes are in the pane itself, from
+        // the bundle (docs/UPDATES.md). The button used to open
+        // github.com/wingcord, an account that isn't the project's.
         default:
             return nil
         }

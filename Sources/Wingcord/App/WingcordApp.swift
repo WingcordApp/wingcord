@@ -72,6 +72,9 @@ struct WingcordApp: App {
         AppDependencyManager.shared.add(dependency: model)
         AppDependencyManager.shared.add(dependency: focusSync)
         focusSync.checkAtLaunch()
+        // Updates, in a release (docs/UPDATES.md D4): Sparkle checks in the
+        // background from here on, and does nothing in any other build.
+        AppUpdates.shared.start()
         // `--demo` has no session to start it: what plays is read and built
         // the same way, and shown on the reader's own card only.
         if LaunchOptions.current.usesDemoFixtures {
@@ -154,6 +157,7 @@ struct WingcordApp: App {
                 // Help ▸ Report a Bug…, `/bug`, and the question after a crash
                 // (docs/BUG-REPORTING.md D21).
                 .presentsBugReport()
+                .offersMoveToApplications()
                 // **After every presenter**, so a card is over whatever raised
                 // it — a profile, the switcher, the events.
                 .hostsModals(publish: { model.isModalShown = $0 })
@@ -272,6 +276,13 @@ struct WingcordCommands: Commands {
                 .disabled(!AppSettings.shared.clipsEnabled)
             Button("Clips Library") { ClipsWindow.open() }
                 .keyboardShortcut("l", modifiers: [.command, .option])
+        }
+        // Under About, where a Mac app keeps it (docs/UPDATES.md D8). Disabled,
+        // not hidden, in a build that doesn't update — the stable, perf and demo
+        // copies — so the menu reads the same in every build.
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { AppUpdates.shared.checkForUpdates() }
+                .disabled(!AppUpdates.shared.isEnabled || LaunchOptions.current.showsReadyUpdate)
         }
         // Settings is a `Window` scene rather than a `Settings` scene, so the
         // item and its ⌘, are installed by hand. Same title and same shortcut
@@ -680,24 +691,37 @@ nonisolated struct LaunchOptions: Sendable {
     /// `--demo --signed-out` with the demo's accounts already saved, so "Choose an
     /// account" comes first: `--saved-accounts`.
     var hasSavedAccounts = false
+    /// An update that's downloaded and waiting, so the toolbar's arrow and its card
+    /// can be looked at with no feed and no network: `--update-ready`.
+    var showsReadyUpdate = false
+
+    /// The identifier of a copy built to test the updater (`scripts/release.sh
+    /// make --test`). Signed with a throwaway certificate, so it must never sign in.
+    static let updateTestIdentifier = "dev.wingcord.Wingcord.updatetest"
 
     static let current: LaunchOptions = {
         let arguments = Set(ProcessInfo.processInfo.arguments)
+        // **The demo bundle is always the demo.** Opened from the Dock or
+        // Finder it gets no arguments, and it used to sign in to the
+        // reader's real account with the token in the Keychain — so a
+        // profile edit "in the demo" was a real one (2026-10-22). Its own
+        // identifier is the switch now, whatever it was launched with.
+        // A copy testing the updater is the demo too, for the same reason and
+        // one more: Sparkle relaunches it with no arguments at all.
+        let isDemo = arguments.contains("--demo")
+            || Bundle.main.bundleIdentifier == "dev.wingcord.Wingcord.demo"
+            || Bundle.main.bundleIdentifier == updateTestIdentifier
         return LaunchOptions(
-            // **The demo bundle is always the demo.** Opened from the Dock or
-            // Finder it gets no arguments, and it used to sign in to the
-            // reader's real account with the token in the Keychain — so a
-            // profile edit "in the demo" was a real one (2026-10-22). Its own
-            // identifier is the switch now, whatever it was launched with.
-            usesDemoFixtures: arguments.contains("--demo")
-                || Bundle.main.bundleIdentifier == "dev.wingcord.Wingcord.demo",
+            usesDemoFixtures: isDemo,
             pretendsAGameIsRunning: arguments.contains("--overlay"),
             usesSyntheticMicrophone: arguments.contains("--synthetic-microphone"),
             forcesReducedMotion: arguments.contains("--reduce-motion"),
             forcesWelcome: arguments.contains("--welcome"),
             startsSignedOut: arguments.contains("--signed-out") || arguments.contains("--welcome")
                 || arguments.contains("--saved-accounts"),
-            hasSavedAccounts: arguments.contains("--saved-accounts")
+            hasSavedAccounts: arguments.contains("--saved-accounts"),
+            // Only ever in the demo: a real build shows a real update or none.
+            showsReadyUpdate: isDemo && arguments.contains("--update-ready")
         )
     }()
 }

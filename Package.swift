@@ -29,6 +29,12 @@ let package = Package(
         // render server runs it and the main thread does nothing per frame —
         // seventeen of the eighteen; see `SuperReactionEffects`.
         .package(url: "https://github.com/airbnb/lottie-ios", from: "4.5.0"),
+        // Updates (docs/UPDATES.md). Sparkle ships as a binary framework, so it
+        // is the one dependency that lands in Contents/Frameworks instead of in
+        // the binary — `build-app.sh` copies and signs it, and the rpath below
+        // is how the executable finds it there. Only release builds turn it on
+        // (D4): a bundle without `SUFeedURL` never checks.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.1"),
     ],
     targets: [
         .executableTarget(
@@ -38,6 +44,7 @@ let package = Package(
                 "WingcordNet",
                 "WingcordVoice",
                 .product(name: "Lottie", package: "lottie-ios"),
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
             // The eleven faces a styled display name can be set in. `.copy`
             // rather than `.process`: these are opaque binaries with no build
@@ -84,6 +91,12 @@ let package = Package(
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
                 .swiftLanguageMode(.v6),
+            ],
+            // SwiftPM links with `@loader_path` alone, which finds Sparkle
+            // beside the binary in `.build` but not in an app bundle, where it
+            // sits in Contents/Frameworks.
+            linkerSettings: [
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
             ]
         ),
         .testTarget(

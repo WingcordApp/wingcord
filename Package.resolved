@@ -1,5 +1,5 @@
 {
-  "originHash" : "12ca99d3e14e86d80aeb5dcf7ed79a38fa6f941ba6c2486465489d99c20c11c8",
+  "originHash" : "0b9e49536fbcde666c9b989e3ac802013117bc3c3376cdc2bde9b0a156622edf",
   "pins" : [
     {
       "identity" : "lottie-ios",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "f4db77d7feacba0c2360b84a40c38a6ce8ff399d",
         "version" : "4.6.1"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "ab7d71291238df6e0492143b120c9b696a35f603",
+        "version" : "2.10.1"
       }
     }
   ],

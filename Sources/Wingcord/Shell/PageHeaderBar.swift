@@ -28,7 +28,15 @@ struct PageHeaderBar<Leading: View, Center: View, Trailing: View>: View {
         ) {
             leading.layoutValue(key: HeaderSlotKey.self, value: .leading)
             center.layoutValue(key: HeaderSlotKey.self, value: .center)
-            trailing.layoutValue(key: HeaderSlotKey.self, value: .trailing)
+            // The update arrow ends every page's row, as it ends the ordinary one
+            // (docs/UPDATES.md D8), at the height of the search fields beside it.
+            // It takes no room while there's no update.
+            HStack(spacing: Spacing.base) {
+                trailing
+                UpdateToolbarButton()
+                    .environment(\.headerControlSide, SearchField.height)
+            }
+            .layoutValue(key: HeaderSlotKey.self, value: .trailing)
         }
         .padding(.leading, (layout?.detailHeaderLeadingClearance ?? 0) + Spacing.snug)
         .padding(.trailing, Spacing.snug)

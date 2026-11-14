@@ -25,8 +25,31 @@ UUID="$(printf '%s' "$IMAGE_LINE" | awk '{ print $4 }')"
 
 DSYM="${2:-$ROOT/build/dSYMs/Wingcord-$UUID.dSYM}"
 DWARF="$DSYM/Contents/Resources/DWARF/Wingcord"
+
+# **A published build's dSYM is also in the private bucket** (docs/UPDATES.md
+# D10), filed by the same id — so a report from a release this Mac has no copy
+# of is fetched, unzipped beside the others and kept. Wrangler signs in as Alex;
+# `WINGCORD_SYMBOLS_LOCAL=<folder>` reads Wrangler's local R2 there instead,
+# which is how the release command's own test puts one.
+if [ ! -f "$DWARF" ] && [ -z "${2:-}" ]; then
+    ARCHIVE="$(mktemp -d)/Wingcord-$UUID.dSYM.zip"
+    if [ -n "${WINGCORD_SYMBOLS_LOCAL:-}" ]; then
+        WHERE=(--local --persist-to "$WINGCORD_SYMBOLS_LOCAL")
+    else
+        WHERE=(--remote)
+    fi
+    echo "Fetching the dSYM for $UUID from wingcord-symbols…" >&2
+    if (cd "$ROOT/ReportsWorker" && npx --no-install wrangler r2 object get \
+            "wingcord-symbols/Wingcord-$UUID.dSYM.zip" --file "$ARCHIVE" "${WHERE[@]}") > /dev/null 2>&1 \
+        && [ -s "$ARCHIVE" ]; then
+        mkdir -p "$ROOT/build/dSYMs"
+        ditto -x -k "$ARCHIVE" "$ROOT/build/dSYMs"
+    fi
+    rm -rf "$(dirname "$ARCHIVE")"
+fi
+
 if [ ! -f "$DWARF" ]; then
-    echo "error: no dSYM for build $UUID at $DSYM" >&2
+    echo "error: no dSYM for build $UUID at $DSYM, nor in wingcord-symbols" >&2
     exit 1
 fi
 

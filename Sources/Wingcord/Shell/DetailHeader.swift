@@ -127,6 +127,8 @@ struct DetailHeader: View {
                 } else if !primary.isServerPage && !primary.isCall && !primary.isHomePage && primary != .discovery {
                     HeaderSearch()
                 }
+                // Last, at the row's very end, where Discord puts its own.
+                UpdateToolbarButton()
             }
         }
     }

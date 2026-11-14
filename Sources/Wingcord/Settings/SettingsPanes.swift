@@ -1739,6 +1739,8 @@ private extension AppModel.ConnectionState {
 
 private struct AboutPane: View {
     @Environment(\.openURL) private var openURL
+    @State private var updates = AppUpdates.shared
+    @State private var mover = MoveToApplications.shared
 
     var body: some View {
         SettingsHero(
@@ -1754,26 +1756,85 @@ private struct AboutPane: View {
             SettingsValueRow(title: "Build", value: Bundle.main.buildVersion)
         }
 
+        // docs/UPDATES.md D7–D9.
+        SettingsGroup("Updates") {
+            if updates.isEnabled {
+                if mover.appliesHere {
+                    SettingsCard {
+                        SettingsActionRow(
+                            mover.location.canUpdate ? "Wingcord is in your Downloads folder" : "Wingcord can\u{2019}t update itself here",
+                            help: "Sparkle replaces Wingcord where it is. In Applications it always can.",
+                            actionTitle: mover.isMoving ? "Moving…" : "Move to Applications"
+                        ) { mover.move() }
+                    }
+                    if let failure = mover.failure {
+                        SettingsFootnote(failure, symbolName: "exclamationmark.triangle")
+                    }
+                }
+                SettingsCard {
+                    SettingsActionRow(
+                        "Check for updates",
+                        help: "Wingcord also checks by itself every four hours. A check sends only its name and version.",
+                        actionTitle: "Check Now"
+                    ) { updates.checkForUpdates() }
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Download and install updates automatically",
+                        help: "A new version downloads in the background and installs when you quit. The arrow at the end of the toolbar restarts into it sooner.",
+                        isOn: $updates.installsAutomatically
+                    )
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Get beta updates",
+                        help: "Try versions before they're released. On when you've run a beta.",
+                        isOn: $updates.receivesBetas
+                    )
+                }
+                SettingsFootnote(lastCheck)
+            } else {
+                SettingsCard {
+                    SettingsValueRow(title: "Updates", value: "Come with release builds")
+                }
+            }
+        }
+
+        // The notes this build was released with, which the release command
+        // puts in the bundle (`scripts/release.sh`); a build of the working
+        // tree has none.
+        if let notes = Self.releaseNotes {
+            SettingsGroup("What\u{2019}s New in \(Bundle.main.displayVersion)") {
+                SettingsCard {
+                    RenderedMarkdown(text: notes, notice: "")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+
+        // **No Source or Licence tiles until the code is public**: they pointed
+        // at github.com/wingcord, an account that isn't the project's.
         SettingsGroup("Project") {
             SettingsTileRow(tiles: [
-                .init(
-                    id: "source", title: "Source",
-                    caption: "The code that draws this window",
-                    symbolName: "chevron.left.forwardslash.chevron.right"
-                ) { open("https://github.com/wingcord/wingcord") },
-                .init(
-                    id: "licence", title: "Licence",
-                    caption: "How you may use it",
-                    symbolName: "doc.text"
-                ) { open("https://github.com/wingcord/wingcord/blob/main/LICENSE") },
                 .init(
                     id: "lottie", title: "Lottie",
                     caption: "Plays Discord\u{2019}s animated stickers",
                     symbolName: "heart.fill"
                 ) { open("https://github.com/airbnb/lottie-ios") },
+                .init(
+                    id: "sparkle", title: "Sparkle",
+                    caption: "Keeps Wingcord up to date",
+                    symbolName: "sparkles"
+                ) { open("https://sparkle-project.org") },
             ])
         }
     }
+
+    private var lastCheck: String {
+        guard let date = updates.lastCheck else { return "Not checked yet." }
+        return "Last checked \(date.formatted(.relative(presentation: .named)))."
+    }
+
+    private static let releaseNotes: String? = Bundle.main.url(forResource: "ReleaseNotes", withExtension: "md")
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
 
     private func open(_ string: String) {
         guard let url = URL(string: string) else { return }

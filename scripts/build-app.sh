@@ -22,8 +22,68 @@ BIN="$(swift build -c "$CONFIG" --product Wingcord --show-bin-path)/Wingcord"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Wingcord"
+
+# ── Where the app looks for frameworks ─────────────────────────────────────
+# **One place only: its own Contents/Frameworks.** SwiftPM links a binary
+# framework (Sparkle) with two more search paths — `@loader_path`, and the
+# build folder on this Mac, written out in full. The second spells this Mac's
+# home folder, and with it its owner's name, into every copy; `strip` keeps
+# load commands, so it would ship. And either is somewhere else a framework
+# could be planted for the app to load in Sparkle's place.
+otool -l "$APP/Contents/MacOS/Wingcord" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }' \
+    | while IFS= read -r RPATH; do
+        [ "$RPATH" = "@executable_path/../Frameworks" ] && continue
+        install_name_tool -delete_rpath "$RPATH" "$APP/Contents/MacOS/Wingcord" 2>/dev/null
+    done
+if ! otool -l "$APP/Contents/MacOS/Wingcord" | grep -q "@executable_path/../Frameworks"; then
+    echo "error: the binary has no rpath to Contents/Frameworks (see Package.swift)." >&2
+    exit 1
+fi
 cp "$ROOT/Packaging/Info.plist" "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+
+# ── What only a release carries ────────────────────────────────────────────
+# `scripts/release.sh` builds through this script and passes these; a plain
+# build passes none, so it never has a feed and never updates itself
+# (docs/UPDATES.md D4) — the stable copy replacing itself with a release signed
+# by another certificate would lose its Keychain access and its permissions.
+# Written before anything is signed: the Info.plist is part of the seal.
+#
+#   WINGCORD_FEED_URL          SUFeedURL — the appcast; the updater starts only with one
+#   WINGCORD_ED_PUBLIC_KEY     SUPublicEDKey, when it isn't already in Packaging/Info.plist
+#   WINGCORD_SHORT_VERSION     CFBundleShortVersionString
+#   WINGCORD_BUILD_NUMBER      CFBundleVersion
+#   WINGCORD_PRERELEASE        WingcordPrerelease ("Beta 2"); set but empty removes it
+#   WINGCORD_BUNDLE_ID         a test copy's own identifier, defaults domain and folders
+#   WINGCORD_BUNDLE_NAME       its name in Finder, the Dock and macOS's prompts
+#   WINGCORD_KEYCHAIN_SERVICE  its own Keychain service (TokenStore)
+#   WINGCORD_ALLOW_LOCAL_HTTP  1 lets a test copy read a feed served from 127.0.0.1
+PLIST="$APP/Contents/Info.plist"
+plist_set() { # key type value
+    /usr/libexec/PlistBuddy -c "Set :$1 $3" "$PLIST" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Add :$1 $2 $3" "$PLIST"
+}
+[ -n "${WINGCORD_FEED_URL:-}" ] && plist_set SUFeedURL string "$WINGCORD_FEED_URL"
+[ -n "${WINGCORD_ED_PUBLIC_KEY:-}" ] && plist_set SUPublicEDKey string "$WINGCORD_ED_PUBLIC_KEY"
+[ -n "${WINGCORD_SHORT_VERSION:-}" ] && plist_set CFBundleShortVersionString string "$WINGCORD_SHORT_VERSION"
+[ -n "${WINGCORD_BUILD_NUMBER:-}" ] && plist_set CFBundleVersion string "$WINGCORD_BUILD_NUMBER"
+if [ -n "${WINGCORD_PRERELEASE+set}" ]; then
+    if [ -n "$WINGCORD_PRERELEASE" ]; then
+        plist_set WingcordPrerelease string "$WINGCORD_PRERELEASE"
+    else
+        /usr/libexec/PlistBuddy -c "Delete :WingcordPrerelease" "$PLIST" 2>/dev/null || true
+    fi
+fi
+[ -n "${WINGCORD_BUNDLE_ID:-}" ] && plist_set CFBundleIdentifier string "$WINGCORD_BUNDLE_ID"
+if [ -n "${WINGCORD_BUNDLE_NAME:-}" ]; then
+    plist_set CFBundleName string "$WINGCORD_BUNDLE_NAME"
+    plist_set CFBundleDisplayName string "$WINGCORD_BUNDLE_NAME"
+fi
+[ -n "${WINGCORD_KEYCHAIN_SERVICE:-}" ] && plist_set WingcordKeychainService string "$WINGCORD_KEYCHAIN_SERVICE"
+if [ "${WINGCORD_ALLOW_LOCAL_HTTP:-}" = "1" ]; then
+    /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" 2>/dev/null || true
+    plist_set NSAppTransportSecurity:NSAllowsLocalNetworking bool true
+fi
 
 # ── Symbols ────────────────────────────────────────────────────────────────
 # The binary SwiftPM links carries the name of every function in it and a map
@@ -78,6 +138,13 @@ cp -R "$BUNDLE" "$APP/Contents/Resources/"
 # Plain text, so Help › Acknowledgements opens it on any Mac.
 cp "$ROOT/THIRD-PARTY-NOTICES.md" "$APP/Contents/Resources/Acknowledgements.txt"
 
+# ── Release notes ──────────────────────────────────────────────────────────
+# A release carries its own notes, which Settings › About shows (`release.sh`
+# passes WINGCORD_RELEASE_NOTES). A build of the working tree has none.
+if [ -n "${WINGCORD_RELEASE_NOTES:-}" ]; then
+    cp "$WINGCORD_RELEASE_NOTES" "$APP/Contents/Resources/ReleaseNotes.md"
+fi
+
 # ── App icon ───────────────────────────────────────────────────────────────
 # The icon is an Icon Composer document, not a pre-rendered .icns. `actool`
 # compiles it into an Assets.car carrying the light / dark / tinted / clear
@@ -121,6 +188,28 @@ ADAPTER="$("$ROOT/scripts/build-mediaremote-adapter.sh")"
 mkdir -p "$APP/Contents/Frameworks"
 cp -R "$ADAPTER" "$APP/Contents/Frameworks/"
 cp "$ROOT/Packaging/MediaRemoteAdapter/bin/mediaremote-adapter.pl" "$APP/Contents/Resources/"
+
+# ── Updates ────────────────────────────────────────────────────────────────
+# Sparkle is a binary framework SwiftPM puts beside the binary; the app finds it
+# in Contents/Frameworks through the rpath Package.swift adds. `ditto`, not
+# `cp`: the framework is versioned, and its symlinks and modes must survive.
+#
+# **Without its XPC services.** They exist for sandboxed apps, which can't run
+# Sparkle's installer themselves; Wingcord isn't sandboxed, and Sparkle's own
+# documentation says such an app may remove them. Two fewer programs to sign,
+# and none shipped that can't be used.
+#
+# A MISSING framework fails the build, as the fonts do: the app links it, so a
+# bundle without it would not even launch.
+SPARKLE="$(dirname "$BIN")/Sparkle.framework"
+if [ ! -d "$SPARKLE" ]; then
+    echo "error: $SPARKLE is missing — the app links Sparkle and would not launch." >&2
+    exit 1
+fi
+rm -rf "$APP/Contents/Frameworks/Sparkle.framework"
+ditto "$SPARKLE" "$APP/Contents/Frameworks/Sparkle.framework"
+rm -rf "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices" \
+       "$APP/Contents/Frameworks/Sparkle.framework/XPCServices"
 
 # ── App Intents ────────────────────────────────────────────────────────────
 # The Focus filter and the Shortcuts actions, described for the system. Before
@@ -174,10 +263,21 @@ BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Conten
 # identities only" — so a naive `grep -c` reports two for a single certificate
 # and every lookup looks ambiguous. Resolving to the SHA-1 and signing with that
 # also removes any chance of a substring matching the wrong identity.
+#
+# **A name matches exactly, or as "Name: …"** (Apple's identities carry the
+# account after a colon), **or the SHA-1 itself** — never as a substring, now
+# that release builds are signed "Wingcord" and that would also match
+# "Wingcord Dev" (docs/UPDATES.md D1). `WINGCORD_SIGN_KEYCHAIN` names a keychain
+# to look in and sign from, instead of the search list: the throwaway
+# certificate `release.sh make --test` signs with lives in one of its own.
+identities() {
+    security find-identity -p codesigning ${WINGCORD_SIGN_KEYCHAIN:+"$WINGCORD_SIGN_KEYCHAIN"} 2>/dev/null \
+        | sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) "([^"]*)".*$/\1	\2/p' | sort -u
+}
 for CANDIDATE in "${WINGCORD_SIGN_IDENTITY:-}" "Apple Development" "Wingcord Dev"; do
     [ -n "$CANDIDATE" ] || continue
-    HASHES=$(security find-identity -p codesigning 2>/dev/null \
-        | grep -F "$CANDIDATE" | awk '{ print $2 }' | sort -u)
+    HASHES=$(identities | awk -F'\t' -v c="$CANDIDATE" \
+        '$1 == c || $2 == c || index($2, c ": ") == 1 { print $1 }' | sort -u)
     COUNT=$(printf '%s' "$HASHES" | grep -c . || true)
     if [ "$COUNT" -eq 1 ]; then
         SIGN_IDENTITY="$HASHES"
@@ -198,14 +298,57 @@ elif [ "${SIGN_NAME:-}" = "Wingcord Dev" ]; then
     echo "      expect one Keychain prompt per build. See the comment above." >&2
 fi
 
-# Nested code first: the app's signature seals the framework as it stands.
-codesign --force --sign "$SIGN_IDENTITY" --timestamp=none \
-    "$APP/Contents/Frameworks/MediaRemoteAdapter.framework" \
+sign() { # path, then any extra codesign options
+    local target="$1"
+    shift
+    codesign --force --sign "$SIGN_IDENTITY" --timestamp=none \
+        ${WINGCORD_SIGN_KEYCHAIN:+--keychain "$WINGCORD_SIGN_KEYCHAIN"} "$@" "$target"
+}
+
+# ── The hardened runtime (docs/UPDATES.md D2) ──────────────────────────────
+# On for every release build, self-signed ones included. It is what stops
+# another program from starting Wingcord with its own code injected
+# (`DYLD_INSERT_LIBRARIES` and the like) and reading the Keychain AS Wingcord,
+# whose identity the token's item trusts. A debug build stays without it: it is
+# for stepping through. The perf copy keeps it and adds `get-task-allow`, which
+# is all Instruments and `sample` need to attach.
+#
+# Its exceptions are written here rather than in Packaging/, because one of them
+# depends on the certificate:
+#
+# - `cs.disable-library-validation`, **only for an identity with no Apple team
+#   id** (the self-signed release one, or ad hoc). Library validation lets a
+#   process load only Apple's code and code from its own team, and code with no
+#   team has none to share — so without it a self-signed Wingcord could not load
+#   its own Sparkle.framework. An Apple-issued identity signs both with the same
+#   team, and keeps the check.
+RUNTIME=""
+SIGN_ENTITLEMENTS="$ICON_STAGE/sign.entitlements"
+cp "$ENTITLEMENTS" "$SIGN_ENTITLEMENTS"
+
+# Nested code first, from the inside out: the app's signature seals each
+# framework as it stands, and a framework's seals its helpers. Never `--deep`,
+# which would re-sign Sparkle's helpers without their own options.
+sign "$APP/Contents/Frameworks/MediaRemoteAdapter.framework" \
     || echo "warning: signing MediaRemoteAdapter.framework failed." >&2
 
-codesign --force --sign "$SIGN_IDENTITY" \
-    --entitlements "$ENTITLEMENTS" \
-    --timestamp=none "$APP" \
+TEAM="$(codesign -dv "$APP/Contents/Frameworks/MediaRemoteAdapter.framework" 2>&1 \
+    | sed -n 's/^TeamIdentifier=//p')"
+if [ "$CONFIG" = "release" ]; then
+    RUNTIME="runtime"
+    if [ -z "$TEAM" ] || [ "$TEAM" = "not set" ]; then
+        /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" \
+            "$SIGN_ENTITLEMENTS" 2>/dev/null || true
+    fi
+fi
+
+SPARKLE_IN="$APP/Contents/Frameworks/Sparkle.framework"
+for PART in "$SPARKLE_IN/Versions/B/Autoupdate" "$SPARKLE_IN/Versions/B/Updater.app" "$SPARKLE_IN"; do
+    sign "$PART" ${RUNTIME:+--options "$RUNTIME"} \
+        || { echo "error: signing $PART failed." >&2; exit 1; }
+done
+
+sign "$APP" ${RUNTIME:+--options "$RUNTIME"} --entitlements "$SIGN_ENTITLEMENTS" \
     || echo "warning: codesign failed with identity '$SIGN_IDENTITY'." >&2
 
 echo "App: $APP"

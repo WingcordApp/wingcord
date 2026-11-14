@@ -67,6 +67,12 @@ mkdir -p "$APP/Contents/Frameworks"
 cp -R "$ADAPTER" "$APP/Contents/Frameworks/"
 cp "$ROOT/Packaging/MediaRemoteAdapter/bin/mediaremote-adapter.pl" "$APP/Contents/Resources/"
 
+# Sparkle, which the binary links (so it won't launch without it) even though a
+# demo never updates — it has no feed. As build-app.sh places it.
+ditto "$BIN_DIR/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
+rm -rf "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices" \
+       "$APP/Contents/Frameworks/Sparkle.framework/XPCServices"
+
 # The Focus filter and the Shortcuts actions, under the demo's own identifier —
 # System Settings offers "Wingcord Demo" beside the real app, never instead of it.
 "$ROOT/scripts/extract-app-intents.sh" "$APP" "$CONFIG" "$DEMO_ID"
@@ -80,6 +86,11 @@ SIGN_IDENTITY="$(security find-identity -p codesigning 2>/dev/null \
 codesign --force --sign "${SIGN_IDENTITY:--}" --timestamp=none \
     "$APP/Contents/Frameworks/MediaRemoteAdapter.framework" 2>/dev/null \
     || echo "warning: signing MediaRemoteAdapter.framework failed." >&2
+for PART in Versions/B/Autoupdate Versions/B/Updater.app ""; do
+    codesign --force --sign "${SIGN_IDENTITY:--}" --timestamp=none \
+        "$APP/Contents/Frameworks/Sparkle.framework/$PART" 2>/dev/null \
+        || echo "warning: signing Sparkle.framework/$PART failed." >&2
+done
 codesign --force --sign "${SIGN_IDENTITY:--}" \
     --entitlements "$ROOT/Packaging/Wingcord.entitlements" \
     --timestamp=none "$APP" 2>/dev/null \
