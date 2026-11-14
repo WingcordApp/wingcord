@@ -75,6 +75,8 @@ struct WingcordApp: App {
         // Updates, in a release (docs/UPDATES.md D4): Sparkle checks in the
         // background from here on, and does nothing in any other build.
         AppUpdates.shared.start()
+        // A copy testing the updater reads the Keychain as a signed-in launch would.
+        UpdateTestKeychainProbe.runIfTestCopy()
         // `--demo` has no session to start it: what plays is read and built
         // the same way, and shown on the reader's own card only.
         if LaunchOptions.current.usesDemoFixtures {

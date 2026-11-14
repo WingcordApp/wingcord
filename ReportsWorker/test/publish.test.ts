@@ -106,6 +106,11 @@ describe("Publish…", () => {
 		expect(post.body.message.allowed_mentions).toEqual({ parse: [] });
 		expect(post.body.message.components[0].components[0].url).toBe("https://github.com/WingcordApp/wingcord/issues/12");
 		expect(post.file).toEqual({ name: `${created.id}.png`, type: "image/png", size: 7000 });
+		// The words in a card, the picture inside it.
+		expect(post.body.message.content).toBe("");
+		expect(post.body.message.embeds[0]).toMatchObject({ title: "🐛 Bug", image: { url: `attachment://${created.id}.png` } });
+		expect(post.body.message.embeds[0].description).toContain(TESTER_WORDS);
+		expect(post.body.message.attachments).toEqual([{ id: 0, filename: `${created.id}.png` }]);
 
 		// The issue, edited to link the post.
 		const linked = fakes.issues.get(12)!;
@@ -289,10 +294,28 @@ describe("Same as…", () => {
 		expect(body).toContain("Reported 2 times.");
 		expect(body).toContain("- Wingcord 1.1 (45) · macOS 27.4 · Mac17,2");
 		const postEdit = fakes.discord.filter((call) => call.method === "PATCH" && /^\/channels\/(\d+)\/messages\/\1$/.test(call.path)).at(-1)!;
-		expect(postEdit.body.content).toContain("Seen in Wingcord 1.0 (42), 1.1 (45) on macOS 27.3, 27.4 · reported 2 times");
+		expect(postEdit.body.content).toBe("");
+		expect(postEdit.body.embeds[0].description).toContain("Seen in Wingcord 1.0 (42), 1.1 (45) on macOS 27.3, 27.4 · reported 2 times");
+		// Published without its screenshot: no file is kept, and none is sent.
+		expect(postEdit.body.attachments).toEqual([]);
+		expect(postEdit.file).toBeUndefined();
 		expect(JSON.stringify([fakes.github, fakes.discord])).not.toContain("secret-server");
 		const told = fakes.discord.filter((call) => call.path === REPLY).at(-1)!;
 		expect(told.body.content).toBe("Counted into [#12](https://github.com/WingcordApp/wingcord/issues/12) — 2 times now.");
+	});
+
+	it("redraws a card with its screenshot by sending the picture again", async () => {
+		const fakes = fakeServices();
+		const first = await reportWithFiles();
+		await interact(submit(`publish:${first.id}`, publishAnswers()));
+		const second = await create(bugReport({ attachments: [] }));
+		await interact(submit(`same:${second.id}`, { issue: ["12"], number: "" }));
+
+		const postEdit = fakes.discord.filter((call) => call.method === "PATCH" && /^\/channels\/(\d+)\/messages\/\1$/.test(call.path)).at(-1)!;
+		expect(postEdit.file).toEqual({ name: `${first.id}.png`, type: "image/png", size: 7000 });
+		expect(postEdit.body.attachments).toEqual([{ id: 0, filename: `${first.id}.png` }]);
+		expect(postEdit.body.embeds[0].image).toEqual({ url: `attachment://${first.id}.png` });
+		expect(postEdit.body.embeds[0].description).toContain("reported 2 times");
 	});
 
 	it("takes a number or a link, and refuses issues it didn't publish or that are closed", async () => {

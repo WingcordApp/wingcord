@@ -24,6 +24,8 @@ export interface Embed {
 	fields: { name: string; value: string; inline?: boolean }[];
 	footer?: { text: string };
 	timestamp?: string;
+	/** A picture in the card — `attachment://<name>` for a file sent with the message. */
+	image?: { url: string };
 }
 
 export interface Button {

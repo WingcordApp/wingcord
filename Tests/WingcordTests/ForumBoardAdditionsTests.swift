@@ -392,6 +392,33 @@ struct ForumBoardAdditionsTests {
         #expect(card(post, in: model)?.openingWords == "bold words and more")
     }
 
+    @Test("A post that's only a card previews the card's words, where Discord's row says to click")
+    func cardWords() {
+        let model = model()
+        let embedded = post(snowflake(10))
+        let carded = post(snowflake(20))
+        let titled = post(snowflake(30))
+        func message(in post: Channel, _ payload: MessagePayload) -> Message {
+            Message(id: MessageID(rawValue: post.id.rawValue), channelID: post.id, authorID: author, content: "", payload: payload)
+        }
+        live([embedded, carded, titled], openers: [
+            // The reports bot's post: an embed and a link button.
+            embedded.id: message(in: embedded, MessagePayload(embeds: [
+                Embed(title: "🐛 Bug", description: "The call went **quiet**\n\n**Steps to reproduce**\nJoin a call"),
+            ])),
+            carded.id: message(in: carded, MessagePayload(displayComponents: [
+                .container(accent: 0xFF7B1C, children: [
+                    .text("### Calls go quiet"),
+                    .row(ActionRow(components: [MessageComponent(id: "open", label: "Open", kind: .action(customID: "open"))])),
+                ]),
+            ])),
+            titled.id: message(in: titled, MessagePayload(embeds: [Embed(title: "Only a title")])),
+        ], in: model)
+        #expect(card(embedded, in: model)?.openingWords == "The call went quiet Steps to reproduce Join a call")
+        #expect(card(carded, in: model)?.openingWords == "Calls go quiet", "the text, never the buttons' labels")
+        #expect(card(titled, in: model)?.openingWords == "Only a title")
+    }
+
     @Test("A search lights its words in the title")
     func searchHighlight() {
         let model = model()

@@ -28,6 +28,15 @@ nonisolated enum TokenStore {
     private static let service = Bundle.main.object(forInfoDictionaryKey: "WingcordKeychainService") as? String
         ?? "dev.wingcord.Wingcord.token"
 
+    /// What the Keychain calls an item: the name in "Wingcord wants to access
+    /// key … in your keychain", the question a self-signed build brings once
+    /// per account after every update (docs/UPDATES.md D1). **An item without
+    /// one is called by its service**, and "dev.wingcord.Wingcord.token" reads
+    /// like something gone wrong (seen live, 2026-11-14). The app's own name,
+    /// so a copy testing the updater says so. Written with every store, so an
+    /// item saved before takes it the next time its token is saved.
+    static let label = "\(Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Wingcord") sign-in"
+
     enum Failure: Error {
         case keychain(OSStatus)
     }
@@ -82,7 +91,7 @@ nonisolated enum TokenStore {
 
         let updateStatus = SecItemUpdate(
             query as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary
+            [kSecValueData as String: data, kSecAttrLabel as String: label] as CFDictionary
         )
         if updateStatus == errSecSuccess { return }
         guard updateStatus == errSecItemNotFound else {
@@ -90,6 +99,7 @@ nonisolated enum TokenStore {
         }
 
         query[kSecValueData as String] = data
+        query[kSecAttrLabel as String] = label
         query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let addStatus = SecItemAdd(query as CFDictionary, nil)
         guard addStatus == errSecSuccess else { throw Failure.keychain(addStatus) }

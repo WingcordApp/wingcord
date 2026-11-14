@@ -42,6 +42,8 @@
 	<true/>
 	<key>SUEnableSystemProfiling</key>
 	<false/>
+	<key>SUPublicEDKey</key>
+	<string>EJUaTco5rF+aZCvI7WXE7DsTkVePTkS2H0bk5toU1ok=</string>
 	<key>SURequireSignedFeed</key>
 	<true/>
 	<key>SUScheduledCheckInterval</key>

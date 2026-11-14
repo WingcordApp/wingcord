@@ -199,7 +199,8 @@ export async function showCount(env: Env, issue: IssueRow, reportId: string, tar
 		}
 	}
 	try {
-		await redrawPost(bot, issue, issueUrl(env, issue.number));
+		const screenshot = issue.screenshot ? await readObject(env, publishedKey(issue.first_report)) : null;
+		await redrawPost(bot, issue, issueUrl(env, issue.number), screenshot);
 	} catch (error) {
 		logError("same.post_failed", error, { id: reportId, issue: issue.number });
 		problems.push(describe(error));

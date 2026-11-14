@@ -1,38 +1,63 @@
 // What a published report says in the server's forum, and how its post
 // follows the issue on GitHub (D26, D27).
 //
-// **The words are plain text here**, escaped as the inbox escapes them, so
-// nothing in them links, mentions or formats; every message also has
-// mentions off. The post links to its issue with a button.
+// **The post opens with a card**, drawn as the pinned guides are
+// (scripts/post-guides.py): what it is, the words, the steps, where it was
+// seen, the screenshot when it was published — and under it a button to the
+// issue. The words are escaped as the inbox escapes them, so nothing in them
+// links, mentions or formats; every message also has mentions off.
 
 import { FORUM_TAGS, LIMITS, type IssueState } from "./config";
 import { DiscordBot, SUPPRESS_EMBEDS, type ForumTag, type MessagePayload, type Upload } from "./discord";
-import { clip, escapeMarkdown } from "./inbox";
+import { clip, escapeMarkdown, type Embed } from "./inbox";
 import { countSentence, detailsHeading } from "./issue";
 import { sightings, type IssueRow } from "./store";
 
-const CONTENT_LIMIT = 2000;
+/** The card's text, at most — Discord counts it in UTF-16 units. */
+const DESCRIPTION_LIMIT = 4096;
+/** The steps' share of it; the words get the rest. */
+const DETAILS_LIMIT = 1500;
+/** The app icon's orange, as on the pinned guides. */
+const CARD_COLOR = 0xff7b1c;
 
 export function forumFor(env: Env, issue: Pick<IssueRow, "kind">): string {
 	return issue.kind === "idea" ? env.DISCORD_IDEAS_FORUM_ID : env.DISCORD_BUGS_FORUM_ID;
 }
 
-/** The post's first message: the words, the steps, where it was seen, and a button to the issue. */
-export function postMessage(issue: IssueRow, issueUrl: string): MessagePayload {
+/** What the card says it is, as the guides' titles do: "🐛 Bug", "💥 Crash", "💡 Idea". */
+export function cardTitle(issue: Pick<IssueRow, "kind" | "crash">): string {
+	if (issue.kind === "idea") return "💡 Idea";
+	return issue.crash ? "💥 Crash" : "🐛 Bug";
+}
+
+/** The screenshot's file name in the post, which the card shows it by. */
+export function screenshotName(issue: Pick<IssueRow, "first_report">): string {
+	return `${issue.first_report}.png`;
+}
+
+/**
+ * The post's first message: the card, and the button to the issue under it.
+ * `withScreenshot` puts the file sent with the message in the card. The
+ * content is sent empty, so a redraw also clears a post from before the card.
+ */
+export function postMessage(issue: IssueRow, issueUrl: string, withScreenshot = false): MessagePayload {
 	const footer = `-# ${seenSummary(issue)}`;
 	const details = issue.details
-		? `\n\n**${detailsHeading(issue)}**\n${clip(escapeMarkdown(issue.details), 600)}`
+		? `\n\n**${detailsHeading(issue)}**\n${clip(escapeMarkdown(issue.details), DETAILS_LIMIT)}`
 		: "";
-	// Discord counts the 2,000 in UTF-16 units; `clip` counts characters, so it is checked again.
-	let room = CONTENT_LIMIT - footer.length - details.length - 2;
-	let content = "";
+	// `clip` counts characters and Discord counts UTF-16 units, so the length is checked again.
+	let room = DESCRIPTION_LIMIT - footer.length - details.length - 2;
+	let description = "";
 	for (let attempt = 0; attempt < 4; attempt++) {
-		content = `${clip(escapeMarkdown(issue.body), room)}${details}\n\n${footer}`;
-		if (content.length <= CONTENT_LIMIT) break;
-		room -= content.length - CONTENT_LIMIT + 8;
+		description = `${clip(escapeMarkdown(issue.body), room)}${details}\n\n${footer}`;
+		if (description.length <= DESCRIPTION_LIMIT) break;
+		room -= description.length - DESCRIPTION_LIMIT + 8;
 	}
+	const card: Embed = { title: cardTitle(issue), description, color: CARD_COLOR, fields: [] };
+	if (withScreenshot) card.image = { url: `attachment://${screenshotName(issue)}` };
 	return {
-		content,
+		content: "",
+		embeds: [card],
 		components: [{ type: 1, components: [{ type: 2, style: 5, label: `#${issue.number} on GitHub`, url: issueUrl }] }],
 		allowed_mentions: { parse: [] },
 	};
@@ -97,22 +122,35 @@ export async function createPost(
 ): Promise<string> {
 	const forum = forumFor(env, issue);
 	const ids = tagIds(await bot.forumTags(forum));
-	const file: Upload | undefined = screenshot
-		? { name: `${issue.first_report}.png`, type: "image/png", bytes: screenshot }
-		: undefined;
+	const file = screenshot ? screenshotUpload(issue, screenshot) : undefined;
 	const post = await bot.createForumPost(
 		forum,
-		{ name: clip(issue.title, LIMITS.title), message: postMessage(issue, issueUrl), applied_tags: postTags(issue, ids) },
+		{
+			name: clip(issue.title, LIMITS.title),
+			message: postMessage(issue, issueUrl, Boolean(file)),
+			applied_tags: postTags(issue, ids),
+		},
 		file,
 	);
 	return post.id;
 }
 
-/** Rewrites the first message after Same as… changed the count or the Macs. */
-export async function redrawPost(bot: DiscordBot, issue: IssueRow, issueUrl: string): Promise<void> {
+/**
+ * Rewrites the first message after Same as… changed the count or the Macs.
+ * The screenshot is sent again with it — the card can only be sure of a file
+ * that comes with the edit — and without one, no file is kept, so a post's
+ * picture never hangs loose outside its card.
+ */
+export async function redrawPost(bot: DiscordBot, issue: IssueRow, issueUrl: string, screenshot: Uint8Array | null): Promise<void> {
 	if (!issue.forum_post_id) return;
+	const file = screenshot ? screenshotUpload(issue, screenshot) : undefined;
+	const message = file ? postMessage(issue, issueUrl, true) : { ...postMessage(issue, issueUrl), attachments: [] };
 	// A forum post's first message has the post's own id.
-	await bot.editMessage(issue.forum_post_id, issue.forum_post_id, postMessage(issue, issueUrl));
+	await bot.editMessage(issue.forum_post_id, issue.forum_post_id, message, file);
+}
+
+function screenshotUpload(issue: Pick<IssueRow, "first_report">, bytes: Uint8Array): Upload {
+	return { name: screenshotName(issue), type: "image/png", bytes };
 }
 
 /** What the post says when GitHub closes or reopens its issue. */

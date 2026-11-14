@@ -148,20 +148,43 @@ describe("an issue's body", () => {
 });
 
 describe("a forum post", () => {
-	it("is plain text within 2,000 characters, with a button to its issue", () => {
-		const long = "😀 [click](https://evil.example) <@123> ".repeat(200);
-		const message = postMessage(issue({ body: long, details: long }), "https://github.com/WingcordApp/wingcord/issues/12");
-		expect(message.content!.length).toBeLessThanOrEqual(2000);
-		expect(message.content).not.toMatch(/(^|[^\\])\[click\]/);
-		expect(message.content).not.toMatch(/https:\/\//);
-		expect(message.content).toMatch(/\n-# Seen in Wingcord 1\.0 \(42\) on macOS 27\.3 · reported once$/);
+	const url = "https://github.com/WingcordApp/wingcord/issues/12";
+
+	it("opens with a card like the pinned guides', and a button to its issue under it", () => {
+		const message = postMessage(issue(), url);
+		expect(message.content).toBe("");
+		expect(message.embeds).toEqual([
+			{
+				title: "🐛 Bug",
+				description:
+					"The call went quiet after the Mac woke.\n\n**Steps to reproduce**\n1. Join a call\n2. Close the lid\n\n" +
+					"-# Seen in Wingcord 1.0 (42) on macOS 27.3 · reported once",
+				color: 0xff7b1c,
+				fields: [],
+			},
+		]);
 		expect(message.allowed_mentions).toEqual({ parse: [] });
-		expect((message.components as any)[0].components[0]).toEqual({
-			type: 2,
-			style: 5,
-			label: "#12 on GitHub",
-			url: "https://github.com/WingcordApp/wingcord/issues/12",
-		});
+		expect((message.components as any)[0].components[0]).toEqual({ type: 2, style: 5, label: "#12 on GitHub", url });
+	});
+
+	it("keeps the words inert, and the card within Discord's 4,096", () => {
+		const long = "😀 [click](https://evil.example) <@123> ".repeat(400);
+		const card = postMessage(issue({ body: long, details: long }), url).embeds![0]!;
+		expect(card.description!.length).toBeLessThanOrEqual(4096);
+		expect(card.description).not.toMatch(/(^|[^\\])\[click\]/);
+		expect(card.description).not.toMatch(/https:\/\//);
+		expect(card.description).toContain("**Steps to reproduce**");
+		expect(card.description).toMatch(/\n\n-# Seen in Wingcord 1\.0 \(42\) on macOS 27\.3 · reported once$/);
+	});
+
+	it("says what it is, and shows the screenshot sent with it", () => {
+		expect(postMessage(issue({ crash: 1 }), url).embeds![0]!.title).toBe("💥 Crash");
+		const idea = postMessage(issue({ kind: "idea", details: "Every morning" }), url).embeds![0]!;
+		expect(idea.title).toBe("💡 Idea");
+		expect(idea.description).toContain("**How it would be used**\nEvery morning");
+		expect(idea.description).toMatch(/\n\n-# Asked for once$/);
+		expect(postMessage(issue(), url).embeds![0]!.image).toBeUndefined();
+		expect(postMessage(issue(), url, true).embeds![0]!.image).toEqual({ url: "attachment://WC-4F2K.png" });
 	});
 
 	it("sums up where it was seen", () => {

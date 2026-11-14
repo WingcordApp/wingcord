@@ -4,8 +4,9 @@ import SwiftUI
 /// few lines, perhaps another way out, and its capsules.
 ///
 /// **Two capsules share the row equally**, the way out leading and the act
-/// trailing; three stack, the act first. Every action closes the card after it
-/// has run, so a site writes what happens and not the dismissal.
+/// trailing — while both labels fit their half; otherwise they stack, as three
+/// always do, the act first (`AlertCapsuleRow`). Every action closes the card
+/// after it has run, so a site writes what happens and not the dismissal.
 struct ModalAlert<Accessory: View>: View {
     var hero: ModalHero?
     var title: String
@@ -98,7 +99,7 @@ struct ModalAlert<Accessory: View>: View {
     private var buttons: some View {
         GlassEffectContainer(spacing: Spacing.snug) {
             if actions.count <= 2 {
-                HStack(spacing: Spacing.snug) {
+                AlertCapsuleRow(spacing: Spacing.snug, stackSpacing: Spacing.base) {
                     ForEach(actions) { action in button(action) }
                 }
             } else {
@@ -122,6 +123,62 @@ struct ModalAlert<Accessory: View>: View {
             if action.closes { dismiss() }
         }
         .disabled(!action.isEnabled)
+    }
+}
+
+/// An alert's one or two capsules: side by side at equal widths while every
+/// label fits its share, and stacked full width, the act on top, once one
+/// doesn't — as macOS's own alerts fall back. A label cut short is a question
+/// nobody can read to the end: "Move to Applicati…" (2026-11-14), and "Open
+/// System Settings" or "Disconnect and End" beside an icon were as long.
+struct AlertCapsuleRow: Layout {
+    var spacing: CGFloat
+    var stackSpacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified) }
+        let count = CGFloat(subviews.count)
+        let width = proposal.width ?? (ideal.map(\.width).max() ?? 0) * count + spacing * (count - 1)
+        if let share = share(of: width, ideal: ideal) {
+            let height = subviews.map { $0.sizeThatFits(ProposedViewSize(width: share, height: nil)).height }.max() ?? 0
+            return CGSize(width: width, height: height)
+        }
+        let heights = subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }
+        return CGSize(width: width, height: heights.reduce(0, +) + stackSpacing * (count - 1))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified) }
+        if let share = share(of: bounds.width, ideal: ideal) {
+            var x = bounds.minX
+            for subview in subviews {
+                subview.place(
+                    at: CGPoint(x: x, y: bounds.midY), anchor: .leading,
+                    proposal: ProposedViewSize(width: share, height: bounds.height)
+                )
+                x += share + spacing
+            }
+            return
+        }
+        // Stacked, the act — the row's last — goes on top.
+        var y = bounds.minY
+        for subview in subviews.reversed() {
+            let height = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil)).height
+            subview.place(
+                at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading,
+                proposal: ProposedViewSize(width: bounds.width, height: height)
+            )
+            y += height + stackSpacing
+        }
+    }
+
+    /// Each capsule's width side by side, if every label fits in it whole.
+    private func share(of width: CGFloat, ideal: [CGSize]) -> CGFloat? {
+        let count = CGFloat(ideal.count)
+        let share = (width - spacing * (count - 1)) / count
+        return ideal.allSatisfy { $0.width <= share + 0.5 } ? share : nil
     }
 }
 

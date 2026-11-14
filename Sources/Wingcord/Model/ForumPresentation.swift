@@ -300,8 +300,8 @@ extension AppModel {
                     avatarURL(forUserID: $0, inGuild: guildID, side: Metrics.avatarRow)
                 } ?? nil,
                 monogram: user?.monogram ?? "",
-                preview: Self.previewLine(author: name, colorValue: color, opener: opener),
-                openingWords: Self.openerWords(opener) ?? "",
+                preview: Self.previewLine(author: name, colorValue: color, opener: opener, showsEmbeds: showsEmbeds),
+                openingWords: Self.openerWords(opener, showsEmbeds: showsEmbeds) ?? "",
                 titleText: Self.highlighted(post.name, matching: isSearching ? phrase : ""),
                 media: shownOpener.map {
                     ForumPostCard.media(of: $0, isMediaChannel: isMedia, width: mediaWidth, showsEmbeds: showsEmbeds)
@@ -371,8 +371,10 @@ extension AppModel {
     /// words for why it is not there (`ep`): "Post contains a blocked message"
     /// alone, without the name; an ignored author named before "Post contains
     /// an ignored message"; "Original message was deleted".
-    private static func previewLine(author: String, colorValue: UInt32?, opener: Opener) -> AttributedString {
-        let words = openerWords(opener)
+    private static func previewLine(
+        author: String, colorValue: UInt32?, opener: Opener, showsEmbeds: Bool
+    ) -> AttributedString {
+        let words = openerWords(opener, showsEmbeds: showsEmbeds)
         var line = AttributedString()
         if case .blocked = opener {} else if !author.isEmpty {
             var name = AttributedString(author)
@@ -392,9 +394,9 @@ extension AppModel {
     }
 
     /// What the opening message comes to as words, or Discord's for why it can't.
-    private static func openerWords(_ opener: Opener) -> String? {
+    private static func openerWords(_ opener: Opener, showsEmbeds: Bool) -> String? {
         switch opener {
-        case .shown(let message): excerpt(message)
+        case .shown(let message): excerpt(message, showsEmbeds: showsEmbeds)
         case .loading: nil
         case .deleted: "Original message was deleted"
         case .blocked: "Post contains a blocked message"
@@ -445,17 +447,52 @@ extension AppModel {
     /// **Newlines collapse rather than truncate.** A post whose first line is
     /// blank — a picture, then the text — would otherwise preview as nothing at
     /// all, which is indistinguishable from a preview that has not loaded.
-    private static func excerpt(_ message: Message) -> String {
+    ///
+    /// **A card's words stand in for missing ones**, where Discord's row says
+    /// only "Click to see attachment" (its forum card previews `content` alone):
+    /// a bot's post is often nothing but a card — the reports bot's are, since
+    /// 2026-11-14. A components card is the message itself; an embed is read
+    /// only while embeds are shown at all.
+    private static func excerpt(_ message: Message, showsEmbeds: Bool) -> String {
         // The words as they read, not as they were typed: `**` is markup, and
         // Discord's row draws it.
-        let collapsed = MarkdownParser().parse(message.content).plainText
-            .split(whereSeparator: \.isNewline)
-            .joined(separator: " ")
-            .trimmingCharacters(in: .whitespaces)
+        let collapsed = oneLine(message.content)
         if !collapsed.isEmpty { return collapsed }
+        if let card = cardWords(of: message, showsEmbeds: showsEmbeds) { return card }
         // A post that is only an image still has something to say about itself.
         if let attachment = message.attachments.first { return attachment.filename }
         return ""
+    }
+
+    /// The first words a card holds: a components card's text displays (never
+    /// its buttons' labels), else an embed's description, else its title.
+    private static func cardWords(of message: Message, showsEmbeds: Bool) -> String? {
+        let displayed = oneLine(message.displayComponents.flatMap(textDisplays).joined(separator: "\n"))
+        if !displayed.isEmpty { return displayed }
+        guard showsEmbeds else { return nil }
+        for embed in message.embeds {
+            for words in [embed.description, embed.title] {
+                let line = oneLine(words ?? "")
+                if !line.isEmpty { return line }
+            }
+        }
+        return nil
+    }
+
+    private static func textDisplays(_ component: DisplayComponent) -> [String] {
+        switch component {
+        case .container(_, let children), .section(let children, _): children.flatMap(textDisplays)
+        case .text(let value): [value]
+        case .separator, .gallery, .row: []
+        }
+    }
+
+    /// Markdown as it reads, its lines run together.
+    private static func oneLine(_ markdown: String) -> String {
+        MarkdownParser().parse(markdown).plainText
+            .split(whereSeparator: \.isNewline)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
     }
 
     /// A title with a search's words lit, as Discord's does.

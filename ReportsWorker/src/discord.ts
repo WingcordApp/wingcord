@@ -70,14 +70,17 @@ export class DiscordBot {
 		return response.json<{ id: string }>();
 	}
 
-	async editMessage(channelId: string, messageId: string, body: MessagePayload): Promise<void> {
-		const response = await this.call("PATCH", `/channels/${channelId}/messages/${messageId}`, body);
+	/** Rewrites a message. A file sent with it replaces the message's files (it is the only one `attachments` keeps). */
+	async editMessage(channelId: string, messageId: string, body: MessagePayload, file?: Upload): Promise<void> {
+		const path = `/channels/${channelId}/messages/${messageId}`;
+		const response = await this.call("PATCH", path, file ? multipart(withFile(body, file), file) : body);
 		await response.body?.cancel();
 	}
 
 	/** A new post in a forum: its title, first message and tags, and a file. Returns the post's id. */
 	async createForumPost(forumId: string, post: ForumPost, file?: Upload): Promise<{ id: string }> {
-		const response = await this.call("POST", `/channels/${forumId}/threads`, file ? multipart(post, file) : post);
+		const body = file ? multipart({ ...post, message: withFile(post.message, file) }, file) : post;
+		const response = await this.call("POST", `/channels/${forumId}/threads`, body);
 		return response.json<{ id: string }>();
 	}
 
@@ -146,11 +149,15 @@ export class DiscordBot {
 	}
 }
 
-/** A post with a file: the JSON as `payload_json`, the file as `files[0]` (Discord's "Uploading Files"). */
-function multipart(post: ForumPost, file: Upload): FormData {
+/** A message that carries `file` as its one attachment. */
+function withFile(message: MessagePayload, file: Upload): MessagePayload {
+	return { ...message, attachments: [{ id: 0, filename: file.name }] };
+}
+
+/** JSON with a file: the JSON as `payload_json`, the file as `files[0]` (Discord's "Uploading Files"). */
+function multipart(json: ForumPost | MessagePayload, file: Upload): FormData {
 	const form = new FormData();
-	const message: MessagePayload = { ...post.message, attachments: [{ id: 0, filename: file.name }] };
-	form.set("payload_json", JSON.stringify({ ...post, message }));
+	form.set("payload_json", JSON.stringify(json));
 	form.set("files[0]", new File([file.bytes], file.name, { type: file.type }));
 	return form;
 }
