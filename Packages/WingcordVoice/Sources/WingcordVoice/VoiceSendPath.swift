@@ -3,6 +3,7 @@ import CoreVideo
 import Foundation
 import QuartzCore
 import Synchronization
+import WingcordCore
 
 // MARK: - Outbound media
 //
@@ -212,7 +213,7 @@ final class AudioSendPath: Sendable {
 
     /// Told when the gate opens or closes, so the gateway's speaking state and
     /// the local tile can follow the audio rather than a timer.
-    let onGateChanged = Mutex<(@Sendable (Bool) -> Void)?>(nil)
+    let onGateChanged = Mutex<LockedClosure<@Sendable (Bool) -> Void>?>(nil)
 
     init(signal: OpusEncoder.Signal = .voice) {
         state = Mutex(State(signal: signal))
@@ -381,7 +382,7 @@ final class AudioSendPath: Sendable {
             Self.encodeAndTransmit(input.base, at: timestamp, level: decibels, marker: marker, in: &state)
         }
 
-        if let gateChange { onGateChanged.withLock { $0 }?(gateChange) }
+        if let gateChange { onGateChanged.withLock { $0 }?.call(gateChange) }
     }
 
     /// Keeps the last few frames while the gate is shut, for the lead-in.

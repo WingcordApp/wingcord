@@ -476,14 +476,14 @@ public actor MediaSession {
         VoiceTrace.write(line)
 
         inbound.onFirstVideoFrame.withLock { slot in
-            slot = { [weak self] userID in
+            slot = LockedClosure { [weak self] userID in
                 self?.emit(.videoAvailability(userID: userID, hasVideo: true))
             }
         }
         if isCall {
             audioSend.inputMode = preferences.inputMode
             audioSend.onGateChanged.withLock { slot in
-                slot = { [weak self] isOpen in
+                slot = LockedClosure { [weak self] isOpen in
                     Task { await self?.gateDidChange(isOpen) }
                 }
             }
@@ -2189,10 +2189,10 @@ struct StreamMix {
 }
 
 private final class PreviewSink: Sendable {
-    private let sink = Mutex<(@Sendable (CMSampleBuffer) -> Void)?>(nil)
+    private let sink = Mutex<LockedClosure<@Sendable (CMSampleBuffer) -> Void>?>(nil)
 
     func set(_ value: (@Sendable (CMSampleBuffer) -> Void)?) {
-        sink.withLock { $0 = value }
+        sink.withLock { $0 = value.map(LockedClosure.init) }
     }
 
     /// Copied out from under the lock before it is called: a sink writes to a
@@ -2200,7 +2200,7 @@ private final class PreviewSink: Sendable {
     /// ScreenCaptureKit's queue behind whatever the continuation does.
     func deliver(_ sample: CMSampleBuffer) {
         let sink = sink.withLock { $0 }
-        sink?(sample)
+        sink?.call(sample)
     }
 }
 

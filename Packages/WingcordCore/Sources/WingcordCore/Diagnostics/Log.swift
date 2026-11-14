@@ -275,8 +275,10 @@ public final class LogStore: Sendable {
     public let directory: URL?
     private let rings: [Ring: LogRing]
     /// Where every written line is also handed, as written — a developer's
-    /// `session.log` to `tail -f` while reproducing something.
-    private let mirror = Mutex<(@Sendable (String) -> Void)?>(nil)
+    /// `session.log` to `tail -f` while reproducing something. Boxed: a bare
+    /// closure in a `Mutex` grows two thunks deeper with every read, and this one
+    /// is read per line (`LockedClosure`; the crashes of 13 November).
+    private let mirror = Mutex<LockedClosure<@Sendable (String) -> Void>?>(nil)
 
     public init(rings: [Ring: LogRing], scrubber: LogScrubber, directory: URL?) {
         precondition(Set(rings.keys) == Set(Ring.allCases), "a store needs all three rings")
@@ -326,12 +328,12 @@ public final class LogStore: Sendable {
         let ring = level == .fault ? Ring.faults : area.ring
         let record = Self.record(level, area, scrubber.scrub(text), at: date)
         rings[ring]?.append(record)
-        mirror.withLock { $0 }?(record)
+        mirror.withLock { $0 }?.call(record)
     }
 
     /// Hands every line written from now on to `sink` too, or stops.
     public func setMirror(_ sink: (@Sendable (String) -> Void)?) {
-        mirror.withLock { $0 = sink }
+        mirror.withLock { $0 = sink.map(LockedClosure.init) }
     }
 
     /// One line: `2026-11-12T10:15:03.123Z I gateway  READY guilds=12`.

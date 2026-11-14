@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import WingcordCore
 
@@ -261,6 +262,25 @@ struct LogStoreTests {
         store.write(.info, .app, "fourth", at: start.addingTimeInterval(3))
         let order = store.export().split(separator: "\n").map { $0.split(separator: " ").last.map(String.init) ?? "" }
         #expect(order == ["first", "second", "third", "fourth"])
+    }
+
+    /// **The crashes of 13 November 2026.** The mirror was a bare closure in a
+    /// `Mutex`, and every line's read wrapped it two thunks deeper: an hour into
+    /// a run with the session log on, one line overflowed its thread's stack.
+    @Test("The mirror is called as deep on the two-thousandth line as on the first")
+    func mirrorStaysShallow() {
+        let store = LogStore.inMemory(scrubber: scrubber)
+        let depth = Mutex(0)
+        // Measured on the marked lines only: reading the stack is slow.
+        store.setMirror { line in
+            guard line.contains("measure") else { return }
+            depth.withLock { $0 = Thread.callStackSymbols.count }
+        }
+        store.write(.info, .app, "measure")
+        let first = depth.withLock { $0 }
+        for index in 0..<2_000 { store.write(.info, .app, "line \(index)") }
+        store.write(.info, .app, "measure")
+        #expect(depth.withLock { $0 } == first)
     }
 
     @Test("A line is stamped in UTC, fixed width")

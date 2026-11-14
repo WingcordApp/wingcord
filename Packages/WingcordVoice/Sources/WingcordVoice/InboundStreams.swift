@@ -2,6 +2,7 @@ import CoreMedia
 import Foundation
 import QuartzCore
 import Synchronization
+import WingcordCore
 
 // MARK: - Everybody else
 //
@@ -460,7 +461,7 @@ final class InboundStreams: Sendable {
     ///
     /// So the announcement binds the SSRC — packets must still be routed if any
     /// do arrive — and this is what tells the app there is a picture.
-    let onFirstVideoFrame = Mutex<(@Sendable (UInt64) -> Void)?>(nil)
+    let onFirstVideoFrame = Mutex<LockedClosure<@Sendable (UInt64) -> Void>?>(nil)
 
     /// Where a person's decoded video goes. Set by the tile that is drawing
     /// them; cleared when it goes away, which is what stops a display layer
@@ -734,7 +735,7 @@ final class InboundStreams: Sendable {
 
         for delivery in outcome.frames { delivery.sink(delivery.sample) }
         if !outcome.arrived.isEmpty, let announce = onFirstVideoFrame.withLock({ $0 }) {
-            for userID in outcome.arrived { announce(userID) }
+            for userID in outcome.arrived { announce.call(userID) }
         }
         if let route = outcome.route {
             for ask in outcome.retransmissions {

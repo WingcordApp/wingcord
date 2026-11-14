@@ -2,6 +2,7 @@ import Accelerate
 import AVFoundation
 import Foundation
 import Synchronization
+import WingcordCore
 
 // MARK: - Capture and playback
 //
@@ -35,11 +36,11 @@ public final class VoiceAudioEngine: @unchecked Sendable {
     /// engine starts and never touched again, and a voice message starts and ends
     /// in the middle of a call. Taken only for the moment it takes to copy a
     /// pointer, so it costs the capture thread nothing it would notice.
-    private let captureTap = Mutex<(@Sendable (UnsafePointer<Int16>, Float) -> Void)?>(nil)
+    private let captureTap = Mutex<LockedClosure<@Sendable (UnsafePointer<Int16>, Float) -> Void>?>(nil)
 
     /// Starts or stops listening to the frames `onCaptureFrame` gets.
     public func setCaptureTap(_ tap: (@Sendable (UnsafePointer<Int16>, Float) -> Void)?) {
-        captureTap.withLock { $0 = tap }
+        captureTap.withLock { $0 = tap.map(LockedClosure.init) }
     }
     /// Fired when the voice processor hears speech while the input is muted.
     public var onSpeechWhileMuted: (@Sendable () -> Void)?
@@ -957,7 +958,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
                 let level = Self.rootMeanSquare(frame, count: width)
                 levels.captured.store(level.bitPattern, ordering: .relaxed)
                 onCaptureFrame?(frame, level)
-                tap?(frame, level)
+                tap?.call(frame, level)
                 if monitors { monitor(frame, frames: width) }
             }
         }
