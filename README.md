@@ -1,193 +1,51 @@
 # Wingcord
 
-A native macOS Discord client. macOS 27, Swift 6.4, SwiftUI with Liquid Glass —
-and two drawn AppKit canvases where composing views would cost too much.
+A Discord client for the Mac, written in Swift for macOS 27. It's in beta, and the current release is 1.0 Beta 1.
 
-Built from zero. It shares no code with any previous client; it shares a *design
-system* with Wingcord for iOS and a set of hard-won invariants with its
-predecessor, both of which are written down in `docs/`.
+[Download Wingcord](https://download.wingcord.app/Wingcord.dmg) · [Report a bug](https://github.com/WingcordApp/wingcord/issues)
 
----
+Wingcord is a native Mac app. Most of it is SwiftUI with Liquid Glass, and it draws the message list and the member list with AppKit, because composing a SwiftUI view for every message and every member costs too much once a channel or a server gets busy. You sign in with your own Discord account, and calls work as they do in Discord, including its end-to-end encryption for voice and video.
 
-## Build and run
+## Install
 
-```sh
-./scripts/build-app.sh            # release, the default
-./scripts/build-app.sh debug      # only for stepping through something
-open build/Wingcord.app
-```
+1. Download `Wingcord.dmg`, open it and drag Wingcord into Applications.
+2. Open Wingcord. The first time, macOS won't open it, because it isn't notarized by Apple. Click **Done** (not Move to Trash), then go to **System Settings > Privacy & Security**, scroll down and click **Open Anyway**.
+3. Sign in with your password and two-factor code, or scan the QR code with Discord on your phone.
 
-Release is the default deliberately. A debug build is not evidence of anything:
-SwiftUI's own machinery and every generic in the app are unoptimised there, so a
-debug profile measures the compiler's output rather than the app's design.
+Updates download in the background and install when you quit. After each one, macOS asks for your Mac's password once before Wingcord can read its saved sign-in from the Keychain; click **Always Allow**. That prompt comes from macOS. Wingcord signs its releases with a certificate of its own, and macOS doesn't carry Keychain access over to a new version of an app signed that way.
 
-### Tests
+## Build from source
+
+You need macOS 27 and Xcode with Swift 6.4.
 
 ```sh
-swift test --package-path Packages/WingcordCore   # domain, parser, permissions
-swift test                                        # layout, painting, viewport
+git clone https://github.com/WingcordApp/wingcord.git
+cd wingcord
+scripts/run-demo.sh     # a debug build that runs on sample data, with no account
+scripts/build-app.sh    # a release build, at build/Wingcord.app
 ```
 
-### Launch flags
+The tests are split by package:
 
-| Flag | What it does |
-| --- | --- |
-| `--demo` | Fixture servers, channels, members and a 220-message transcript, plus one server pinned above the rail's divider that the fixture is **previewing** rather than a member of, and a short navigation history so ⌘K opens onto something, plus a seeded discovery grid — the one surface whose whole content is a route's answer, and therefore the one that cannot be looked at without fixtures. Nothing else reaches it — there is no fallback from a failed sign-in into fixtures. |
-| `--overlay` | Pretends a game is running, so the in-game overlay can be drawn without one: it resets the widget arrangement to its defaults, unlocks, opens a conversation as a chat window and raises one notification toast with its reply field open. Its own flag rather than part of `--demo` because the panel presents at shield level and covers the menu bar. Pair it with `--demo`. |
-
----
-
-## Shape
-
-```
-Packages/WingcordCore   domain values, markdown, permissions, timeline reducer
-Packages/WingcordNet    REST, the Gateway socket, rate limiting, wire types
-Sources/Wingcord        the app: design system, store, chrome, canvases
+```sh
+swift test
+swift test --package-path Packages/WingcordCore
+swift test --package-path Packages/WingcordNet
+swift test --package-path Packages/WingcordVoice
 ```
 
-The two library targets are **not** main-actor isolated. The app target is
-(`defaultIsolation(MainActor.self)`), so every escape from the main actor is an
-explicit, greppable `nonisolated` — and decoding a READY payload, laying out a
-transcript and decoding an image all happen off it by construction rather than by
-remembering.
+`build-app.sh` signs with your "Apple Development" certificate if you have one, and ad-hoc if you don't. An ad-hoc build runs fine, but macOS sees every rebuild as a different app, so it asks again for Keychain access and for camera and microphone permission.
 
-| Layer | What it owns |
-| --- | --- |
-| `AppModel` | Flat tables keyed by id, navigation, and memoized presentation projections. Never touches the network. |
-| `SessionController` | The only thing that talks to the wire. Applies events to the store in one main-actor hop each. |
-| `PermissionGate` | What the reader may do, cached in two tiers. Every unknown resolves to *no* permission. |
-| Chrome | `NavigationSplitView`; the sidebar column is painted with **nothing**, which is where the wallpaper and menu-bar accent come through. |
-| Timeline / Members | AppKit canvases with viewport-sized backing. |
+The sign-in screen in official builds uses an effect adapted from [MetalForge](https://metalforge.xyz), whose license doesn't allow publishing its code. A build from this repository draws its own background there instead; nothing else differs.
 
----
+## Reporting bugs
 
-## The performance model, in one page
+Report bugs from inside Wingcord if you can: **Help > Report a Bug…**, or type `/bug` in any message box. The report says what Wingcord was doing, without names, messages, addresses or tokens, and **See What's Sent…** shows every file before it leaves your Mac. You get a number like `WC-4F2K` to follow it by. You can also open an issue here on GitHub.
 
-The cost of a client like this is **node count and invalidation count**, not leaf
-functions. Its predecessor measured 53 self-samples of 2,264 at idle and 450 of
-~35,000 while scrolling in its own code — chasing hot functions there finds
-nothing. So the design attacks the two things that actually cost:
+## License
 
-**Fewer nodes.** The transcript and the member list are drawn, not composed. One
-AppKit view paints rows into a dirty rect. A five-hundred-member roster is five
-hundred rows of avatar, name, badges and activity line; as views that is several
-thousand nodes for the forty a column shows.
+Wingcord is free software under the GNU General Public License, version 3 or any later version; see [LICENSE](LICENSE). Code and fonts from other projects keep their own licenses, listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-**The viewport-sized canvas.** The document view is the full content height, so
-the scroller is right. The canvas inside it is only `viewport + 2 × 320pt`, with
-`bounds.origin` pinned to `frame.origin` so drawing stays in document
-coordinates. It **only moves when it is about to run out of overscan** — between
-moves the clip view slides over a static layer and the GPU does the entire
-scroll. `TimelineViewportPolicy` is a pure function and the rule is pinned by
-tests.
+## Not affiliated with Discord
 
-**Fewer invalidations.** Every surface has a thin container that reads the store
-and hands a *plain value snapshot* to a view with no model reference, then
-`.equatable()` over it. Because those snapshots come from memos, `Array ==`
-short-circuits on buffer identity: a presence flush that moved nobody costs one
-pointer comparison, not forty rebuilt rows.
-
-**One gate for optional work.** `ScrollWorkGate` is process-wide and
-continuation-based. Image prefetching, animation decoding and catalog refreshes
-all `await` it, so a scroll anywhere suspends optional work everywhere — without
-polling.
-
-**Decode at the drawn size, off-main.** `NSImage(data:)` does not decode; it
-defers to the first draw, on the main thread, inside a display pass.
-`ImageStore` decodes through `CGImageSourceCreateThumbnailAtIndex` with
-`kCGImageSourceShouldCacheImmediately`, keys the cache on *pixel size*, and
-bounds concurrency so peak memory is not set by scroll speed.
-
-**One accessibility node per message.** SwiftUI re-resolves every `Text` carrying
-link attributes into an attributed string on *every render* — and a message
-paragraph always carries them. It reaches localized bundle string tables to
-answer what font a run is in, per run, per frame, and it is **not** conditional
-on VoiceOver. `MarkdownDocument.plainText` folds the tree once so each row is one
-node with a plain `String` label.
-
-Measured on this build, `--demo`, 220 messages resident, release: **86–106 MB
-steady** (`footprint`, not RSS), settling downward across a run. The peak sits
-around 200–230 MB and is the fixture bootstrap, not the steady state. Its
-predecessor sat at 300–425 MB.
-
----
-
-## What is here
-
-- Sign-in through Discord's own page, token in the Keychain
-- Guild rail with folders, unread pips and mention badges
-- Channel list: stretchy banner, travelling server-name pill, glass category
-  chips, selection pill that flows between rows
-- Floating now bar and floating composer
-- Drawn transcript: runs, day separators, unread divider, markdown, code blocks,
-  quotes, lists, spoilers, links, inline emoji, jumbo emoji, stickers,
-  attachments, reactions, rich embeds, Components V2 bodies, polls you can vote
-  in, an app's buttons, and the sentences the client composes for a join, a boost
-  or a pin
-- A transcript that answers the pointer: a face or a name opens a profile, a
-  mention opens theirs, an emoji or a sticker says what it is and where it came
-  from, and a message link scrolls to its target and lights it
-- Drawn member list: hoist groups, role colours, presence shapes, activity lines,
-  and a reserved full-row plate layer so nameplates drop in without reflowing
-- A guild rail that says where the noise is: a mark set *into* the tile when a
-  server's rooms are busy, and a hover chip that names who is in voice and who is
-  worth watching
-- **Voice channels that show who is in them**: every face, the custom status they
-  are wearing, a LIVE chip, the mark of the game they are playing, their mute and
-  deafen switches, the room's own label with its custom emoji, how full it is and
-  how long the session has run — and a hover card over anybody sharing a screen
-  with the actual frame in it
-- Direct messages and group conversations, with a profile column beside one and a
-  roster beside the other, and a right-click that answers with everything a
-  conversation offers — pin it (and the pin reaches Discord), mute it, name a
-  friend privately, close it, or run what an app has for that person
-- **Stages**: speakers, an audience, a queue of raised hands a moderator can
-  answer, and the topic a live stage is started with
-- Mini and full profiles, and the cards behind a server tag and any expression —
-  including the server behind an emoji or sticker from somewhere you are not in
-- **Super reactions**, as Discord draws them: the chip tinted from the emoji's
-  own colours with its glow, the effect Discord would play for that reaction —
-  on hover, when one lands, and now and then by itself — and a switch in the
-  reaction picker for accounts with Nitro
-- Expression picker with Nitro gating, and three composer completions that
-  share one shape: `:shortcode`, `@` for people and `@everyone`, `#` for
-  channels
-- Typing receipts, a status panel on the now bar, and hover flyouts on the rail
-- The three pages a server offers beside its channels: a **Server Guide** with
-  the owner's welcome and the rooms worth reading, **Channels & Roles** with the
-  server's own questions — with your own profile beside them, updating as you
-  answer — and a searchable table of contents of every channel, each one you can
-  follow or unfollow — a channel you drop leaves your sidebar, and so does its
-  unread; and **Game Servers** with an address you can copy and the steps the
-  game needs
-- A resource opens *beside* the guide rather than instead of it — a preview
-  column with that channel's transcript in it
-- **What a reader can do to a message**: react, reply — with the quoted header
-  above it — forward, edit, delete, pin, view a channel's pins, mark unread,
-  copy the text, the link or the id, and Discord's own report flow walked off
-  the tree it serves. Offered from a hover pill, a right-click menu, or the
-  reaction chips themselves, and every one of them gated by the same permission
-  answer the store re-checks before it acts
-- **What a reader can do about a person**: block, ignore, add a friend, invite
-  them to a server, report their profile, copy their id, and keep a private note
-  — from the profile card or a right-click in the roster
-- Settings with a live performance pane, and a developer-mode toggle that adds
-  the two Copy ID items and nothing else
-- Performance inspector and a crash reporter that survives signal context
-
-## What is not
-
-**Selecting text in the transcript** — the one large interaction still missing,
-and the reason it is not half-done is in `docs/HANDOFF.md` §"Do this next".
-
-Threads, forums, search, notifications, attachments *outbound*,
-message-component interactions, and every Discord commerce
-surface — including
-buying or reconfiguring a game server, which is why that page offers an address
-and no lifecycle buttons. Each is a case on an existing enum rather than a new
-branch — see `docs/HANDOFF.md`.
-
----
-
-Wingcord is not affiliated with Discord. Using a third-party client is against
-Discord's terms of service.
+Discord Inc. doesn't make or endorse Wingcord. Discord's Terms of Service don't allow third-party clients, and accounts can be actioned for using one, so use Wingcord at your own risk.
