@@ -239,13 +239,14 @@ make_release() {
     [ "$(dwarfdump --uuid "$DSYM" | awk '{ print $2; exit }')" = "$UUID" ] || die "the dSYM is for another binary"
     private_scan "$APP" "$NOTES"
 
-    # ── Pack: one disk image, the app beside an Applications link (D9) ──
+    # ── Pack: one disk image, the app beside an Applications link on the hand-drawn arrow (D9) ──
     local ARCHIVE="$ARCHIVE_PREFIX-$SLUG-$BUILD"
     local IMAGE_ROOT="$STAGE/image"
-    mkdir -p "$IMAGE_ROOT"
+    mkdir -p "$IMAGE_ROOT/.background"
     ditto "$APP" "$IMAGE_ROOT/$APP_NAME.app"
     ln -s /Applications "$IMAGE_ROOT/Applications"
-    hdiutil create -quiet -volname "$APP_NAME" -srcfolder "$IMAGE_ROOT" -fs APFS -format ULMO -ov "$STAGE/$ARCHIVE.dmg"
+    cp "$ROOT/Packaging/DMG/WingcordBackground.tiff" "$IMAGE_ROOT/.background/"
+    "$HELPERS/pack-dmg.sh" "$IMAGE_ROOT" "$APP_NAME" "$STAGE/$ARCHIVE.dmg" || die "the disk image wasn't made"
     rm -rf "$IMAGE_ROOT"
     ditto -c -k --keepParent "$DSYM" "$STAGE/Wingcord-$UUID.dSYM.zip"
 
