@@ -98,6 +98,7 @@ struct LogScrubberTests {
 
     @Test("A Discord token, an MFA token and a JWT are removed")
     func tokens() {
+        // Made-up, and joined at run time: written in one piece, it reads as a real bot token to GitHub's secret scanning.
         let token = ["MTA0NjEyMzQ1Njc4OTAxMjM0NQ", "GhIjKl", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ"].joined(separator: ".")
         #expect(scrubber.scrub("sending \(token) now") == "sending <token> now")
         let mfa = "mfa." + String(repeating: "aB3_", count: 21)
