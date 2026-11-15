@@ -1,5 +1,7 @@
 # Wingcord
 
+![Wingcord on a MacBook Pro: a server's channels, a conversation and its members](.github/assets/hero.jpg)
+
 A Discord client for the Mac, written in Swift for macOS 27. It's in beta, and the current release is 1.0 Beta 1.
 
 [Download Wingcord](https://download.wingcord.app/Wingcord.dmg) · [Report a bug](https://github.com/WingcordApp/wingcord/issues)
