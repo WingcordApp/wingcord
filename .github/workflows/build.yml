@@ -45,14 +45,18 @@ jobs:
       # plain build first would compile it twice.
       - name: Build the app and its tests
         run: swift build --build-tests --disable-keychain
-      # A few tests depend on the Mac they run on, so CI leaves them out and they
-      # run locally: the loopback servers' suites (the game event hub and the
-      # local RPC server) time out on a loaded runner, and two profile ink tests
-      # assume the app is in dark mode, which a runner isn't.
+      # The loopback servers (the game event hub and the local RPC server) answer
+      # on the main thread, which the other two thousand tests keep busy for
+      # minutes on a runner, so their suites run on their own afterwards, from
+      # the same build.
       - name: Test the app
         run: >-
           swift test --skip-build --disable-keychain
-          --skip 'GameEventHubTests/|LocalRPCServerTests/|LocalRPCWebSocketServerTests/|ProfileGroundInkTests/(neutralKeepsTheAppsInk|sidebarFollowsTheApp)\(\)'
+          --skip 'GameEventHubTests/|LocalRPCServerTests/|LocalRPCWebSocketServerTests/'
+      - name: Test the app's loopback servers
+        run: >-
+          swift test --skip-build --disable-keychain
+          --filter 'GameEventHubTests/|LocalRPCServerTests/|LocalRPCWebSocketServerTests/'
 
   packages:
     if: github.repository == 'WingcordApp/wingcord'

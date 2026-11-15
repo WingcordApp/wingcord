@@ -43,6 +43,9 @@ final class LocalRPCServer {
     private var applications: [ApplicationID: RPCApplication] = [:]
     private var webAttempt = 0
     private(set) var socketPath: String?
+    /// The socket file this server bound, for `stop()` to remove: `socketPath`
+    /// is only published once the listener is ready, and a stop can come first.
+    private var boundPath: String?
     private(set) var webPort: UInt16?
     private var isStopped = false
 
@@ -71,7 +74,8 @@ final class LocalRPCServer {
         ipcListener = nil
         webListener?.cancel()
         webListener = nil
-        if let socketPath { unlink(socketPath) }
+        if let path = boundPath ?? socketPath { unlink(path) }
+        boundPath = nil
         socketPath = nil
         webPort = nil
     }
@@ -102,19 +106,30 @@ final class LocalRPCServer {
         listener.newConnectionHandler = { [weak self] connection in
             MainActor.assumeIsolated { self?.acceptIPC(connection) }
         }
+        // The path is published once the listener is READY, not when it is
+        // started: a client that read it earlier could be refused, as a test
+        // that connected straight away was on a busy main thread.
         listener.stateUpdateHandler = { [weak self] state in
             MainActor.assumeIsolated {
-                guard case .failed(let error) = state, let self else { return }
-                Self.trace("discord-ipc listener failed: \(error)")
-                self.ipcListener?.cancel()
-                self.ipcListener = nil
-                self.socketPath = nil
+                guard let self else { return }
+                switch state {
+                case .ready:
+                    guard !self.isStopped else { return }
+                    self.socketPath = path
+                    Self.trace("listening at \(path)")
+                case .failed(let error):
+                    Self.trace("discord-ipc listener failed: \(error)")
+                    self.ipcListener?.cancel()
+                    self.ipcListener = nil
+                    self.socketPath = nil
+                default:
+                    break
+                }
             }
         }
         listener.start(queue: .main)
         ipcListener = listener
-        socketPath = path
-        Self.trace("listening at \(path)")
+        boundPath = path
         return true
     }
 

@@ -26,7 +26,9 @@ struct GameEventHubTests {
         server.onDocument = { received.append($0) }
         server.start()
         defer { server.stop() }
-        for _ in 0..<50 where !server.isListening { try await Task.sleep(for: .milliseconds(10)) }
+        // Up to twenty seconds, like the RPC suites: the listener reports ready
+        // on the main thread, which the rest of the suite shares.
+        for _ in 0..<1000 where !server.isListening { try await Task.sleep(for: .milliseconds(20)) }
         #expect(server.isListening)
 
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!)

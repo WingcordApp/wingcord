@@ -252,9 +252,12 @@ struct ProfileGroundInkTests {
         #expect(!navy.wantsDarkInk)
     }
 
-    @Test("An unthemed ground never asks, because it is the app's own near-black")
+    @Test("An unthemed ground takes the app's ink, because it is the app's own ground")
     func neutralKeepsTheAppsInk() {
-        #expect(!ProfileGround(themeColorValues: []).wantsDarkInk)
+        // The app's near-black in dark mode and its near-white in light; a CI
+        // runner is in light mode, this Mac usually in dark.
+        let appIsDark = ThemeAccess.colors.appearance == .dark
+        #expect(ProfileGround(themeColorValues: []).wantsDarkInk == !appIsDark)
     }
 
     @Test("A chosen pair and a derived one are ONE case")
@@ -271,22 +274,25 @@ struct ProfileGroundInkTests {
             == .themed(primary: 0x8C_89_81, secondary: 0x8C_89_81, followsAppTheme: false))
     }
 
-    @Test("A sidebar keeps the app's dark ink for a palette the modal draws light")
+    @Test("A sidebar keeps the app's ink for a palette the modal draws light")
     func sidebarFollowsTheApp() {
         // Discord decides this per SURFACE: the same pair is a near-white modal
-        // and a dark sidebar, measured on two accounts. See `ProfileGround`.
+        // and a dark sidebar, measured on two accounts in dark mode. See
+        // `ProfileGround`. The sidebar follows the app, so on a Mac in light
+        // mode (a CI runner) it is light.
+        let appIsDark = ThemeAccess.colors.appearance == .dark
         let pair = [UInt32(0x8C_89_81), UInt32(0xD8_D7_D6)]
         let modal = ProfileGround(themeColorValues: pair)
         let sidebar = ProfileGround(themeColorValues: pair, followsAppTheme: true)
 
         #expect(modal.wantsDarkInk)
-        #expect(!sidebar.wantsDarkInk)
-        #expect(sidebar.isDark)
+        #expect(sidebar.wantsDarkInk == !appIsDark)
+        #expect(sidebar.isDark == appIsDark)
 
         // And the overlay is still the 0.6 one — the sidebar overrides the
         // THEME, not the strength, which is what its measured body proves.
-        #expect(sidebar.bodyHead == Color(hex: ProfileThemeColors.veiled(0x8C_89_81, dark: true)))
-        #expect(sidebar.bodyFoot == Color(hex: ProfileThemeColors.veiled(0xD8_D7_D6, dark: true)))
+        #expect(sidebar.bodyHead == Color(hex: ProfileThemeColors.veiled(0x8C_89_81, dark: appIsDark)))
+        #expect(sidebar.bodyFoot == Color(hex: ProfileThemeColors.veiled(0xD8_D7_D6, dark: appIsDark)))
         // Discord's own sidebar for that account samples 57,56,54 at the head
         // and 85,85,84 at the foot.
         #expect(ProfileThemeColors.veiled(0x8C_89_81, dark: true) == 0x38_37_34)
