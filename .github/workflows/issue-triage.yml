@@ -4,8 +4,7 @@
 # the reports bot publishes were looked at in the Discord inbox first, so they
 # are left alone. Priority is CodeRabbit's (.coderabbit.yaml).
 #
-# It lives in this repository so the public copy of the code carries it, and
-# runs only on the public tracker.
+# It runs only on this repository, not on forks.
 name: Issue triage
 
 on:

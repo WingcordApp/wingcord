@@ -1,5 +1,5 @@
 # Builds Wingcord and runs its four test suites on GitHub's macOS 27 image, for
-# every pull request and every sync of `main` (docs/BUG-REPORTING.md §14). It
+# every pull request and every push to `main`. It
 # runs on the public repository only: GitHub's macOS runners cost nothing
 # there, while on a private repository each minute counts ten times.
 name: Build

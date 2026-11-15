@@ -1,5 +1,5 @@
 <!--
-Thanks for the pull request. CONTRIBUTING.md explains how it gets merged: your commits are applied in Wingcord's development repository with you as the author, then synced back to this one.
+Thanks for the pull request. CONTRIBUTING.md explains how to build and test a change, and how pull requests are merged.
 -->
 
 ## What it changes and why

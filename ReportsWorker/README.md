@@ -60,9 +60,9 @@ Publish… and Same as… in the inbox, GitHub's events back to the forum, and t
    redeploys the code running now, with them added) and its client ID into `wrangler.jsonc`.
 4. `npx wrangler deploy`.
 5. The buttons on the pinned posts: `python3 scripts/post-guides.py` (Alex, with the bot token).
-6. The public tracker's files — issue forms, triage workflow, CodeRabbit's settings:
-   `../scripts/github/sync-public.sh`, then again with `--push`. CodeRabbit itself is installed from
-   coderabbit.ai, on WingcordApp/wingcord only.
+6. The public tracker's files (issue forms, triage workflow, CodeRabbit's settings) are this repository's own
+   `.github/` and `.coderabbit.yaml`. CodeRabbit itself is installed from coderabbit.ai, on WingcordApp/wingcord
+   only.
 
 If the App's key is ever replaced (the App's page ▸ Generate a private key), put the downloaded `.pem` with
 `npx wrangler secret put GITHUB_APP_PRIVATE_KEY < key.pem` and delete the file; GitHub's PKCS #1 form is

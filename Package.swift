@@ -10,7 +10,7 @@ import PackageDescription
 // greppable `nonisolated`. The two library targets deliberately do NOT set it.
 /// MetalForge's sign-in effect, in Wingcord's own builds only (`SignInBackdrop`):
 /// its code is used under the owner's MetalForge subscription, which forbids
-/// publishing it, so the public copy of the source leaves the folder out — and a
+/// publishing it, so this repository leaves the folder out — and a
 /// build without it draws a ground of Wingcord's own instead.
 let hasMetalForge = FileManager.default.fileExists(
     atPath: Context.packageDirectory + "/Sources/Wingcord/Welcome/MetalForge"

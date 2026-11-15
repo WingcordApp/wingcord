@@ -5,9 +5,12 @@ build/
 .DS_Store
 wingcord-images/
 
-# Local only — never in the repository: Discord bundle extracts, reference
-# screenshots of real accounts, and tool state.
-docs/research/
-docs/references/
+# Local only, never in the repository: tool state.
 .claude/
 .playwright-mcp/
+
+# The maintainer's notes (with their Discord bundle extracts and reference
+# screenshots) and MetalForge's code, each a private repository checked out in
+# place. Package.swift builds without the MetalForge folder.
+/docs/
+/Sources/Wingcord/Welcome/MetalForge/

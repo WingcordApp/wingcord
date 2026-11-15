@@ -6,9 +6,7 @@ If you found a bug, report it from inside Wingcord when you can: **Help > Report
 
 ## How pull requests are merged
 
-This repository is a published copy of the one Wingcord is developed in, which also holds files that aren't published. Pull requests are reviewed here as usual, but GitHub's merge button isn't used. Once a pull request is approved, its commits are applied in the development repository, and the next sync brings them back here. GitHub then shows the pull request as merged, or it's closed with a link to the commit that carries it.
-
-Your name and email stay on your commits as the author, and they become public with them. If you'd rather not publish your email address, commit with your GitHub no-reply address ([Setting your commit email address](https://docs.github.com/en/account-and-profile/setting-up-and-managing-your-personal-account-on-github/managing-email-preferences/setting-your-commit-email-address) explains how).
+Pull requests are reviewed and merged here, on GitHub. Your name and email stay on your commits as the author, and they become public with them. If you'd rather not publish your email address, commit with your GitHub no-reply address ([Setting your commit email address](https://docs.github.com/en/account-and-profile/setting-up-and-managing-your-personal-account-on-github/managing-email-preferences/setting-your-commit-email-address) explains how).
 
 A few things make this go smoothly:
 
@@ -38,7 +36,7 @@ npm run check
 npm test
 ```
 
-Match the style of the code around your change. There's no formatter to run.
+Match the style of the code around your change. There's no formatter to run. Comments that point to `docs/` refer to the maintainer's design notes, which aren't published.
 
 ## Keep real data out
 
