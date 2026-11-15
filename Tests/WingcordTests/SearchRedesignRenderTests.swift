@@ -91,7 +91,7 @@ struct SearchRedesignRenderTests {
         let people = [
             SearchFilterOption(id: 7, title: "alex", detail: "alex", monogram: "A"),
             SearchFilterOption(id: 8, title: "Blåhaj", detail: "blahaj", monogram: "B"),
-            SearchFilterOption(id: 9, title: "Voltcast", detail: "voltcast", monogram: "E"),
+            SearchFilterOption(id: 9, title: "Voltcast", detail: "voltcast", monogram: "V"),
         ]
         let flyout = SearchPickFlyout(prompt: "Search members", options: people, chosen: [8], emptyText: "Nobody to add", toggle: { _ in })
             .background(Color(white: 0.16))
