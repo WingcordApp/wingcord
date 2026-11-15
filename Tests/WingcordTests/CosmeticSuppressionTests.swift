@@ -50,24 +50,19 @@ struct CosmeticSuppressionTests {
         _ set: CosmeticSuppression,
         own: Bool = false,
         _ body: (AppModel) -> Void
-    ) {
-        let settings = AppSettings.shared
-        let previous = settings.suppressedCosmetics
-        let previousOwn = settings.suppressesOwnCosmetics
-        settings.suppressedCosmetics = set
-        settings.suppressesOwnCosmetics = own
-        defer {
-            settings.suppressedCosmetics = previous
-            settings.suppressesOwnCosmetics = previousOwn
+    ) async {
+        await withAppSettings(\.suppressedCosmetics, \.suppressesOwnCosmetics) { settings in
+            settings.suppressedCosmetics = set
+            settings.suppressesOwnCosmetics = own
+            body(model())
         }
-        body(model())
     }
 
     // MARK: What goes
 
     @Test("Each switch removes its own cosmetic and no other")
-    func eachSwitchIsIndependent() {
-        withSuppression(.nameplates) { model in
+    func eachSwitchIsIndependent() async {
+        await withSuppression(.nameplates) { model in
             let filtered = model.cosmetics(of: model.users[them]!)
             #expect(filtered?.nameplate == nil)
             // Everything else is still there. A filter that took a neighbour
@@ -78,7 +73,7 @@ struct CosmeticSuppressionTests {
             #expect(filtered?.profileFrameSKU != nil)
             #expect(filtered?.themeColorValues != nil)
         }
-        withSuppression(.avatarDecorations) { model in
+        await withSuppression(.avatarDecorations) { model in
             let filtered = model.cosmetics(of: model.users[them]!)
             #expect(filtered?.avatarDecorationHash == nil)
             // The SKU goes with the hash: the editor marks the worn one by SKU,
@@ -86,14 +81,14 @@ struct CosmeticSuppressionTests {
             #expect(filtered?.avatarDecorationSKU == nil)
             #expect(filtered?.nameplate != nil)
         }
-        withSuppression(.nameStyles) { model in
+        await withSuppression(.nameStyles) { model in
             #expect(model.cosmetics(of: model.users[them]!)?.displayNameStyle == nil)
         }
-        withSuppression(.profileEffects) { model in
+        await withSuppression(.profileEffects) { model in
             #expect(model.cosmetics(of: model.users[them]!)?.profileEffectSKU == nil)
             #expect(model.cosmetics(of: model.users[them]!)?.profileFrameSKU != nil)
         }
-        withSuppression(.profileFrames) { model in
+        await withSuppression(.profileFrames) { model in
             #expect(model.cosmetics(of: model.users[them]!)?.profileFrameSKU == nil)
             #expect(model.cosmetics(of: model.users[them]!)?.profileEffectSKU != nil)
         }
@@ -102,11 +97,11 @@ struct CosmeticSuppressionTests {
     // MARK: What stays
 
     @Test("Nothing that is not a cosmetic is touched")
-    func peopleAreNotHidden() {
+    func peopleAreNotHidden() async {
         // This hides decoration, not people. A filter that took the bio, the
         // pronouns or the tier with the artwork would be answering a question
         // nobody asked.
-        withSuppression([.nameplates, .avatarDecorations, .nameStyles,
+        await withSuppression([.nameplates, .avatarDecorations, .nameStyles,
                          .profileEffects, .profileFrames, .profileGradients]) { model in
             let filtered = model.cosmetics(of: model.users[them]!)
             #expect(filtered?.bio == "a bio")
@@ -117,11 +112,11 @@ struct CosmeticSuppressionTests {
     }
 
     @Test("The gradient goes, the legacy accent stays")
-    func gradientAndAccentAreTwoThings() {
+    func gradientAndAccentAreTwoThings() async {
         // Two different fields on the wire, and the accent predates the
         // collectible. Taking it with the pair leaves a profile with no colour
         // at all rather than with its plain one.
-        withSuppression(.profileGradients) { model in
+        await withSuppression(.profileGradients) { model in
             let filtered = model.cosmetics(of: model.users[them]!)
             #expect(filtered?.themeColorValues == nil)
             #expect(filtered?.accentColor == 0x11_22_33)
@@ -131,12 +126,12 @@ struct CosmeticSuppressionTests {
     // MARK: Whose
 
     @Test("The reader's own cosmetics are exempt unless they said otherwise")
-    func ownCosmeticsAreExempt() {
-        withSuppression(.nameplates) { model in
+    func ownCosmeticsAreExempt() async {
+        await withSuppression(.nameplates) { model in
             #expect(model.cosmetics(of: model.users[me]!)?.nameplate != nil)
             #expect(model.cosmetics(of: model.users[them]!)?.nameplate == nil)
         }
-        withSuppression(.nameplates, own: true) { model in
+        await withSuppression(.nameplates, own: true) { model in
             #expect(model.cosmetics(of: model.users[me]!)?.nameplate == nil)
         }
     }
@@ -153,11 +148,11 @@ struct CosmeticSuppressionTests {
     }
 
     @Test("The memo notices a changed decoration, not just a changed preference")
-    func theMemoKeysOnBothInputs() {
+    func theMemoKeysOnBothInputs() async {
         // A memo keyed on the person alone goes on serving the filtered copy of
         // a nameplate they have already changed — and a gateway update replaces
         // the whole `UserDecoration`, so there is nothing else to notice it by.
-        withSuppression(.nameplates) { model in
+        await withSuppression(.nameplates) { model in
             #expect(model.cosmetics(of: model.users[them]!)?.bio == "a bio")
 
             model.users[them] = User(

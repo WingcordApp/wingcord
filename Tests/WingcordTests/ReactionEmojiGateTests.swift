@@ -28,26 +28,26 @@ struct ReactionEmojiGateTests {
     }
 
     @Test("Without Nitro, Fake Nitro unlocks the composer's emoji but never a reaction's")
-    func fakeNitroDoesNotUnlockReactions() throws {
-        let (model, channelID, home, other) = try model()
-        let saved = (AppSettings.shared.fakeNitro, AppSettings.shared.fakeNitroEmoji)
-        defer { (AppSettings.shared.fakeNitro, AppSettings.shared.fakeNitroEmoji) = saved }
-        AppSettings.shared.fakeNitro = true
-        AppSettings.shared.fakeNitroEmoji = true
-        model.entitlements = AccountEntitlements(premiumTier: .none)
+    func fakeNitroDoesNotUnlockReactions() async throws {
+        try await withAppSettings(\.fakeNitro, \.fakeNitroEmoji) { settings in
+            let (model, channelID, home, other) = try model()
+            settings.fakeNitro = true
+            settings.fakeNitroEmoji = true
+            model.entitlements = AccountEntitlements(premiumTier: .none)
 
-        let compose = model.emojiCatalog.sections.first { $0.id == String(other.rawValue) }
-        #expect(compose?.isLocked == false, "the composer sends it as a link")
-        let reaction = model.reactionEmojiCatalog(in: channelID).sections
-        #expect(reaction.first { $0.id == String(other.rawValue) }?.isLocked == true)
-        #expect(reaction.first { $0.id == String(home.rawValue) }?.isLocked == false)
+            let compose = model.emojiCatalog.sections.first { $0.id == String(other.rawValue) }
+            #expect(compose?.isLocked == false, "the composer sends it as a link")
+            let reaction = model.reactionEmojiCatalog(in: channelID).sections
+            #expect(reaction.first { $0.id == String(other.rawValue) }?.isLocked == true)
+            #expect(reaction.first { $0.id == String(home.rawValue) }?.isLocked == false)
 
-        let foreign = try #require(model.guildEmojis[other]?.first { !$0.isAnimated })
-        #expect(!model.canReact(with: foreign, in: channelID))
-        if let own = model.guildEmojis[home]?.first(where: { !$0.isAnimated }) {
-            #expect(model.canReact(with: own, in: channelID))
+            let foreign = try #require(model.guildEmojis[other]?.first { !$0.isAnimated })
+            #expect(!model.canReact(with: foreign, in: channelID))
+            if let own = model.guildEmojis[home]?.first(where: { !$0.isAnimated }) {
+                #expect(model.canReact(with: own, in: channelID))
+            }
+            #expect(model.canReact(with: EmojiRef(name: "👍"), in: channelID))
         }
-        #expect(model.canReact(with: EmojiRef(name: "👍"), in: channelID))
     }
 
     @Test("With Nitro, another server's emoji is a reaction like any other")

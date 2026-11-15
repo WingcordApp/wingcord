@@ -10,18 +10,15 @@ import Testing
 struct AutoClipsLibraryTests {
 
     /// A clips folder of its own for the test, put back afterwards.
-    private func withTemporaryFolder(_ body: (URL) throws -> Void) rethrows {
-        let settings = AppSettings.shared
-        let previous = settings.clipsFolder
+    private func withTemporaryFolder(_ body: (URL) throws -> Void) async rethrows {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("wingcord-autoclips-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        settings.clipsFolder = folder
-        defer {
-            settings.clipsFolder = previous
-            try? FileManager.default.removeItem(at: folder)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try await withAppSettings(\.clipsFolder) { settings in
+            settings.clipsFolder = folder
+            try body(folder)
         }
-        try body(folder)
     }
 
     private func writeAutoClip(named name: String, reason: AutoClipReason) -> URL {
@@ -37,8 +34,8 @@ struct AutoClipsLibraryTests {
     }
 
     @Test("Auto Clips wait out of the library; kept, they join it with their reason")
-    func keep() throws {
-        try withTemporaryFolder { folder in
+    func keep() async throws {
+        try await withTemporaryFolder { folder in
             let file = writeAutoClip(named: "Hades 1", reason: AutoClipReason(kind: .laughter, name: "LOL", score: 1.1))
             #expect(ClipLibrary.contents().isEmpty, "not in the library while waiting")
             let store = ClipLibraryStore()
@@ -60,8 +57,8 @@ struct AutoClipsLibraryTests {
     }
 
     @Test("Thrown away, an Auto Clip is gone — file and sidecar")
-    func discard() throws {
-        try withTemporaryFolder { _ in
+    func discard() async throws {
+        try await withTemporaryFolder { _ in
             let file = writeAutoClip(named: "Hades 2", reason: AutoClipReason(kind: .gameEvent, name: "Kill", score: 1))
             let store = ClipLibraryStore()
             store.reload()

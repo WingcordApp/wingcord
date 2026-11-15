@@ -97,15 +97,14 @@ struct DirectMessageProfilePaneTests {
     }
 
     @Test("A reader who switched frames off is never held for one")
-    func suppressedFrameHoldsNothing() {
-        let settings = AppSettings.shared
-        let previous = settings.suppressedCosmetics
-        settings.suppressedCosmetics = .profileFrames
-        defer { settings.suppressedCosmetics = previous }
+    func suppressedFrameHoldsNothing() async {
+        await withAppSettings(\.suppressedCosmetics) { settings in
+            settings.suppressedCosmetics = .profileFrames
 
-        let model = model()
-        model.collectiblesLoading = [sku]
-        #expect(profile(in: model)?.isFrameLoading == false)
+            let model = model()
+            model.collectiblesLoading = [sku]
+            #expect(profile(in: model)?.isFrameLoading == false)
+        }
     }
 
     // MARK: The column

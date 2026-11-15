@@ -27,24 +27,24 @@ struct ExperimentHookTests {
     }
 
     @Test("Left to Discord, the server's bucket decides")
-    func discordDecides() {
-        let saved = AppSettings.shared.voiceInviteCardStyle
-        defer { AppSettings.shared.voiceInviteCardStyle = saved }
-        AppSettings.shared.voiceInviteCardStyle = .asDiscordDecides
-        #expect(model(bucket: 1).usesVoiceChannelRow(in: guildID))
-        #expect(!model(bucket: 0).usesVoiceChannelRow(in: guildID), "control")
-        #expect(!model(bucket: nil).usesVoiceChannelRow(in: guildID), "not in it")
-        #expect(!model(bucket: 1).usesVoiceChannelRow(in: nil), "no server")
-        #expect(model(bucket: 1).guildExperimentBucket(AppModel.voiceChannelRowExperiment, in: guildID) == 1)
+    func discordDecides() async {
+        await withAppSettings(\.voiceInviteCardStyle) { settings in
+            settings.voiceInviteCardStyle = .asDiscordDecides
+            #expect(model(bucket: 1).usesVoiceChannelRow(in: guildID))
+            #expect(!model(bucket: 0).usesVoiceChannelRow(in: guildID), "control")
+            #expect(!model(bucket: nil).usesVoiceChannelRow(in: guildID), "not in it")
+            #expect(!model(bucket: 1).usesVoiceChannelRow(in: nil), "no server")
+            #expect(model(bucket: 1).guildExperimentBucket(AppModel.voiceChannelRowExperiment, in: guildID) == 1)
+        }
     }
 
     @Test("The reader's choice wins over the bucket")
-    func readerDecides() {
-        let saved = AppSettings.shared.voiceInviteCardStyle
-        defer { AppSettings.shared.voiceInviteCardStyle = saved }
-        AppSettings.shared.voiceInviteCardStyle = .channelRow
-        #expect(model(bucket: nil).usesVoiceChannelRow(in: guildID))
-        AppSettings.shared.voiceInviteCardStyle = .card
-        #expect(!model(bucket: 1).usesVoiceChannelRow(in: guildID))
+    func readerDecides() async {
+        await withAppSettings(\.voiceInviteCardStyle) { settings in
+            settings.voiceInviteCardStyle = .channelRow
+            #expect(model(bucket: nil).usesVoiceChannelRow(in: guildID))
+            settings.voiceInviteCardStyle = .card
+            #expect(!model(bucket: 1).usesVoiceChannelRow(in: guildID))
+        }
     }
 }

@@ -40,9 +40,17 @@ struct NotificationTests {
             Channel(id: dmID, kind: .directMessage, recipientIDs: [authorID]),
         ])
         model.channelIndex = index
-        AppSettings.shared.postsNotifications = true
-        AppSettings.shared.notifiesOnlyForMentions = false
         return model
+    }
+
+    /// Notifications on, for every message (the defaults), pinned for the tests
+    /// below, which read them through `AppModel.notice(for:)`.
+    private func withNotifications(_ body: (AppSettings) throws -> Void) async rethrows {
+        try await withAppSettings(\.postsNotifications, \.notifiesOnlyForMentions) { settings in
+            settings.postsNotifications = true
+            settings.notifiesOnlyForMentions = false
+            try body(settings)
+        }
     }
 
     private func message(
@@ -69,104 +77,122 @@ struct NotificationTests {
     // MARK: What reaches the policy
 
     @Test("A message in an unselected channel earns a banner")
-    func ordinaryMessageNotifies() {
-        let model = model()
-        #expect(model.notice(for: message(in: channelID)) != nil)
+    func ordinaryMessageNotifies() async {
+        await withNotifications { settings in
+            let model = model()
+            #expect(model.notice(for: message(in: channelID)) != nil)
+        }
     }
 
     @Test("The reader's own message never does")
-    func ownMessageIsSilent() {
-        let model = model()
-        #expect(model.notice(for: message(in: channelID, from: readerID)) == nil)
+    func ownMessageIsSilent() async {
+        await withNotifications { settings in
+            let model = model()
+            #expect(model.notice(for: message(in: channelID, from: readerID)) == nil)
+        }
     }
 
     @Test("A blocked author never does")
-    func blockedAuthorIsSilent() {
-        let model = model()
-        model.blockedUserIDs = [authorID]
-        #expect(model.notice(for: message(in: channelID)) == nil)
+    func blockedAuthorIsSilent() async {
+        await withNotifications { settings in
+            let model = model()
+            model.blockedUserIDs = [authorID]
+            #expect(model.notice(for: message(in: channelID)) == nil)
+        }
     }
 
     /// **A role ping is a mention**, and the store is where that is resolved —
     /// `mentionableIDs` is one flat set of the reader's roles and their own id.
     @Test("A role the reader holds counts as a mention")
-    func roleMentionsAreResolved() {
-        let model = model()
-        model.notificationPreferences = NotificationPreferences(
-            guildLevels: [guildID: .onlyMentions]
-        )
-        #expect(model.notice(for: message(in: channelID)) == nil)
-        #expect(model.notice(for: message(in: channelID, roles: [roleID])) != nil)
-        // A role they do not hold is not a mention.
-        #expect(model.notice(for: message(in: channelID, roles: [RoleID(rawValue: 99)])) == nil)
+    func roleMentionsAreResolved() async {
+        await withNotifications { settings in
+            let model = model()
+            model.notificationPreferences = NotificationPreferences(
+                guildLevels: [guildID: .onlyMentions]
+            )
+            #expect(model.notice(for: message(in: channelID)) == nil)
+            #expect(model.notice(for: message(in: channelID, roles: [roleID])) != nil)
+            // A role they do not hold is not a mention.
+            #expect(model.notice(for: message(in: channelID, roles: [RoleID(rawValue: 99)])) == nil)
+        }
     }
 
     /// Most large servers default to Only @mentions, and the guild object is
     /// where that lives.
     @Test("The server's own default is read off the guild")
-    func guildDefaultIsRead() {
-        let model = model()
-        model.guilds[guildID]?.defaultMessageNotifications = .onlyMentions
-        #expect(model.notice(for: message(in: channelID)) == nil)
-        #expect(model.notice(for: message(in: channelID, mentions: [readerID])) != nil)
+    func guildDefaultIsRead() async {
+        await withNotifications { settings in
+            let model = model()
+            model.guilds[guildID]?.defaultMessageNotifications = .onlyMentions
+            #expect(model.notice(for: message(in: channelID)) == nil)
+            #expect(model.notice(for: message(in: channelID, mentions: [readerID])) != nil)
+        }
     }
 
     // MARK: The reader's own switches
 
     @Test("The master switch stops everything")
-    func masterSwitchStopsEverything() {
-        let model = model()
-        AppSettings.shared.postsNotifications = false
-        defer { AppSettings.shared.postsNotifications = true }
-        #expect(model.notice(for: message(in: channelID, mentions: [readerID])) == nil)
+    func masterSwitchStopsEverything() async {
+        await withNotifications { settings in
+            let model = model()
+            settings.postsNotifications = false
+            #expect(model.notice(for: message(in: channelID, mentions: [readerID])) == nil)
+        }
     }
 
     /// **The floor is applied to the preferences, not to the answer.** Written
     /// as "and it was a mention" after the fact it would also silence direct
     /// messages, which the policy deliberately exempts from every level.
     @Test("Only-for-mentions narrows servers and leaves conversations alone")
-    func mentionsOnlyDoesNotSilenceDirectMessages() {
-        let model = model()
-        AppSettings.shared.notifiesOnlyForMentions = true
-        defer { AppSettings.shared.notifiesOnlyForMentions = false }
+    func mentionsOnlyDoesNotSilenceDirectMessages() async {
+        await withNotifications { settings in
+            let model = model()
+            settings.notifiesOnlyForMentions = true
 
-        #expect(model.notice(for: message(in: channelID)) == nil)
-        #expect(model.notice(for: message(in: channelID, mentions: [readerID])) != nil)
-        // The one that must survive it.
-        #expect(model.notice(for: message(in: dmID)) != nil)
+            #expect(model.notice(for: message(in: channelID)) == nil)
+            #expect(model.notice(for: message(in: channelID, mentions: [readerID])) != nil)
+            // The one that must survive it.
+            #expect(model.notice(for: message(in: dmID)) != nil)
+        }
     }
 
     // MARK: The words
 
     @Test("A server message names the person, the channel and the server")
-    func guildNoticeNamesItsPlace() throws {
-        let model = model()
-        let notice = try #require(model.notice(for: message(in: channelID)))
-        #expect(notice.title == "alex")
-        #expect(notice.subtitle == "#general · Lumen Club")
-        #expect(notice.body == "hello")
+    func guildNoticeNamesItsPlace() async throws {
+        try await withNotifications { settings in
+            let model = model()
+            let notice = try #require(model.notice(for: message(in: channelID)))
+            #expect(notice.title == "alex")
+            #expect(notice.subtitle == "#general · Lumen Club")
+            #expect(notice.body == "hello")
+        }
     }
 
     /// The nickname is the name the reader sees on every other surface for that
     /// person, so it is the one a banner uses too.
     @Test("A guild nickname wins over the account name")
-    func nicknameWins() throws {
-        let model = model()
-        model.members[guildID] = [
-            authorID: Member(userID: authorID, nickname: "Mara", roleIDs: []),
-        ]
-        let notice = try #require(model.notice(for: message(in: channelID)))
-        #expect(notice.title == "Mara")
+    func nicknameWins() async throws {
+        try await withNotifications { settings in
+            let model = model()
+            model.members[guildID] = [
+                authorID: Member(userID: authorID, nickname: "Mara", roleIDs: []),
+            ]
+            let notice = try #require(model.notice(for: message(in: channelID)))
+            #expect(notice.title == "Mara")
+        }
     }
 
     /// A banner reading "alex / alex" says one thing twice and costs the line
     /// the message could have used.
     @Test("A one-to-one conversation carries no subtitle")
-    func directMessageHasNoSubtitle() throws {
-        let model = model()
-        let notice = try #require(model.notice(for: message(in: dmID)))
-        #expect(notice.title == "alex")
-        #expect(notice.subtitle == nil)
+    func directMessageHasNoSubtitle() async throws {
+        try await withNotifications { settings in
+            let model = model()
+            let notice = try #require(model.notice(for: message(in: dmID)))
+            #expect(notice.title == "alex")
+            #expect(notice.subtitle == nil)
+        }
     }
 
     // MARK: Following one
@@ -174,9 +200,11 @@ struct NotificationTests {
     /// A notification can outlive the access that produced it — somebody
     /// removed from a server still has its banners in Notification Centre.
     @Test("A banner for a channel the reader can no longer see goes nowhere")
-    func pressingAnUnreachableBannerDoesNothing() {
-        let model = model()
-        model.openNotifiedMessage(ChannelID(rawValue: 4444), MessageID(rawValue: 1))
-        #expect(model.selectedChannelID == nil)
+    func pressingAnUnreachableBannerDoesNothing() async {
+        await withNotifications { settings in
+            let model = model()
+            model.openNotifiedMessage(ChannelID(rawValue: 4444), MessageID(rawValue: 1))
+            #expect(model.selectedChannelID == nil)
+        }
     }
 }

@@ -121,24 +121,24 @@ struct DemoFixtureTests {
     }
 
     @Test("Two voice invites at the transcript's foot: the crowd's as the channel row, the reader's own as the card")
-    func voiceInvites() throws {
-        let saved = AppSettings.shared.voiceInviteCardStyle
-        defer { AppSettings.shared.voiceInviteCardStyle = saved }
-        AppSettings.shared.voiceInviteCardStyle = .asDiscordDecides
-        let model = self.model()
-        let codes = try aboveTheClip(in: model).suffix(4).flatMap { InviteCard.codes(in: $0.content) }
-        // Pixel Forge's server invite follows them (the "+ N more" traits,
-        // SHEETS-SETTINGS Phase 1.2) — not a voice invite.
-        #expect(codes.filter { $0 != "demo-forge" } == ["demo-crowd", "demo-hangout"])
+    func voiceInvites() async throws {
+        try await withAppSettings(\.voiceInviteCardStyle) { settings in
+            settings.voiceInviteCardStyle = .asDiscordDecides
+            let model = self.model()
+            let codes = try aboveTheClip(in: model).suffix(4).flatMap { InviteCard.codes(in: $0.content) }
+            // Pixel Forge's server invite follows them (the "+ N more" traits,
+            // SHEETS-SETTINGS Phase 1.2) — not a voice invite.
+            #expect(codes.filter { $0 != "demo-forge" } == ["demo-crowd", "demo-hangout"])
 
-        let states = model.voiceInviteStates()
-        #expect(states.count == 2, "both rooms drawn")
-        let crowd = try #require(states.values.first { $0.asChannelRow })
-        #expect(crowd.people.count >= 5, "a crowd, so the row counts the rest")
-        #expect(crowd.people.contains { $0.isStreaming })
-        let own = try #require(states.values.first { !$0.asChannelRow })
-        let me = try #require(model.currentUserID)
-        #expect(own.people.contains { $0.id == me }, "the reader's own room, so its card is settled")
+            let states = model.voiceInviteStates()
+            #expect(states.count == 2, "both rooms drawn")
+            let crowd = try #require(states.values.first { $0.asChannelRow })
+            #expect(crowd.people.count >= 5, "a crowd, so the row counts the rest")
+            #expect(crowd.people.contains { $0.isStreaming })
+            let own = try #require(states.values.first { !$0.asChannelRow })
+            let me = try #require(model.currentUserID)
+            #expect(own.people.contains { $0.id == me }, "the reader's own room, so its card is settled")
+        }
     }
 
     @Test("A shared theme, somebody typing with a custom indicator, the reader's own worn")

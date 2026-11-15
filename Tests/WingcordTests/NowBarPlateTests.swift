@@ -97,18 +97,19 @@ struct NowBarPlateTests {
     }
 
     @Test("Switching the plate off in Settings takes its colour with it")
-    func thePreferenceDropsTheColourToo() {
-        // The regression this exists for. The two URLs were gated on the
-        // preference and the palette was read unconditionally, which was
-        // harmless only while nothing but the artwork drew it — the ramp takes
-        // the colour too, so a reader who switched the plate off would have lost
-        // the picture and kept a violet capsule.
-        AppSettings.shared.showsNameplateInNowBar = false
-        defer { AppSettings.shared.showsNameplateInNowBar = true }
+    func thePreferenceDropsTheColourToo() async {
+        await withAppSettings(\.showsNameplateInNowBar) { settings in
+            // The regression this exists for. The two URLs were gated on the
+            // preference and the palette was read unconditionally, which was
+            // harmless only while nothing but the artwork drew it — the ramp takes
+            // the colour too, so a reader who switched the plate off would have lost
+            // the picture and kept a violet capsule.
+            settings.showsNameplateInNowBar = false
 
-        let bar = model(nameplate: Self.darkRoses).nowBarPresentation
-        #expect(bar.nameplateURL == nil)
-        #expect(bar.nameplateAnimatedURL == nil)
-        #expect(bar.nameplatePalette == .none)
+            let bar = model(nameplate: Self.darkRoses).nowBarPresentation
+            #expect(bar.nameplateURL == nil)
+            #expect(bar.nameplateAnimatedURL == nil)
+            #expect(bar.nameplatePalette == .none)
+        }
     }
 }

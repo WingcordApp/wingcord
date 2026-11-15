@@ -12,18 +12,13 @@ import WingcordCore
 @MainActor
 struct RichPresenceBuilderTests {
 
-    private func clean(_ body: (AppModel) throws -> Void) rethrows {
-        let settings = AppSettings.shared
-        let saved = (settings.customPresences, settings.activeCustomPresenceID, settings.sharesGameActivity)
-        defer {
-            settings.activeCustomPresenceID = saved.1
-            settings.customPresences = saved.0
-            settings.sharesGameActivity = saved.2
+    private func clean(_ body: (AppModel, AppSettings) throws -> Void) async rethrows {
+        try await withAppSettings(\.customPresences, \.activeCustomPresenceID, \.sharesGameActivity) { settings in
+            settings.activeCustomPresenceID = nil
+            settings.customPresences = []
+            settings.sharesGameActivity = true
+            try body(AppModel(), settings)
         }
-        settings.activeCustomPresenceID = nil
-        settings.customPresences = []
-        settings.sharesGameActivity = true
-        try body(AppModel())
     }
 
     private func named(_ name: String, in model: AppModel) -> CustomPresence.ID {
@@ -40,8 +35,8 @@ struct RichPresenceBuilderTests {
     )
 
     @Test("A card that is on replaces the detected game")
-    func replacesGame() {
-        clean { model in
+    func replacesGame() async {
+        await clean { model, _ in
             model.detectedGame = game
             #expect(model.publishedActivities.map(\.name) == ["Celeste"])
             let id = named("Hollow Knight", in: model)
@@ -54,8 +49,8 @@ struct RichPresenceBuilderTests {
     }
 
     @Test("One card is on at a time, and Show Custom RPC brings the last one back")
-    func oneAtATime() {
-        clean { model in
+    func oneAtATime() async {
+        await clean { model, _ in
             let first = named("One", in: model)
             let second = named("Two", in: model)
             model.setCustomPresenceOn(first)
@@ -69,8 +64,8 @@ struct RichPresenceBuilderTests {
     }
 
     @Test("A card that breaks a rule, or no activity sharing, sends nothing")
-    func nothingSent() {
-        clean { model in
+    func nothingSent() async {
+        await clean { model, settings in
             let id = named("Fine", in: model)
             model.setCustomPresenceOn(id)
             var presence = model.activeCustomPresence!
@@ -80,14 +75,14 @@ struct RichPresenceBuilderTests {
             presence.detailsLink = ""
             model.updateCustomPresence(presence)
             #expect(model.publishedActivities.count == 1)
-            AppSettings.shared.sharesGameActivity = false
+            settings.sharesGameActivity = false
             #expect(model.publishedActivities.isEmpty)
         }
     }
 
     @Test("Removing the card that is on turns it off")
-    func removeActive() {
-        clean { model in
+    func removeActive() async {
+        await clean { model, _ in
             let id = named("Gone", in: model)
             model.setCustomPresenceOn(id)
             model.removeCustomPresence(id)

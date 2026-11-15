@@ -29,13 +29,18 @@ struct CanvasAnchorTests {
         }
     }
 
+    /// Columns, whatever the store holds. Bubbles are on by default, and a
+    /// bubble wears a message's first few reactions on its corner with no Add
+    /// Reaction control, so on a Mac whose store is new (every CI run) these
+    /// tests ran in bubbles unless a settings test had already turned them off.
+    private func inColumns(_ body: () throws -> Void) async rethrows {
+        try await withAppSettings(\.usesMessageBubbles) { settings in
+            settings.usesMessageBubbles = false
+            try body()
+        }
+    }
+
     private func mounted(_ messages: [Message]) throws -> (AppModel, TimelineCoordinator, NSWindow, TimelineCanvasView) {
-        // Columns, whatever the store holds. Bubbles are on by default, and a
-        // bubble wears a message's first few reactions on its corner with no
-        // Add Reaction control, so on a Mac whose store is new (every CI run)
-        // these tests ran in bubbles unless a settings test had already turned
-        // them off. Left off afterwards, as the settings tests leave it.
-        AppSettings.shared.usesMessageBubbles = false
         let model = AppModel()
         var box = MessageBox()
         box.messages = messages
@@ -82,50 +87,54 @@ struct CanvasAnchorTests {
     }
 
     @Test("A command's chip opens its flyout over the chip")
-    func commandChip() throws {
-        let answer = Message(
-            id: id(7),
-            channelID: channel,
-            authorID: bot,
-            content: "answered",
-            kind: .chatInputCommand,
-            payload: MessagePayload(
-                interaction: MessageInteraction(userID: UserID(rawValue: 1), name: "count", commandType: 1)
+    func commandChip() async throws {
+        try await inColumns {
+            let answer = Message(
+                id: id(7),
+                channelID: channel,
+                authorID: bot,
+                content: "answered",
+                kind: .chatInputCommand,
+                payload: MessagePayload(
+                    interaction: MessageInteraction(userID: UserID(rawValue: 1), name: "count", commandType: 1)
+                )
             )
-        )
-        let (model, coordinator, window, canvas) = try mounted(filler() + [answer])
-        let (row, frame) = try row(of: answer.id, in: canvas)
-        #expect(frame.minY > 100, "the row has to be away from the canvas's origin for this to mean anything")
-        let chip = try #require(row.interactionHeader).chipRect.offsetBy(dx: frame.minX, dy: frame.minY)
-        try press(CGPoint(x: chip.midX, y: chip.midY), in: canvas)
-        let request = try #require(model.invokedCommandRequest)
-        #expect(request.messageID == answer.id)
-        #expect(request.anchor == canvas.anchorInHostingRoot(chip))
-        withExtendedLifetime((coordinator, window)) {}
+            let (model, coordinator, window, canvas) = try mounted(filler() + [answer])
+            let (row, frame) = try row(of: answer.id, in: canvas)
+            #expect(frame.minY > 100, "the row has to be away from the canvas's origin for this to mean anything")
+            let chip = try #require(row.interactionHeader).chipRect.offsetBy(dx: frame.minX, dy: frame.minY)
+            try press(CGPoint(x: chip.midX, y: chip.midY), in: canvas)
+            let request = try #require(model.invokedCommandRequest)
+            #expect(request.messageID == answer.id)
+            #expect(request.anchor == canvas.anchorInHostingRoot(chip))
+            withExtendedLifetime((coordinator, window)) {}
+        }
     }
 
     @Test("Add Reaction opens its picker over the control")
-    func addReaction() throws {
-        let reacted = Message(
-            id: id(7),
-            channelID: channel,
-            authorID: bot,
-            content: "reacted",
-            payload: MessagePayload(reactions: [
-                Reaction(emoji: EmojiRef(name: "😀"), count: 2, isMine: false),
-            ])
-        )
-        let (model, coordinator, window, canvas) = try mounted(filler() + [reacted])
-        let (row, frame) = try row(of: reacted.id, in: canvas)
-        #expect(frame.minY > 100)
-        let control = try #require(row.visibleReactionControls(canAddReaction: true, showsBookmark: false).first {
-            $0.kind == .addReaction
-        })
-        let rect = control.rect.offsetBy(dx: frame.minX, dy: frame.minY)
-        var anchor: CGRect?
-        canvas.onAddReaction = { _, opened in anchor = opened }
-        try press(CGPoint(x: rect.midX, y: rect.midY), in: canvas)
-        #expect(anchor == canvas.anchorInHostingRoot(rect))
-        withExtendedLifetime((model, coordinator, window)) {}
+    func addReaction() async throws {
+        try await inColumns {
+            let reacted = Message(
+                id: id(7),
+                channelID: channel,
+                authorID: bot,
+                content: "reacted",
+                payload: MessagePayload(reactions: [
+                    Reaction(emoji: EmojiRef(name: "😀"), count: 2, isMine: false),
+                ])
+            )
+            let (model, coordinator, window, canvas) = try mounted(filler() + [reacted])
+            let (row, frame) = try row(of: reacted.id, in: canvas)
+            #expect(frame.minY > 100)
+            let control = try #require(row.visibleReactionControls(canAddReaction: true, showsBookmark: false).first {
+                $0.kind == .addReaction
+            })
+            let rect = control.rect.offsetBy(dx: frame.minX, dy: frame.minY)
+            var anchor: CGRect?
+            canvas.onAddReaction = { _, opened in anchor = opened }
+            try press(CGPoint(x: rect.midX, y: rect.midY), in: canvas)
+            #expect(anchor == canvas.anchorInHostingRoot(rect))
+            withExtendedLifetime((model, coordinator, window)) {}
+        }
     }
 }

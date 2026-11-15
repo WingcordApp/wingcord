@@ -39,10 +39,12 @@ struct LocalRPCServerTests {
         return url
     }
 
-    /// Twenty seconds, because the server answers on the main thread and the
-    /// whole suite shares it.
+    /// Two minutes, because the server answers on the main thread and the
+    /// whole suite shares it: twenty seconds was too few in a full run here
+    /// once the settings tests took turns (2026-11-15). A broken server only
+    /// costs the wait.
     private func waitForSocket(_ server: LocalRPCServer) async throws -> String {
-        for _ in 0..<1000 {
+        for _ in 0..<6000 {
             if let path = server.socketPath { return path }
             try await Task.sleep(for: .milliseconds(20))
         }
@@ -91,7 +93,7 @@ struct LocalRPCServerTests {
         #expect(refused.payload["nonce"] == .number(2))
 
         client.close()
-        for _ in 0..<1000 where recorder.activities.last?.activity != nil {
+        for _ in 0..<6000 where recorder.activities.last?.activity != nil {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(recorder.activities.last?.activity == nil)
@@ -166,7 +168,7 @@ struct LocalRPCWebSocketServerTests {
         let port = UInt16.random(in: 47_000..<48_000)
         server.start(directory: FileManager.default.temporaryDirectory.appending(path: "rpc-ws"), firstPort: port)
         defer { server.stop() }
-        for _ in 0..<1000 where server.webPort == nil { try await Task.sleep(for: .milliseconds(20)) }
+        for _ in 0..<6000 where server.webPort == nil { try await Task.sleep(for: .milliseconds(20)) }
         let open = try #require(server.webPort)
 
         let page = try WebSocketTestClient(port: open)
@@ -212,7 +214,7 @@ nonisolated final class WebSocketTestClient: @unchecked Sendable {
             }
         }
         guard result == 0 else { throw POSIXError(.ECONNREFUSED) }
-        var timeout = timeval(tv_sec: 20, tv_usec: 0)
+        var timeout = timeval(tv_sec: 120, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     }
 
@@ -308,7 +310,7 @@ nonisolated final class RPCTestClient: @unchecked Sendable {
             }
         }
         guard result == 0 else { throw POSIXError(.ECONNREFUSED) }
-        var timeout = timeval(tv_sec: 20, tv_usec: 0)
+        var timeout = timeval(tv_sec: 120, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     }
 
@@ -319,7 +321,7 @@ nonisolated final class RPCTestClient: @unchecked Sendable {
         _ = data.withUnsafeBytes { write(fd, $0.baseAddress, data.count) }
     }
 
-    /// The next whole frame, or nil after twenty seconds of silence.
+    /// The next whole frame, or nil after two minutes of silence.
     func frame() async -> LocalRPCFrameReader.Frame? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global().async {

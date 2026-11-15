@@ -26,13 +26,14 @@ struct GameEventHubTests {
         server.onDocument = { received.append($0) }
         server.start()
         defer { server.stop() }
-        // Up to twenty seconds, like the RPC suites: the listener reports ready
+        // Up to two minutes, like the RPC suites: the listener reports ready
         // on the main thread, which the rest of the suite shares.
-        for _ in 0..<1000 where !server.isListening { try await Task.sleep(for: .milliseconds(20)) }
+        for _ in 0..<6000 where !server.isListening { try await Task.sleep(for: .milliseconds(20)) }
         #expect(server.isListening)
 
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!)
         request.httpMethod = "POST"
+        request.timeoutInterval = 120
         request.httpBody = Data(#"{"provider":{"appid":570}}"#.utf8)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let (_, response) = try await URLSession.shared.data(for: request)

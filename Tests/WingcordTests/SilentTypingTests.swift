@@ -13,23 +13,18 @@ struct SilentTypingTests {
     private let channel = ChannelID(rawValue: 4242)
 
     /// Runs `body` with the plugin's settings as given, putting them back after.
-    private func with(plugin: Bool, isOn: Bool, menu: Bool = true, _ body: () -> Void) {
-        let settings = AppSettings.shared
-        let saved = (settings.silentTyping, settings.silentTypingIsOn, settings.silentTypingInContextMenu)
-        defer {
-            settings.silentTyping = saved.0
-            settings.silentTypingIsOn = saved.1
-            settings.silentTypingInContextMenu = saved.2
+    private func with(plugin: Bool, isOn: Bool, menu: Bool = true, _ body: () -> Void) async {
+        await withAppSettings(\.silentTyping, \.silentTypingIsOn, \.silentTypingInContextMenu) { settings in
+            settings.silentTyping = plugin
+            settings.silentTypingIsOn = isOn
+            settings.silentTypingInContextMenu = menu
+            body()
         }
-        settings.silentTyping = plugin
-        settings.silentTypingIsOn = isOn
-        settings.silentTypingInContextMenu = menu
-        body()
     }
 
     @Test("Hidden, a keystroke sends no typing request")
-    func sendsNothing() {
-        with(plugin: true, isOn: true) {
+    func sendsNothing() async {
+        await with(plugin: true, isOn: true) {
             let model = AppModel()
             model.sessionController.reportTyping(in: channel)
             #expect(model.sessionController.lastTypingSent[channel] == nil)
@@ -37,10 +32,10 @@ struct SilentTypingTests {
     }
 
     @Test("Hiding needs the plugin and its functionality both on")
-    func hides() {
-        with(plugin: true, isOn: true) { #expect(AppSettings.shared.hidesTyping) }
-        with(plugin: true, isOn: false) { #expect(!AppSettings.shared.hidesTyping) }
-        with(plugin: false, isOn: true) { #expect(!AppSettings.shared.hidesTyping) }
+    func hides() async {
+        await with(plugin: true, isOn: true) { #expect(AppSettings.shared.hidesTyping) }
+        await with(plugin: true, isOn: false) { #expect(!AppSettings.shared.hidesTyping) }
+        await with(plugin: false, isOn: true) { #expect(!AppSettings.shared.hidesTyping) }
     }
 
     private func menuTitles(isChatInput: Bool) -> [String: NSControl.StateValue] {
@@ -54,18 +49,18 @@ struct SilentTypingTests {
     }
 
     @Test("The chat input's menu ends with the plugin's checkbox, ticked while typing is hidden")
-    func contextMenu() {
-        with(plugin: true, isOn: true) {
+    func contextMenu() async {
+        await with(plugin: true, isOn: true) {
             #expect(menuTitles(isChatInput: true)["Enable Silent Typing"] == .on)
             #expect(menuTitles(isChatInput: false)["Enable Silent Typing"] == nil)
         }
-        with(plugin: true, isOn: false) {
+        await with(plugin: true, isOn: false) {
             #expect(menuTitles(isChatInput: true)["Enable Silent Typing"] == .off)
         }
-        with(plugin: true, isOn: true, menu: false) {
+        await with(plugin: true, isOn: true, menu: false) {
             #expect(menuTitles(isChatInput: true)["Enable Silent Typing"] == nil)
         }
-        with(plugin: false, isOn: true) {
+        await with(plugin: false, isOn: true) {
             #expect(menuTitles(isChatInput: true)["Enable Silent Typing"] == nil)
         }
     }

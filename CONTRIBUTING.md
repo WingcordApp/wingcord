@@ -36,6 +36,8 @@ npm run check
 npm test
 ```
 
+Tests run in parallel and share one `AppSettings.shared`. A test that changes a setting, or depends on one, does it inside `withAppSettings` (in `Tests/WingcordTests/AppSettingsIsolation.swift`) and names every setting it touches: it puts them back afterwards and keeps other such tests from running in between. Where the code under test takes the settings as a parameter, give it an `AppSettings` of its own on a throwaway `UserDefaults` suite instead. `AppSettingsRuleTests` fails on any other way of changing them.
+
 Match the style of the code around your change. There's no formatter to run. Comments that point to `docs/` refer to the maintainer's design notes, which aren't published.
 
 ## Keep real data out

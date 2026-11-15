@@ -188,17 +188,14 @@ struct MemberListRowFactsTests {
     }
 
     /// `AppSettings` is shared, so every test here says what it wants.
-    private func organized(_ organization: MemberListOrganization, _ body: () throws -> Void) rethrows {
-        let settings = AppSettings.shared
-        let before = (settings.memberListOrganization, settings.collapsedMemberSections, settings.groupsMembersInVoice)
-        defer {
-            settings.memberListOrganization = before.0
-            settings.collapsedMemberSections = before.1
-            settings.groupsMembersInVoice = before.2
+    private func organized(_ organization: MemberListOrganization, _ body: () throws -> Void) async rethrows {
+        try await withAppSettings(
+            \.memberListOrganization, \.collapsedMemberSections, \.groupsMembersInVoice
+        ) { settings in
+            settings.memberListOrganization = organization
+            settings.collapsedMemberSections = [:]
+            try body()
         }
-        settings.memberListOrganization = organization
-        settings.collapsedMemberSections = [:]
-        try body()
     }
 
     private func playing(_ model: AppModel, key: String? = "mp:external/abc/https/x.png") {
@@ -293,13 +290,13 @@ struct MemberListRowFactsTests {
     }
 
     @Test("Roles has no Active Now; Active Now does, and it's the row's only copy")
-    func modes() {
+    func modes() async {
         let model = model()
         playing(model)
-        organized(.roles) {
+        await organized(.roles) {
             #expect(model.roster.sections.map(\.key) == [.online])
         }
-        organized(.activeNow) {
+        await organized(.activeNow) {
             model.rosterCache = nil
             #expect(model.roster.sections.map(\.key) == [.activeNow, .online])
             #expect(model.roster.sections.first?.countText == "1")
@@ -308,13 +305,13 @@ struct MemberListRowFactsTests {
     }
 
     @Test("Somebody in a room with no row, known to be online, joins Active Now")
-    func roomCandidates() {
+    func roomCandidates() async {
         let model = model()
         let visitor = UserID(rawValue: 3)
         model.users[visitor] = User(id: visitor, username: "visitor")
         model.members[here]?[visitor] = Member(userID: visitor, roleIDs: [])
         model.voiceStates[visitor] = VoiceState(userID: visitor, channelID: lounge, guildID: here)
-        organized(.activeNow) {
+        await organized(.activeNow) {
             model.rosterCache = nil
             // A presence nobody has heard yet might be invisible.
             #expect(model.roster.members.values.contains { $0.userID == visitor } == false)
@@ -325,9 +322,9 @@ struct MemberListRowFactsTests {
     }
 
     @Test("What was folded is remembered per server, and comes back")
-    func folding() {
+    func folding() async {
         let model = model()
-        organized(.roles) {
+        await organized(.roles) {
             model.toggleMemberSection(.online)
             #expect(AppSettings.shared.collapsedMemberSections["guild:100"] == ["online"])
             #expect(model.roster.sections.first?.isCollapsed == true)

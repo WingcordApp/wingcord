@@ -132,10 +132,10 @@ struct TimelineSettingsReachTests {
     /// Drives one preference through the real store and reports whether the
     /// resolved value moved.
     private func resolves(
+        in settings: AppSettings,
         _ change: (AppSettings) -> Void,
         restore: (AppSettings) -> Void
     ) -> Bool {
-        let settings = AppSettings.shared
         // From the value `restore` leaves, not whatever the store holds: on a Mac
         // whose default is already the changed value, nothing would move.
         restore(settings)
@@ -147,45 +147,56 @@ struct TimelineSettingsReachTests {
     }
 
     @Test("Density, seconds and always-on timestamps all move the resolved value")
-    func everyInputResolves() {
-        #expect(resolves({ $0.messageGroupSpacing = 12 }, restore: { $0.messageGroupSpacing = 0 }))
-        #expect(resolves({ $0.showsSeconds = true }, restore: { $0.showsSeconds = false }))
-        #expect(resolves(
-            { $0.alwaysShowsTimestamps = true },
-            restore: { $0.alwaysShowsTimestamps = false }
-        ))
-        #expect(resolves({ $0.isCompactMode = true }, restore: { $0.isCompactMode = false }))
-        #expect(resolves({ $0.uses24HourTime = true }, restore: { $0.uses24HourTime = false }))
-        #expect(resolves({ $0.usesMessageBubbles = true }, restore: { $0.usesMessageBubbles = false }))
-        #expect(resolves({ $0.hidesMessageTimes = true }, restore: { $0.hidesMessageTimes = false }))
+    func everyInputResolves() async {
+        await withAppSettings(
+            \.messageGroupSpacing, \.showsSeconds, \.alwaysShowsTimestamps, \.isCompactMode,
+            \.uses24HourTime, \.usesMessageBubbles, \.hidesMessageTimes
+        ) { settings in
+            #expect(resolves(in: settings, { $0.messageGroupSpacing = 12 }, restore: { $0.messageGroupSpacing = 0 }))
+            #expect(resolves(in: settings, { $0.showsSeconds = true }, restore: { $0.showsSeconds = false }))
+            #expect(resolves(
+                in: settings,
+                { $0.alwaysShowsTimestamps = true },
+                restore: { $0.alwaysShowsTimestamps = false }
+            ))
+            #expect(resolves(in: settings, { $0.isCompactMode = true }, restore: { $0.isCompactMode = false }))
+            #expect(resolves(in: settings, { $0.uses24HourTime = true }, restore: { $0.uses24HourTime = false }))
+            #expect(resolves(in: settings, { $0.usesMessageBubbles = true }, restore: { $0.usesMessageBubbles = false }))
+            #expect(resolves(in: settings, { $0.hidesMessageTimes = true }, restore: { $0.hidesMessageTimes = false }))
+        }
     }
 
     @Test("And each one moves the revision the row cache keys on")
-    func everyInputBumpsTheRevision() {
-        func bumps(_ change: (AppSettings) -> Void, restore: (AppSettings) -> Void) -> Bool {
-            let before = PresentationRevision.shared.value
-            change(AppSettings.shared)
-            let moved = PresentationRevision.shared.value != before
-            restore(AppSettings.shared)
-            return moved
+    func everyInputBumpsTheRevision() async {
+        await withAppSettings(
+            \.messageGroupSpacing, \.showsSeconds, \.alwaysShowsTimestamps, \.usesMessageBubbles, \.hidesMessageTimes
+        ) { settings in
+            @MainActor func bumps(_ change: (AppSettings) -> Void, restore: (AppSettings) -> Void) -> Bool {
+                let before = PresentationRevision.shared.value
+                change(settings)
+                let moved = PresentationRevision.shared.value != before
+                restore(settings)
+                return moved
+            }
+            #expect(bumps({ $0.messageGroupSpacing = 8 }, restore: { $0.messageGroupSpacing = 0 }))
+            #expect(bumps({ $0.showsSeconds = true }, restore: { $0.showsSeconds = false }))
+            #expect(bumps(
+                { $0.alwaysShowsTimestamps = true },
+                restore: { $0.alwaysShowsTimestamps = false }
+            ))
+            #expect(bumps({ $0.usesMessageBubbles = true }, restore: { $0.usesMessageBubbles = false }))
+            #expect(bumps({ $0.hidesMessageTimes = true }, restore: { $0.hidesMessageTimes = false }))
         }
-        #expect(bumps({ $0.messageGroupSpacing = 8 }, restore: { $0.messageGroupSpacing = 0 }))
-        #expect(bumps({ $0.showsSeconds = true }, restore: { $0.showsSeconds = false }))
-        #expect(bumps(
-            { $0.alwaysShowsTimestamps = true },
-            restore: { $0.alwaysShowsTimestamps = false }
-        ))
-        #expect(bumps({ $0.usesMessageBubbles = true }, restore: { $0.usesMessageBubbles = false }))
-        #expect(bumps({ $0.hidesMessageTimes = true }, restore: { $0.hidesMessageTimes = false }))
     }
 
     @Test("The group spacing is clamped rather than trusted")
-    func spacingIsClamped() {
-        let settings = AppSettings.shared
-        settings.messageGroupSpacing = 500
-        #expect(settings.messageGroupSpacing == 24)
-        settings.messageGroupSpacing = -10
-        #expect(settings.messageGroupSpacing == 0)
+    func spacingIsClamped() async {
+        await withAppSettings(\.messageGroupSpacing) { settings in
+            settings.messageGroupSpacing = 500
+            #expect(settings.messageGroupSpacing == 24)
+            settings.messageGroupSpacing = -10
+            #expect(settings.messageGroupSpacing == 0)
+        }
     }
 
     @Test("Density and the slider compose rather than override each other")

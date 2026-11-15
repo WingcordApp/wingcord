@@ -51,31 +51,33 @@ struct MemberActivityTests {
     }
 
     @Test("Three cards until it is unfolded, in the server's order")
-    func collapsedThenExpanded() throws {
-        let entries = (1...5).map { entry("\($0)", author: UInt64(10 + $0), rank: 6 - $0) }
-        let model = model(entries: entries)
-        AppSettings.shared.hidesActivityCards = false
-        defer { AppSettings.shared.hidesActivityCards = false }
-        let block = try #require(model.memberActivityBlock)
-        #expect(block.count == 5)
-        #expect(block.cards.map(\.id) == ["5", "4", "3"])
-        #expect(block.canToggle)
-        model.toggleActivitySection()
-        #expect(model.memberActivityBlock?.cards.count == 5)
+    func collapsedThenExpanded() async throws {
+        try await withAppSettings(\.hidesActivityCards) { settings in
+            let entries = (1...5).map { entry("\($0)", author: UInt64(10 + $0), rank: 6 - $0) }
+            let model = model(entries: entries)
+            settings.hidesActivityCards = false
+            let block = try #require(model.memberActivityBlock)
+            #expect(block.count == 5)
+            #expect(block.cards.map(\.id) == ["5", "4", "3"])
+            #expect(block.canToggle)
+            model.toggleActivitySection()
+            #expect(model.memberActivityBlock?.cards.count == 5)
+        }
     }
 
     @Test("Hidden keeps the heading and folds the cards away")
-    func hidden() throws {
-        let model = model(entries: [entry("1", author: 11, rank: 1)])
-        AppSettings.shared.hidesActivityCards = true
-        defer { AppSettings.shared.hidesActivityCards = false }
-        let block = try #require(model.memberActivityBlock)
-        #expect(block.isHidden)
-        #expect(block.cards.isEmpty)
-        #expect(block.height == MemberActivityGeometry.headerHeight)
-        // The heading brings it back.
-        model.toggleActivitySection()
-        #expect(AppSettings.shared.hidesActivityCards == false)
+    func hidden() async throws {
+        try await withAppSettings(\.hidesActivityCards) { settings in
+            let model = model(entries: [entry("1", author: 11, rank: 1)])
+            settings.hidesActivityCards = true
+            let block = try #require(model.memberActivityBlock)
+            #expect(block.isHidden)
+            #expect(block.cards.isEmpty)
+            #expect(block.height == MemberActivityGeometry.headerHeight)
+            // The heading brings it back.
+            model.toggleActivitySection()
+            #expect(settings.hidesActivityCards == false)
+        }
     }
 
     @Test("A server of ten thousand shows no section, and nobody outside the server is shown")

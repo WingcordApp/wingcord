@@ -80,21 +80,19 @@ struct ForumsInvitesRenderTests {
     }
 
     @Test("With the sidebar away, and a post open beside the board")
-    func sidebarAway() throws {
-        let settings = AppSettings.shared
-        let wasShown = settings.isSidebarShown
-        defer { settings.isSidebarShown = wasShown }
+    func sidebarAway() async throws {
+        try await withAppSettings(\.isSidebarShown) { settings in
+            let (model, forumID) = try demoModel()
+            model.selectChannel(forumID)
+            settings.isSidebarShown = false
+            try write(window(of: model, width: 1_100), named: "forum-no-sidebar")
 
-        let (model, forumID) = try demoModel()
-        model.selectChannel(forumID)
-        settings.isSidebarShown = false
-        try write(window(of: model, width: 1_100), named: "forum-no-sidebar")
-
-        let post = try #require(model.forumPresentation(for: forumID).posts.dropFirst().first)
-        settings.isSidebarShown = true
-        model.selectedThreadID = post.id
-        try write(window(of: model, width: 1_300), named: "forum-with-post")
-        try write(window(of: model, width: 880), named: "forum-with-post-narrow")
+            let post = try #require(model.forumPresentation(for: forumID).posts.dropFirst().first)
+            settings.isSidebarShown = true
+            model.selectedThreadID = post.id
+            try write(window(of: model, width: 1_300), named: "forum-with-post")
+            try write(window(of: model, width: 880), named: "forum-with-post-narrow")
+        }
     }
 
     @Test("A media channel, and a gallery beside a post")

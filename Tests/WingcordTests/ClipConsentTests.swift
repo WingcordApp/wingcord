@@ -32,18 +32,17 @@ struct ClipConsentTests {
         return model
     }
 
-    private func withClipsOn(_ body: () throws -> Void) rethrows {
-        let settings = AppSettings.shared
-        let was = (settings.clipsEnabled, settings.clipLength)
-        settings.clipsEnabled = true
-        settings.clipLength = .oneMinute
-        defer { (settings.clipsEnabled, settings.clipLength) = was }
-        try body()
+    private func withClipsOn(_ body: () throws -> Void) async rethrows {
+        try await withAppSettings(\.clipsEnabled, \.clipLength) { settings in
+            settings.clipsEnabled = true
+            settings.clipLength = .oneMinute
+            try body()
+        }
     }
 
     @Test("Somebody else's voice is kept only when their flags allow it; never anybody's in a stage")
-    func plan() {
-        withClipsOn {
+    func plan() async {
+        await withClipsOn {
             let model = model(in: lounge)
             model.noteVoiceClientFlags([.allowsVoiceRecording], for: sam)
             model.noteVoiceClientFlags([.clipsEnabled], for: kai)
@@ -63,14 +62,13 @@ struct ClipConsentTests {
     }
 
     @Test("Clips off keeps nothing from the call")
-    func clipsOff() {
-        let settings = AppSettings.shared
-        let was = settings.clipsEnabled
-        settings.clipsEnabled = false
-        defer { settings.clipsEnabled = was }
-        let model = model(in: lounge)
-        model.noteVoiceClientFlags([.allowsVoiceRecording], for: sam)
-        #expect(model.clipRecorder.callTap.plan == .nothing)
+    func clipsOff() async {
+        await withAppSettings(\.clipsEnabled) { settings in
+            settings.clipsEnabled = false
+            let model = model(in: lounge)
+            model.noteVoiceClientFlags([.allowsVoiceRecording], for: sam)
+            #expect(model.clipRecorder.callTap.plan == .nothing)
+        }
     }
 
     @Test("Somebody with clips on is said once per channel, and only while the reader allows recording")
@@ -102,16 +100,15 @@ struct ClipConsentTests {
     }
 
     @Test("What Wingcord announces is Discord's computeVoiceFlags")
-    func announced() {
-        let settings = AppSettings.shared
-        let was = settings.clipsEnabled
-        defer { settings.clipsEnabled = was }
-        let model = AppModel()
-        settings.clipsEnabled = false
-        #expect(model.announcedVoiceFlags == [.allowsVoiceRecording])
-        settings.clipsEnabled = true
-        #expect(model.announcedVoiceFlags == [.allowsVoiceRecording, .clipsEnabled])
-        model.syncedPreferences.allowsVoiceRecordingInClips = false
-        #expect(model.announcedVoiceFlags == [.clipsEnabled])
+    func announced() async {
+        await withAppSettings(\.clipsEnabled) { settings in
+            let model = AppModel()
+            settings.clipsEnabled = false
+            #expect(model.announcedVoiceFlags == [.allowsVoiceRecording])
+            settings.clipsEnabled = true
+            #expect(model.announcedVoiceFlags == [.allowsVoiceRecording, .clipsEnabled])
+            model.syncedPreferences.allowsVoiceRecordingInClips = false
+            #expect(model.announcedVoiceFlags == [.clipsEnabled])
+        }
     }
 }
