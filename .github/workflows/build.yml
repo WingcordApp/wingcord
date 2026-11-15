@@ -4,9 +4,13 @@
 # each minute counts ten times.
 #
 # A runner starts with nothing built, so compiling is most of the time. Two jobs
-# run side by side: the app, built once with its tests and then tested from that
-# build, and the three packages, each a package of its own that builds
-# separately anyway.
+# run side by side: the app, built with its tests and then tested from that
+# build, and the three packages, each a package of its own. Each keeps its build
+# in GitHub's cache between runs, saved by every push to `main` and read by
+# pull requests too, so a run compiles only what changed. Every file takes its
+# last commit's time first (scripts/commit-times.py): a fresh checkout would
+# otherwise look entirely new to the compiler. The builds skip the code index,
+# which nothing here reads.
 name: Build
 
 on:
@@ -33,18 +37,35 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The whole history, for each file's last commit time.
+          fetch-depth: 0
       # The newest Xcode 27 on the image: Wingcord is written against Swift 6.4.2.
       - name: Choose Xcode
+        id: xcode
         run: |
           xcode="$(ls -d /Applications/Xcode_27*.app | sort -V | tail -1)"
           sudo xcode-select --switch "$xcode"
           sw_vers
           xcodebuild -version
           swift --version
-      # One compile for both: the tests need the app built for testing, so a
-      # plain build first would compile it twice.
+          echo "build=$(xcodebuild -version | awk '/Build version/ { print $3 }')" >> "$GITHUB_OUTPUT"
+      - name: Give files their commit times
+        run: python3 -I scripts/commit-times.py
+      - name: Restore the build
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: app-${{ steps.xcode.outputs.build }}-${{ hashFiles('Package.resolved') }}-${{ github.sha }}
+          restore-keys: app-${{ steps.xcode.outputs.build }}-${{ hashFiles('Package.resolved') }}-
       - name: Build the app and its tests
-        run: swift build --build-tests --disable-keychain
+        run: swift build --build-tests --disable-index-store --disable-keychain
+      # Before the tests, so a failing test doesn't cost the next run its build.
+      - name: Save the build
+        if: github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: app-${{ steps.xcode.outputs.build }}-${{ hashFiles('Package.resolved') }}-${{ github.sha }}
       # The loopback servers (the game event hub and the local RPC server) answer
       # on the main thread, which the other two thousand tests keep busy for
       # minutes on a runner, so their suites run on their own afterwards, from
@@ -66,14 +87,42 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Choose Xcode
+        id: xcode
         run: |
           xcode="$(ls -d /Applications/Xcode_27*.app | sort -V | tail -1)"
           sudo xcode-select --switch "$xcode"
           swift --version
+          echo "build=$(xcodebuild -version | awk '/Build version/ { print $3 }')" >> "$GITHUB_OUTPUT"
+      - name: Give files their commit times
+        run: python3 -I scripts/commit-times.py
+      - name: Restore the builds
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            Packages/WingcordCore/.build
+            Packages/WingcordNet/.build
+            Packages/WingcordVoice/.build
+          key: packages-${{ steps.xcode.outputs.build }}-${{ hashFiles('Packages/*/Package.resolved') }}-${{ github.sha }}
+          restore-keys: packages-${{ steps.xcode.outputs.build }}-${{ hashFiles('Packages/*/Package.resolved') }}-
+      - name: Build the packages and their tests
+        run: |
+          for package in WingcordCore WingcordNet WingcordVoice; do
+            swift build --build-tests --disable-index-store --disable-keychain --package-path "Packages/$package"
+          done
+      - name: Save the builds
+        if: github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            Packages/WingcordCore/.build
+            Packages/WingcordNet/.build
+            Packages/WingcordVoice/.build
+          key: packages-${{ steps.xcode.outputs.build }}-${{ hashFiles('Packages/*/Package.resolved') }}-${{ github.sha }}
       - name: Test WingcordCore
-        run: swift test --disable-keychain --package-path Packages/WingcordCore
+        run: swift test --skip-build --disable-keychain --package-path Packages/WingcordCore
       - name: Test WingcordNet
-        run: swift test --disable-keychain --package-path Packages/WingcordNet
+        run: swift test --skip-build --disable-keychain --package-path Packages/WingcordNet
       - name: Test WingcordVoice
-        run: swift test --disable-keychain --package-path Packages/WingcordVoice
+        run: swift test --skip-build --disable-keychain --package-path Packages/WingcordVoice
