@@ -12,6 +12,13 @@
 # public through scripts/public-mirror/ instead, once its blockers are cleared.)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Retired by the code's first publish (docs/BUG-REPORTING.md §14): these files
+# travel with the public copy now, and a commit made there on its own would
+# keep the next sync from being a fast-forward.
+if [[ -s "$ROOT/scripts/public-mirror/frozen.sha256" ]]; then
+    echo "Retired: the public copy carries these files now (docs/BUG-REPORTING.md §14)." >&2
+    exit 1
+fi
 WORK="$(mktemp -d)/wingcord"
 FILES=(
     .github/ISSUE_TEMPLATE/bug_report.yml
