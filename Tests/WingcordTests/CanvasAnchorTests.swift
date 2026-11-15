@@ -30,6 +30,12 @@ struct CanvasAnchorTests {
     }
 
     private func mounted(_ messages: [Message]) throws -> (AppModel, TimelineCoordinator, NSWindow, TimelineCanvasView) {
+        // Columns, whatever the store holds. Bubbles are on by default, and a
+        // bubble wears a message's first few reactions on its corner with no
+        // Add Reaction control, so on a Mac whose store is new (every CI run)
+        // these tests ran in bubbles unless a settings test had already turned
+        // them off. Left off afterwards, as the settings tests leave it.
+        AppSettings.shared.usesMessageBubbles = false
         let model = AppModel()
         var box = MessageBox()
         box.messages = messages
