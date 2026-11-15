@@ -136,6 +136,9 @@ struct TimelineSettingsReachTests {
         restore: (AppSettings) -> Void
     ) -> Bool {
         let settings = AppSettings.shared
+        // From the value `restore` leaves, not whatever the store holds: on a Mac
+        // whose default is already the changed value, nothing would move.
+        restore(settings)
         let before = TimelineSettings.current()
         change(settings)
         let after = TimelineSettings.current()

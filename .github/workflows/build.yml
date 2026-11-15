@@ -44,5 +44,11 @@ jobs:
         run: swift test --disable-keychain --package-path Packages/WingcordNet
       - name: Test WingcordVoice
         run: swift test --disable-keychain --package-path Packages/WingcordVoice
+      # A few tests depend on the Mac they run on, so CI leaves them out and they
+      # run locally: the loopback servers' suites (the game event hub and the
+      # local RPC server) time out on a loaded runner, and two profile ink tests
+      # assume the app is in dark mode, which a runner isn't.
       - name: Test the app
-        run: swift test --disable-keychain
+        run: >-
+          swift test --disable-keychain
+          --skip 'GameEventHubTests/|LocalRPCServerTests/|LocalRPCWebSocketServerTests/|ProfileGroundInkTests/(neutralKeepsTheAppsInk|sidebarFollowsTheApp)\(\)'
