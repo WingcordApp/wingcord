@@ -1,0 +1,48 @@
+# Builds Wingcord and runs its four test suites on GitHub's macOS 27 image, for
+# every pull request and every sync of `main` (docs/BUG-REPORTING.md §14). It
+# runs on the public repository only: GitHub's macOS runners cost nothing
+# there, while on a private repository each minute counts ten times.
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'WingcordApp/wingcord'
+    # The one image with macOS 27 and Xcode 27, in public preview
+    # (https://github.com/actions/runner-images/issues/14404).
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The newest Xcode 27 on the image: Wingcord is written against Swift 6.4.2.
+      - name: Choose Xcode
+        run: |
+          xcode="$(ls -d /Applications/Xcode_27*.app | sort -V | tail -1)"
+          sudo xcode-select --switch "$xcode"
+          sw_vers
+          xcodebuild -version
+          swift --version
+      - name: Build
+        run: swift build --disable-keychain
+      - name: Test WingcordCore
+        run: swift test --disable-keychain --package-path Packages/WingcordCore
+      - name: Test WingcordNet
+        run: swift test --disable-keychain --package-path Packages/WingcordNet
+      - name: Test WingcordVoice
+        run: swift test --disable-keychain --package-path Packages/WingcordVoice
+      - name: Test the app
+        run: swift test --disable-keychain

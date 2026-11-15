@@ -42,6 +42,10 @@ The sign-in screen in official builds uses an effect adapted from [MetalForge](h
 
 Report bugs from inside Wingcord if you can: **Help > Report a Bug…**, or type `/bug` in any message box. The report says what Wingcord was doing, without names, messages, addresses or tokens, and **See What's Sent…** shows every file before it leaves your Mac. You get a number like `WC-4F2K` to follow it by. You can also open an issue here on GitHub.
 
+## Contributing
+
+Pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to build and test a change, and how pull requests are merged.
+
 ## License
 
 Wingcord is free software under the GNU General Public License, version 3 or any later version; see [LICENSE](LICENSE). Code and fonts from other projects keep their own licenses, listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
