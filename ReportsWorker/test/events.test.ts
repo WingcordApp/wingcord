@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { forgetGitHubToken } from "../src/github";
 import {
+	ORIGIN,
 	TAGS,
 	bugReport,
 	create,
@@ -10,6 +11,7 @@ import {
 	interact,
 	issueEvent,
 	png,
+	press,
 	resetStorage,
 	row,
 	send,
@@ -28,8 +30,8 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-/** A report published as #12, its post made. */
-async function published(kind: "bug" | "idea" = "bug") {
+/** A report published as #12, its post made — with its screenshot public when `screenshot` says so. */
+async function published(kind: "bug" | "idea" = "bug", screenshot = false) {
 	const created = await create(bugReport({ kind, attachments: kind === "bug" ? ["bundle", "screenshot"] : [] }));
 	if (kind === "bug") {
 		await send(uploadRequest(created.id, "bundle", created.key, zip()));
@@ -41,7 +43,7 @@ async function published(kind: "bug" | "idea" = "bug") {
 			body: "The words.",
 			details: "",
 			area: ["voice"],
-			screenshot: false,
+			screenshot,
 		}),
 	);
 	const issue = await env.DB.prepare("SELECT * FROM issues WHERE number = 12").first<Record<string, any>>();
@@ -51,6 +53,32 @@ async function published(kind: "bug" | "idea" = "bug") {
 
 function onPost(fakes: Fakes, postId: string, from = 0) {
 	return fakes.discord.slice(from).filter((call) => call.path === `/channels/${postId}` || call.path === `/channels/${postId}/messages`);
+}
+
+/** Every call about the post, its first message's edits included. */
+function aboutPost(fakes: Fakes, postId: string, from = 0) {
+	return fakes.discord.slice(from).filter((call) => call.path.startsWith(`/channels/${postId}`));
+}
+
+/** The inbox messages redrawn since `from`, newest last. */
+function inboxEdits(fakes: Fakes, from = 0) {
+	return fakes.discord
+		.slice(from)
+		.filter((call) => call.method === "PATCH" && call.path.startsWith(`/channels/${env.DISCORD_INBOX_CHANNEL_ID}/messages/`));
+}
+
+function buttons(edit: { body: any }): string[] {
+	return edit.body.components.flatMap((row: any) => row.components.map((button: any) => button.label));
+}
+
+async function issueRow(number: number) {
+	return env.DB.prepare("SELECT * FROM issues WHERE number = ?1").bind(number).first<Record<string, any>>();
+}
+
+/** What the tester's app is told about its report. */
+async function testerStatus(report: { id: string; key: string }) {
+	const response = await send(new Request(`${ORIGIN}/v1/reports/${report.id}`, { headers: { Authorization: `Bearer ${report.key}` } }));
+	return response.json<Record<string, any>>();
 }
 
 describe("GitHub's events", () => {
@@ -179,5 +207,149 @@ describe("GitHub's events", () => {
 		// One refused, one taken; the third delivery found nothing to do.
 		expect(said).toHaveLength(2);
 		expect(await env.DB.prepare("SELECT post_state FROM issues WHERE number = 12").first()).toEqual({ post_state: "fixed" });
+	});
+});
+
+describe("An issue deleted or transferred on GitHub", () => {
+	const deleted = () => githubEvent("issues", issueEvent("deleted", 12));
+
+	it("closes its post without the dead button, hands its reports back to the inbox as open, and is offered no more", async () => {
+		const fakes = fakeServices();
+		const { report, postId } = await published("bug", true);
+		// A second report counted into it, words only.
+		const second = await create(bugReport({ attachments: [], summary: "Quiet again after sleep." }));
+		await interact(submit(`same:${second.id}`, { issue: ["12"], number: "" }));
+		expect(await row(second.id)).toMatchObject({ status: "published", issue_number: 12 });
+		expect(await env.BUCKET.head(`published/${report.id}.png`)).not.toBeNull();
+
+		const from = fakes.discord.length;
+		expect((await send(await deleted())).status).toBe(204);
+
+		const calls = aboutPost(fakes, postId, from);
+		expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+			`PATCH /channels/${postId}`,
+			`PATCH /channels/${postId}/messages/${postId}`,
+			`POST /channels/${postId}/messages`,
+			`PATCH /channels/${postId}`,
+		]);
+		expect(calls[0]!.body).toEqual({ archived: false, applied_tags: [TAGS.bug] });
+		// Only the button goes: no embeds or attachments are sent, so the card and its screenshot stay.
+		expect(calls[1]!.body).toEqual({ components: [], allowed_mentions: { parse: [] } });
+		expect(calls[2]!.body.content).toBe("**Removed from GitHub** — #12 was deleted, so this post is closed.");
+		expect(calls[3]!.body).toEqual({ locked: true, archived: true });
+
+		// Forgotten here; both reports open again, their inbox messages offering Publish… and Same as… once more.
+		expect(await issueRow(12)).toBeNull();
+		expect(await row(report.id)).toMatchObject({ status: "open", issue_number: null, closed_at: null, publishing_at: null });
+		expect(await row(second.id)).toMatchObject({ status: "open", issue_number: null });
+		const redrawn = inboxEdits(fakes, from);
+		expect(redrawn).toHaveLength(2);
+		for (const edit of redrawn) {
+			expect(buttons(edit)).toEqual(["Publish…", "Same as…", "Download", "Solve"]);
+			expect(edit.body.embeds[0].fields.map((field: any) => field.name)).not.toContain("Published");
+		}
+		// No issue shows the screenshot now; the tester sees the report as received, with no links.
+		expect(await env.BUCKET.head(`published/${report.id}.png`)).toBeNull();
+		expect(await testerStatus(report)).toMatchObject({ status: "received", links: {} });
+
+		// Same as… no longer offers it: with no open issue, the form asks only for a number.
+		const form = await interact(press(`same:${report.id}`));
+		expect(form.data.components.map((label: any) => label.component.custom_id)).toEqual(["number"]);
+
+		// The same event again, or a stray one later, finds nothing to do.
+		const after = fakes.discord.length;
+		expect((await send(await deleted())).status).toBe(204);
+		expect((await send(await githubEvent("issues", issueEvent("closed", 12)))).status).toBe(204);
+		expect(fakes.discord.length).toBe(after);
+	});
+
+	it("transferred: the post says it moved, and the report can be published again as a new issue", async () => {
+		const fakes = fakeServices();
+		const { report, postId } = await published("idea");
+		const from = fakes.discord.length;
+		const moved = issueEvent("transferred", 12, {
+			changes: { new_issue: { number: 3 }, new_repository: { full_name: "WingcordApp/elsewhere" } },
+		});
+		expect((await send(await githubEvent("issues", moved))).status).toBe(204);
+
+		const said = onPost(fakes, postId, from).find((call) => call.method === "POST")!;
+		expect(said.body.content).toBe("**Moved** — #12 was transferred to another repository on GitHub, so this post is closed.");
+		expect(await row(report.id)).toMatchObject({ status: "open", issue_number: null });
+
+		await interact(
+			submit(`publish:${report.id}`, { title: "Pin a chat to the sidebar", body: "The words.", details: "", area: ["messages"] }),
+		);
+		expect(await row(report.id)).toMatchObject({ status: "published", issue_number: 13 });
+		expect(await issueRow(13)).toMatchObject({ state: "open" });
+	});
+
+	it("closed first: its reports keep their verdict and only lose the link; the post drops the verdict tag", async () => {
+		const fakes = fakeServices();
+		const { report, postId } = await published();
+		await send(await githubEvent("issues", issueEvent("closed", 12, { issue: { number: 12, state_reason: "completed" } })));
+		expect(await row(report.id)).toMatchObject({ status: "fixed" });
+
+		const from = fakes.discord.length;
+		expect((await send(await deleted())).status).toBe(204);
+		// Archived and locked by the close: opened to be told, then closed again.
+		const calls = aboutPost(fakes, postId, from);
+		expect(calls[0]!.body).toEqual({ archived: false, applied_tags: [TAGS.bug] });
+		expect(calls.at(-1)!.body).toEqual({ locked: true, archived: true });
+
+		const closed = await row(report.id);
+		expect(closed).toMatchObject({ status: "fixed", issue_number: null });
+		expect(closed!.closed_at).toBeTypeOf("number");
+		expect(await testerStatus(report)).toMatchObject({ status: "fixed", links: {} });
+		expect(buttons(inboxEdits(fakes, from).at(-1)!)).toEqual([]);
+	});
+
+	it("a post already deleted in Discord doesn't hold it up", async () => {
+		let gone: string | null = null;
+		const fakes = fakeServices({
+			failDiscord: (call) => (gone && call.path.startsWith(`/channels/${gone}`) ? { status: 404, code: 10003 } : null),
+		});
+		const { report, postId } = await published();
+		gone = postId;
+		const from = fakes.discord.length;
+		expect((await send(await deleted())).status).toBe(204);
+		// One try at the post, refused as unknown, and nothing more said in it.
+		expect(aboutPost(fakes, postId, from)).toHaveLength(1);
+		expect(await issueRow(12)).toBeNull();
+		expect(await row(report.id)).toMatchObject({ status: "open", issue_number: null });
+	});
+
+	it("a post whose first message is gone still gets its line and is closed", async () => {
+		let gone: string | null = null;
+		const fakes = fakeServices({
+			failDiscord: (call) => (gone && call.path === `/channels/${gone}/messages/${gone}` ? { status: 404, code: 10008 } : null),
+		});
+		const { postId } = await published();
+		gone = postId;
+		const from = fakes.discord.length;
+		expect((await send(await deleted())).status).toBe(204);
+		expect(aboutPost(fakes, postId, from).at(-1)!.body).toEqual({ locked: true, archived: true });
+		expect(await issueRow(12)).toBeNull();
+	});
+
+	it("a change Discord refused leaves everything for GitHub's next delivery", async () => {
+		let refuse = true;
+		const fakes = fakeServices({
+			failDiscord: (call) =>
+				refuse && call.method === "POST" && call.body?.content?.includes("Removed from GitHub") ? { status: 500, code: 0 } : null,
+		});
+		const { report, postId } = await published();
+
+		expect((await send(await deleted())).status).toBe(500);
+		// Nothing moved: the issue is still here, and so is the report's link to it.
+		expect(await issueRow(12)).toMatchObject({ state: "open" });
+		expect(await row(report.id)).toMatchObject({ status: "published", issue_number: 12 });
+
+		refuse = false;
+		expect((await send(await deleted())).status).toBe(204);
+		expect(await issueRow(12)).toBeNull();
+		expect(await row(report.id)).toMatchObject({ status: "open", issue_number: null });
+		const lines = onPost(fakes, postId).filter((call) => call.method === "POST" && call.body.content.includes("Removed from GitHub"));
+		// One refused, one taken.
+		expect(lines).toHaveLength(2);
 	});
 });

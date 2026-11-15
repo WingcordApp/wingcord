@@ -8,7 +8,7 @@
 // links, mentions or formats; every message also has mentions off.
 
 import { FORUM_TAGS, LIMITS, type IssueState } from "./config";
-import { DiscordBot, SUPPRESS_EMBEDS, type ForumTag, type MessagePayload, type Upload } from "./discord";
+import { DiscordBot, DiscordError, SUPPRESS_EMBEDS, type ForumTag, type MessagePayload, type Upload } from "./discord";
 import { clip, escapeMarkdown, type Embed } from "./inbox";
 import { countSentence, detailsHeading } from "./issue";
 import { sightings, type IssueRow } from "./store";
@@ -193,6 +193,50 @@ export async function showState(env: Env, bot: DiscordBot, issue: IssueRow, issu
 		await bot.editChannel(issue.forum_post_id, { archived: false, applied_tags: tags });
 		await bot.createMessage(issue.forum_post_id, line);
 		await bot.editChannel(issue.forum_post_id, { locked: true, archived: true });
+	}
+}
+
+/** How an issue left the repository, as GitHub's `issues` event names it. */
+export type Removal = "deleted" | "transferred";
+
+/** What the post says when its issue leaves the repository. No link: the old one leads nowhere useful. */
+export function removedLine(issue: Pick<IssueRow, "number">, how: Removal): string {
+	return how === "deleted"
+		? `**Removed from GitHub** — #${issue.number} was deleted, so this post is closed.`
+		: `**Moved** — #${issue.number} was transferred to another repository on GitHub, so this post is closed.`;
+}
+
+/** Discord's codes for a channel (a post is one) and a message that no longer exist. */
+const UNKNOWN_CHANNEL = 10003;
+const UNKNOWN_MESSAGE = 10008;
+
+function isGone(error: unknown, code: number): boolean {
+	return error instanceof DiscordError && error.code === code;
+}
+
+/**
+ * The issue left the repository, so the post stops following it. It keeps
+ * its card but loses the button to the issue and any verdict or Planned tag,
+ * gets one last line saying why, and is locked and archived. A post someone
+ * already deleted counts as done.
+ */
+export async function showRemoved(env: Env, bot: DiscordBot, issue: IssueRow, how: Removal): Promise<void> {
+	const post = issue.forum_post_id;
+	if (!post) return;
+	try {
+		const ids = tagIds(await bot.forumTags(forumFor(env, issue)));
+		// As an open, unplanned issue's tags: what the post is, and nothing about where it stands.
+		const tags = postTags({ ...issue, state: "open", planned: 0 }, ids);
+		await bot.editChannel(post, { archived: false, applied_tags: tags });
+		// Only the button goes: the card, and the screenshot inside it, stay as they are.
+		await bot.editMessage(post, post, { components: [], allowed_mentions: { parse: [] } }).catch((error: unknown) => {
+			if (!isGone(error, UNKNOWN_MESSAGE)) throw error;
+		});
+		await bot.createMessage(post, { content: removedLine(issue, how), allowed_mentions: { parse: [] }, flags: SUPPRESS_EMBEDS });
+		await bot.editChannel(post, { locked: true, archived: true });
+	} catch (error) {
+		if (isGone(error, UNKNOWN_CHANNEL)) return;
+		throw error;
 	}
 }
 

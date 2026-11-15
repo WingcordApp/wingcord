@@ -11,7 +11,7 @@
 import { LIMITS, nowSeconds, type Area, type IssueState, type Status } from "./config";
 import { DiscordBot, DiscordError, EPHEMERAL, inboxConfigured, postUrl, refreshInbox } from "./discord";
 import { objectKey, objectKeys, publishedKey } from "./files";
-import { createPost, redrawPost, renamePost, showPlanned, showState } from "./forum";
+import { createPost, redrawPost, renamePost, showPlanned, showRemoved, showState, type Removal } from "./forum";
 import { GitHub, GitHubError, issueUrl } from "./github";
 import { log, logError } from "./http";
 import { issueBody, issueLabels, issueType, linksSection, replaceSection, seenSection } from "./issue";
@@ -20,6 +20,7 @@ import {
 	claimIssueState,
 	claimPostState,
 	closeReports,
+	forgetIssue,
 	getIssue,
 	getReport,
 	markPublished,
@@ -286,9 +287,37 @@ export async function applyRename(env: Env, number: number, title: string): Prom
 	await renamePost(new DiscordBot(env.DISCORD_BOT_TOKEN), issue);
 }
 
-/** Redraws the inbox messages of the reports counted into an issue — the newest few, within the free plan's calls. */
+/**
+ * The issue was deleted on GitHub, or transferred to another repository, so
+ * nothing here can follow it any more. Its post says so and is closed, then
+ * the issue is forgotten: Same as… stops offering it, a later event for it
+ * finds nothing, and the reports that were waiting on it go back to the
+ * inbox as open. Its public screenshot is deleted too, since no issue shows
+ * it now. The post goes first: if Discord fails, the issue and its reports
+ * stay as they were, and GitHub's next delivery starts the post over.
+ * Returns the reports let go.
+ */
+export async function applyRemoval(env: Env, number: number, how: Removal): Promise<ReportRow[]> {
+	const issue = await getIssue(env.DB, number);
+	if (!issue) return [];
+	if (issue.forum_post_id && inboxConfigured(env)) {
+		await showRemoved(env, new DiscordBot(env.DISCORD_BOT_TOKEN), issue, how);
+	}
+	const freed = await forgetIssue(env.DB, number);
+	if (issue.screenshot) await env.BUCKET.delete(publishedKey(issue.first_report));
+	log("issue.removed", { issue: number, how, reports: freed.length });
+	return freed;
+}
+
+/** Redraws the inbox messages of the reports counted into an issue. */
 export async function redrawInbox(env: Env, number: number): Promise<void> {
-	for (const report of await reportsForIssue(env.DB, number, LIMITS.redraws)) await refreshInbox(env, report);
+	await redrawReports(env, await reportsForIssue(env.DB, number, LIMITS.redraws));
+}
+
+/** Redraws these reports' inbox messages, the newest few first, within the free plan's calls. */
+export async function redrawReports(env: Env, reports: ReportRow[]): Promise<void> {
+	const newest = [...reports].sort((a, b) => b.created_at - a.created_at).slice(0, LIMITS.redraws);
+	for (const report of newest) await refreshInbox(env, report);
 }
 
 // MARK: Telling Alex

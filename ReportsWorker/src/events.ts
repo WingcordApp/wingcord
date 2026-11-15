@@ -1,7 +1,9 @@
 // `POST /github`: the App's events (D27). GitHub leads, Discord follows —
 // an issue closed, reopened, labelled `planned` or renamed on GitHub changes
-// its post. Only issues the inbox published are touched; the rest (issues
-// opened on GitHub directly, from its own forms) are none of this service's.
+// its post, and one deleted or transferred away closes its post and hands
+// its reports back to the inbox. Only issues the inbox published are
+// touched; the rest (issues opened on GitHub directly, from its own forms)
+// are none of this service's.
 //
 // A failure answers 500, so GitHub keeps the delivery and Alex can press
 // Redeliver on the App's Advanced page: every change here is safe to repeat.
@@ -10,7 +12,7 @@ import { LABELS, LIMITS } from "./config";
 import { verifiedEvent } from "./github";
 import { logError, noContent, problem } from "./http";
 import { clip } from "./inbox";
-import { applyIssueState, applyPlanned, applyRename, redrawInbox } from "./publish";
+import { applyIssueState, applyPlanned, applyRemoval, applyRename, redrawInbox, redrawReports } from "./publish";
 import { getIssue } from "./store";
 import { cleanText } from "./validate";
 
@@ -61,6 +63,13 @@ export async function handleGitHubEvent(request: Request, env: Env, ctx: Executi
 				if (!title) return noContent();
 				await applyRename(env, number!, title);
 				break;
+			}
+			case "deleted":
+			case "transferred": {
+				// The issue is forgotten, so its reports are redrawn from the list it hands back.
+				const freed = await applyRemoval(env, number!, event.action);
+				ctx.waitUntil(redrawReports(env, freed));
+				return noContent();
 			}
 			default:
 				return noContent();

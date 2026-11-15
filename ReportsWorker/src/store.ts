@@ -642,6 +642,31 @@ export async function renameIssue(db: D1Database, number: number, title: string,
 		.first<IssueRow>();
 }
 
+/**
+ * An issue gone from GitHub, deleted or moved to another repository: its
+ * reports let go of it and its row is deleted, in one batch. Reports still
+ * waiting on it are open again, so the inbox offers Publish… and Same as…
+ * for them once more. Closed ones keep their verdict and only lose the link.
+ * Returns the reports it let go.
+ */
+export async function forgetIssue(db: D1Database, number: number): Promise<ReportRow[]> {
+	// SQLite evaluates every SET expression against the row as it was, so each CASE reads the old status.
+	const [freed] = await db.batch<ReportRow>([
+		db
+			.prepare(
+				`UPDATE reports SET issue_number = NULL, publishing_at = NULL,
+					status = CASE WHEN status = 'published' THEN 'open' ELSE status END,
+					closed_at = CASE WHEN status = 'published' THEN NULL ELSE closed_at END,
+					closed_by = CASE WHEN status = 'published' THEN NULL ELSE closed_by END
+				WHERE issue_number = ?1
+				RETURNING *`,
+			)
+			.bind(number),
+		db.prepare("DELETE FROM issues WHERE number = ?1").bind(number),
+	]);
+	return freed?.results ?? [];
+}
+
 /** The newest reports counted into an issue, for redrawing their inbox messages. */
 export async function reportsForIssue(db: D1Database, number: number, limit: number): Promise<ReportRow[]> {
 	const rows = await db
