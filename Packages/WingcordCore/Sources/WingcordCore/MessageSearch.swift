@@ -191,8 +191,8 @@ public enum MessageSearchDate: Hashable, Sendable {
     /// The window this clause opens, as local days.
     ///
     /// `during` is `[start of day, start of the next day)` — which is exactly
-    /// the captured pair: `min_id` at 2026-09-06 00:00 local and `max_id` at
-    /// 2026-09-07 00:00 local, one day apart.
+    /// the captured pair: `min_id` at 2026-09-07 00:00 local and `max_id` at
+    /// 2026-09-08 00:00 local (UTC+3 that day), one day apart.
     var lowerBound: Date? {
         switch self {
         case .before: nil

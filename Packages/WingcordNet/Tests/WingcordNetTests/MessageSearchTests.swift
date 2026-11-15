@@ -103,30 +103,42 @@ struct MessageSearchTests {
     }
 
     /// The last captured query, whole: a date range, all three author types and
-    /// pinned, with no text.
+    /// pinned, with no text. The sheet's days are local, so the range is the
+    /// captured two days at midnight in this Mac's own zone; the captured ids
+    /// themselves are checked below, in the zone they were made in.
     @Test("The filter sheet's full query is the captured one")
     func fullFilterQuery() {
         var value = query()
-        value.dates = [
-            .before(MessageID(rawValue: 1_546_626_111_897_600_000).timestamp),
-            .after(MessageID(rawValue: 1_546_263_724_032_000_000).timestamp),
-        ]
+        value.dates = [.before(localMidnight(2026, 9, 8)), .after(localMidnight(2026, 9, 7))]
         value.authorKinds = [.user, .bot, .webhook]
         value.isPinned = true
 
         let rendered = string(value)
-        #expect(rendered.contains("max_id=1546626111897600000"))
-        #expect(rendered.contains("min_id=1546263724032000000"))
+        #expect(rendered.contains("max_id=\(MessageID.bound(for: localMidnight(2026, 9, 8)).rawValue)"))
+        #expect(rendered.contains("min_id=\(MessageID.bound(for: localMidnight(2026, 9, 7)).rawValue)"))
         #expect(rendered.contains("pinned=true"))
         #expect(rendered.hasSuffix("sort_by=timestamp&sort_order=desc&offset=0"))
     }
 
+    /// The capture's two ids are midnight on 2026-09-07 and 2026-09-08 in the
+    /// zone it was made in, UTC+3 that day: one day apart. The calendar here is
+    /// its own, so the result doesn't depend on this Mac's zone.
+    @Test("The captured ids are the bounds of two midnights at UTC+3")
+    func capturedIDsAreMidnightsAtUTCPlus3() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 3 * 3600))
+        let start = try #require(calendar.date(from: DateComponents(year: 2026, month: 9, day: 7)))
+        let end = try #require(calendar.date(byAdding: .day, value: 1, to: start))
+        #expect(MessageID.bound(for: start).rawValue == 1_546_263_724_032_000_000)
+        #expect(MessageID.bound(for: end).rawValue == 1_546_626_111_897_600_000)
+    }
+
     /// **The captured pair is also exactly one "During" row**, which is what
-    /// makes the three kinds one window rather than three parameters: the ids
-    /// are 2026-09-06 00:00 and 2026-09-07 00:00 local — a single day.
+    /// makes the three kinds one window rather than three parameters: midnight
+    /// to midnight, a single local day.
     @Test("During a day is the same window as After that day plus Before the next")
     func duringIsOneDayWindow() {
-        let day = MessageID(rawValue: 1_546_263_724_032_000_000).timestamp
+        let day = localMidnight(2026, 9, 7)
 
         var during = query()
         during.dates = [.during(day)]
@@ -137,8 +149,14 @@ struct MessageSearchTests {
             .before(Calendar.current.date(byAdding: .day, value: 1, to: day)!),
         ]
         #expect(string(during) == string(pair))
-        #expect(string(during).contains("min_id=1546263724032000000"))
-        #expect(string(during).contains("max_id=1546626111897600000"))
+        #expect(string(during).contains("min_id=\(MessageID.bound(for: day).rawValue)"))
+        #expect(string(during).contains("max_id=\(MessageID.bound(for: localMidnight(2026, 9, 8)).rawValue)"))
+    }
+
+    /// Midnight at the start of this calendar day in this Mac's own zone, as the
+    /// filter sheet's calendar gives it.
+    private func localMidnight(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        Calendar.current.date(from: DateComponents(year: year, month: month, day: day))!
     }
 
     /// Each kind contributes only its own end.
