@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs scripts/check-push.py on what a push would add, and stops the push if it
+# finds anything. This repository is public, so a push publishes. Turn it on once
+# per clone with: git config core.hooksPath scripts/git-hooks
+exec python3 -I "$(git rev-parse --show-toplevel)/scripts/check-push.py" "$@"
