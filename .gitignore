@@ -11,8 +11,3 @@ docs/research/
 docs/references/
 .claude/
 .playwright-mcp/
-
-# The website's tooling output.
-Website/node_modules/
-Website/dist/
-Website/.astro/
