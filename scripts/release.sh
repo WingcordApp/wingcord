@@ -14,7 +14,8 @@
 # Alex's say only. The archive and its deltas go up first and the appcast last,
 # so no item ever names a file that isn't there yet; the dSYM goes to the private
 # bucket; what's live is compared with what was staged; then the version bump is
-# committed, tagged and pushed, once every commit's author has been checked.
+# committed, tagged and pushed, once every commit's author has been checked, and
+# the release gets its page on GitHub, from the same notes.
 #
 # **discard** drops a made release and puts the version back as it was.
 #
@@ -333,6 +334,14 @@ publish_release() {
         if [ -n "$AUTHORS" ] && [ "$AUTHORS" != "arkanalex <alex@wingcord.app>" ]; then
             die "commits to push carry another author or committer: $AUTHORS"
         fi
+        # The push goes to the public repository through scripts/check-push.py,
+        # which refuses a Claude session link. Refused after the uploads, it would
+        # leave a live release without its commit, so both are checked first.
+        [ "$(git -C "$ROOT" config core.hooksPath || true)" = scripts/git-hooks ] \
+            || die "the push check is off: git config core.hooksPath scripts/git-hooks"
+        case "${WINGCORD_COMMIT_TRAILERS:-}" in
+            *[Cc]laude-[Ss]ession:*) die "WINGCORD_COMMIT_TRAILERS carries a Claude session link, which the push check refuses" ;;
+        esac
     fi
 
     # Archive and deltas first, the appcast last: no item ever names a missing file.
@@ -380,6 +389,24 @@ $WINGCORD_COMMIT_TRAILERS}"
     git -C "$ROOT" tag -a "$TAG" -m "Wingcord $NAME ($BUILD)"
     git -C "$ROOT" push -q origin HEAD "$TAG"
     say "committed, tagged $TAG and pushed"
+
+    # ── The release page on GitHub, from the same notes ──
+    # A beta is a pre-release there. A page that can't be made doesn't undo
+    # anything: the release is live and pushed, so the command is printed instead.
+    local PAGE="$STAGE/github-release.md"
+    {
+        cat "$ROOT/Packaging/ReleaseNotes/$SLUG.md"
+        printf '\nDownload: %s/%s.dmg\nSHA-256: %s\n' "$FEED_HOST" "$ARCHIVE" \
+            "$(shasum -a 256 "$FEED_DIR/$ARCHIVE.dmg" | cut -d' ' -f1)"
+    } > "$PAGE"
+    # shellcheck disable=SC2086
+    if command -v gh > /dev/null && (cd "$ROOT" && gh release create "$TAG" --verify-tag \
+        --title "Wingcord $NAME" --notes-file "$PAGE" ${PRERELEASE:+--prerelease} > /dev/null); then
+        say "release page: $(cd "$ROOT" && gh release view "$TAG" --json url --jq .url)"
+    else
+        echo "release: the page on GitHub wasn't made; from $ROOT run:" >&2
+        echo "   gh release create $TAG --verify-tag --title \"Wingcord $NAME\" --notes-file $PAGE ${PRERELEASE:+--prerelease}" >&2
+    fi
 }
 
 # ── discard ────────────────────────────────────────────────────────────────
