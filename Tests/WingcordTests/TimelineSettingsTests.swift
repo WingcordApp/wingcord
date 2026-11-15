@@ -172,6 +172,11 @@ struct TimelineSettingsReachTests {
             \.messageGroupSpacing, \.showsSeconds, \.alwaysShowsTimestamps, \.usesMessageBubbles, \.hidesMessageTimes
         ) { settings in
             @MainActor func bumps(_ change: (AppSettings) -> Void, restore: (AppSettings) -> Void) -> Bool {
+                // From the value `restore` leaves, as `resolves` does: bubbles are
+                // on by default, so on a new store (every CI run) turning them on
+                // moved nothing, and this passed only after another test had
+                // left them off.
+                restore(settings)
                 let before = PresentationRevision.shared.value
                 change(settings)
                 let moved = PresentationRevision.shared.value != before

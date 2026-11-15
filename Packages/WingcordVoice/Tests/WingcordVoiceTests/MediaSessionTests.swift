@@ -156,7 +156,14 @@ struct VoiceTransportTests {
             }
         }
 
-        try await waitFor(3)
+        // The whole picture, up to the packet with its marker, not its first
+        // three packets: on a slow runner the rest were still on their way when
+        // the count reached three, so the marker and the count after the resend
+        // were checked against half a frame.
+        for _ in 0..<400 {
+            if received.all.count >= 3, let last = received.all.last, (try? opened(last))?.header.marker == true { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
         let frame = try received.all.map(opened)
         #expect(frame.count >= 3, "a picture of three kilobytes is several packets")
         #expect(frame.allSatisfy { $0.header.payloadType == RTP.PayloadType.h264 && $0.header.ssrc == 5_000 })
