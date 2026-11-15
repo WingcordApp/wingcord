@@ -1,7 +1,12 @@
 # Builds Wingcord and runs its four test suites on GitHub's macOS 27 image, for
-# every pull request and every push to `main`. It
-# runs on the public repository only: GitHub's macOS runners cost nothing
-# there, while on a private repository each minute counts ten times.
+# every pull request and every push to `main`. It runs on the public repository
+# only: GitHub's macOS runners cost nothing there, while on a private repository
+# each minute counts ten times.
+#
+# A runner starts with nothing built, so compiling is most of the time. Two jobs
+# run side by side: the app, built once with its tests and then tested from that
+# build, and the three packages, each a package of its own that builds
+# separately anyway.
 name: Build
 
 on:
@@ -18,12 +23,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  app:
     if: github.repository == 'WingcordApp/wingcord'
     # The one image with macOS 27 and Xcode 27, in public preview
     # (https://github.com/actions/runner-images/issues/14404).
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,19 +41,35 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
-      - name: Build
-        run: swift build --disable-keychain
-      - name: Test WingcordCore
-        run: swift test --disable-keychain --package-path Packages/WingcordCore
-      - name: Test WingcordNet
-        run: swift test --disable-keychain --package-path Packages/WingcordNet
-      - name: Test WingcordVoice
-        run: swift test --disable-keychain --package-path Packages/WingcordVoice
+      # One compile for both: the tests need the app built for testing, so a
+      # plain build first would compile it twice.
+      - name: Build the app and its tests
+        run: swift build --build-tests --disable-keychain
       # A few tests depend on the Mac they run on, so CI leaves them out and they
       # run locally: the loopback servers' suites (the game event hub and the
       # local RPC server) time out on a loaded runner, and two profile ink tests
       # assume the app is in dark mode, which a runner isn't.
       - name: Test the app
         run: >-
-          swift test --disable-keychain
+          swift test --skip-build --disable-keychain
           --skip 'GameEventHubTests/|LocalRPCServerTests/|LocalRPCWebSocketServerTests/|ProfileGroundInkTests/(neutralKeepsTheAppsInk|sidebarFollowsTheApp)\(\)'
+
+  packages:
+    if: github.repository == 'WingcordApp/wingcord'
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Choose Xcode
+        run: |
+          xcode="$(ls -d /Applications/Xcode_27*.app | sort -V | tail -1)"
+          sudo xcode-select --switch "$xcode"
+          swift --version
+      - name: Test WingcordCore
+        run: swift test --disable-keychain --package-path Packages/WingcordCore
+      - name: Test WingcordNet
+        run: swift test --disable-keychain --package-path Packages/WingcordNet
+      - name: Test WingcordVoice
+        run: swift test --disable-keychain --package-path Packages/WingcordVoice
