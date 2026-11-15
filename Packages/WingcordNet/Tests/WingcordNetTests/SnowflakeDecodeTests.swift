@@ -39,11 +39,11 @@ struct SnowflakeDecodeTests {
             """,
             as: StageInstanceDTO.self
         )
-        #expect(stage.id?.rawValue == 1_234_567_890_123_456_789)
+        #expect(stage.id?.rawValue == 1_234_567_890_104_688_129)
         #expect(stage.guild_scheduled_event_id?.rawValue == 2_222_222_222_222_222_222)
 
         let domain = try #require(stage.domain)
-        #expect(domain.id == 1_234_567_890_123_456_789)
+        #expect(domain.id == 1_234_567_890_104_688_129)
         #expect(domain.scheduledEventID == 2_222_222_222_222_222_222)
     }
 

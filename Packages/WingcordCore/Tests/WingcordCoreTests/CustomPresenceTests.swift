@@ -90,7 +90,7 @@ struct CustomPresenceTests {
             assets: ["https://i.imgur.com/a.png": "mp:external/abc", "badge": "999"],
             turnedOnAt: turnedOn, now: now
         ))
-        #expect(activity.applicationID == ApplicationID(rawValue: 1_234_567_890_123_456_789))
+        #expect(activity.applicationID == ApplicationID(rawValue: 1_234_567_890_104_688_129))
         #expect(activity.details == "Greenpath")
         #expect(activity.detailsURL == URL(string: "https://example.com/d"))
         #expect(activity.state == "Steel Soul")

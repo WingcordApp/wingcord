@@ -153,11 +153,11 @@ struct LogScrubberTests {
     func snowflakes() {
         let line = scrubber.scrub("voice state -> channel=1234567890104688129 again 1234567890104688129")
         #expect(!line.contains("1234567890104688129"))
-        let hash = scrubber.hash(1_234_567_890_123_456_789)
+        let hash = scrubber.hash(1_234_567_890_104_688_129)
         #expect(line == "voice state -> channel=\(hash) again \(hash)")
         #expect(hash.count == 9 && hash.hasPrefix("#"))
         let other = LogScrubber(salt: Array("another install".utf8))
-        #expect(other.hash(1_234_567_890_123_456_789) != hash)
+        #expect(other.hash(1_234_567_890_104_688_129) != hash)
     }
 
     @Test("A stream key's ids are hashed and its grammar kept")
@@ -214,7 +214,7 @@ struct LogMessageTests {
 
     @Test("An id prints as a hash")
     func ids() {
-        let channel = ChannelID(rawValue: 1_234_567_890_123_456_789)
+        let channel = ChannelID(rawValue: 1_234_567_890_104_688_129)
         let message: LogMessage = "joined \(channel)"
         #expect(!message.text.contains("1234567890104688129"))
         #expect(message.text.hasPrefix("joined #"))

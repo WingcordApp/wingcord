@@ -12,7 +12,7 @@ struct AutoModAlertActionWireTests {
         encoder.outputFormatting = .sortedKeys
         let body = AutoModAlertActionBody(
             action: .deleteUserMessage,
-            alertID: MessageID(rawValue: 1_234_567_890_123_456_789),
+            alertID: MessageID(rawValue: 1_234_567_890_104_688_129),
             channelID: ChannelID(rawValue: 42)
         )
         let json = try #require(String(data: encoder.encode(body), encoding: .utf8))
