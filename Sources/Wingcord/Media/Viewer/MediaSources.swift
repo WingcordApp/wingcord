@@ -31,6 +31,15 @@ final class MediaSources {
     /// box to leave from.
     static let forwardedIndexBase = 10_000
 
+    /// Where an embed's pictures are numbered from: past a forward's, a
+    /// hundred places an embed, so the viewer flies a picture out of its own
+    /// box in the card.
+    static let embedIndexBase = 20_000
+
+    static func embedIndex(embed: Int, image: Int) -> Int {
+        embedIndexBase + embed * 100 + image
+    }
+
     /// A thumbnail on screen.
     struct Thumbnail {
         /// In window coordinates.

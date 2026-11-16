@@ -1197,6 +1197,22 @@ final class SessionController {
         // application out that reads `join_requests=0` here means the list
         // arrives some other way.
         Self.trace("ready: join_requests=\(snapshot.joinRequests.count)")
+        // **The Server Hub's inputs, never captured off a real READY either.**
+        // Discord shows a server's hub from its `guild_space_settings` and its
+        // `2026-09-guild-spaces` assignment, which also needs the reader's
+        // own eligibility (`Experiments.guildVariant`). Counts only: no server
+        // is named.
+        let hub = MurmurHash3.hash32(AppModel.serverHubExperiment)
+        let readerHub = snapshot.experiments.apexReader[hub]
+        Self.trace(
+            "ready: hubs settings=\(snapshot.guilds.count { $0.spaceSettings != nil }) "
+            + "published=\(snapshot.guilds.count { $0.spaceSettings.map { $0.isEnabled == true && $0.isPublished } ?? false }) "
+            + "with_experiments=\(snapshot.guilds.count { $0.apexAssignments != nil }) "
+            + "assigned=\(snapshot.guilds.count { $0.apexAssignments?[hub] != nil }) "
+            + "variant1=\(snapshot.guilds.count { $0.apexAssignments?[hub]?.variantID == 1 }) "
+            + "reader=\(readerHub.map { "v\($0.variantID)\($0.usesAsEligibility ? "+eligible" : "")\($0.isOverride ? "+override" : "")" } ?? "none") "
+            + "reader_apex=\(snapshot.experiments.apexReader.count)"
+        )
         model.entitlements = model.entitlements.updated(
             premiumType: snapshot.premiumType,
             ageVerificationStatus: snapshot.ageVerificationStatus
@@ -1701,6 +1717,9 @@ final class SessionController {
 
         case .guildUpdated(var guild, let carriesTheme):
             if !carriesTheme { guild.theme = model.guilds[guild.id]?.theme }
+            // A GUILD_UPDATE never carries the server's experiments: only
+            // READY and GUILD_CREATE do, and the update must not erase them.
+            if guild.apexAssignments == nil { guild.apexAssignments = model.guilds[guild.id]?.apexAssignments }
             model.guilds[guild.id] = guild
             model.railRevision &+= 1
             model.sidebarRevision &+= 1

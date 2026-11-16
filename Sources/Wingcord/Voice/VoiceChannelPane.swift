@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import SwiftUI
 import WingcordCore
+import WingcordVoice
 
 // MARK: - A server's voice channel
 //
@@ -21,7 +22,7 @@ struct VoiceChannelPane: View {
     /// The camera's session, fetched once the camera is actually on. An
     /// `AVCaptureSession` cannot be observed, so it is pulled rather than
     /// published — and only while there is one.
-    @State private var cameraSession: AVCaptureSession?
+    @State private var cameraSession: CaptureSessionHandle?
 
     var body: some View {
         Group {

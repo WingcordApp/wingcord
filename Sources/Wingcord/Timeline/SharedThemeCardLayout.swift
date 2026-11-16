@@ -184,7 +184,7 @@ nonisolated extension TimelineRowPainter {
         let ink = ThemeInk.current
         let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
         context.addPath(CGPath(roundedRect: frame, cornerWidth: 12, cornerHeight: 12, transform: nil))
-        context.setFillColor(ink.cardFill)
+        context.setFillColor(ink.discordCard)
         context.fillPath()
 
         // The gradient, along its own CSS angle, in its own rounded square.

@@ -484,6 +484,14 @@ nonisolated enum Metrics {
     /// circle beside it.
     static let composerControlHeight: CGFloat = composerFieldMinHeight + Spacing.tight * 2
 
+    /// Where the words start inside the composer's capsule — its corner in —
+    /// and so where a header over them starts too, so "Replying to" and the
+    /// caret share an edge.
+    static let composerTextInset: CGFloat = Spacing.snug + Spacing.hair
+
+    /// A header row inside the composer — a reply's, an edit's, a schedule's.
+    static let composerHeaderHeight: CGFloat = 34
+
     /// The composer stops growing here and starts scrolling internally.
     static let composerMaxLines = 12
 

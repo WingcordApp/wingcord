@@ -1531,8 +1531,8 @@ final class VoiceController {
 
     /// The camera's own session, for the self-view. Never the encoded frames —
     /// a preview layer is a separate hardware path with no round trip.
-    func cameraSession() async -> AVCaptureSession? {
-        await engine?.cameraSession?.session
+    func cameraSession() async -> CaptureSessionHandle? {
+        await engine?.cameraSession
     }
 
     /// Where a person's decoded video should be drawn. Cleared when the tile

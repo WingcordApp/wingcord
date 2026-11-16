@@ -30,7 +30,9 @@ import SwiftUI
 ///
 /// **The cases are in Discord's own order**, which is the order its picker lists
 /// them in: the light presets, the dark ones, then Blurple Twilight, which
-/// Discord keeps in a separate list of its own and appends.
+/// Discord keeps in a separate list of its own and appends — and last, Vice
+/// City, which its picker never lists: Discord offers it from its Grand Theft
+/// Auto VI campaign (`DiscordTheme.ViceCity`).
 nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sendable {
     case mintApple
     case citrusSherbert
@@ -54,6 +56,7 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
     case aurora
     case sepia
     case blurpleTwilight
+    case viceCity
 
     var id: String { rawValue }
 
@@ -82,13 +85,15 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
         case .aurora: "Aurora"
         case .sepia: "Sepia"
         case .blurpleTwilight: "Blurple Twilight"
+        case .viceCity: "Vice City Theme"
         }
     }
 
     /// Discord's id for the preset — its `BackgroundGradientPresetId`, which
     /// the account's settings carry. **Not the case's position**: Discord's
     /// enum numbers Sepia 19 and Strawberry Lemonade 20, and keeps 16 for the
-    /// Easter Egg no picker shows and 23 for a Hexagon with no table entry.
+    /// Easter Egg no picker shows. 23 is `HEXAGON`, the code name of the Grand
+    /// Theft Auto VI campaign, whose table entry arrived with it on 2026-11-16.
     var presetID: Int {
         switch self {
         case .mintApple: 0
@@ -113,6 +118,7 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
         case .strawberryLemonade: 20
         case .aurora: 21
         case .blurpleTwilight: 22
+        case .viceCity: 23
         }
     }
 
@@ -234,6 +240,13 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
             [Stop(color: 0x85_76_64, location: 0.1414), Stop(color: 0x5B_44_21, location: 0.6035)]
         case .blurpleTwilight:
             [Stop(color: 0x2C_3F_E7, location: 0.1118), Stop(color: 0x26_1D_83, location: 0.6454)]
+        case .viceCity:
+            // `BG_GRADIENT_HEXAGON_4` to `_1`: blue, violet, pink, orange,
+            // evenly spaced, as Discord lists them.
+            [
+                Stop(color: 0x46_45_FF, location: 0), Stop(color: 0xAF_01_F3, location: 0.3333),
+                Stop(color: 0xFF_66_98, location: 0.6667), Stop(color: 0xF8_9A_03, location: 1),
+            ]
         }
     }
 
@@ -263,6 +276,7 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
         case .aurora: 239.16
         case .sepia: 69.98
         case .blurpleTwilight: 47.61
+        case .viceCity: 135
         }
     }
 
@@ -298,10 +312,11 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
     /// the chat, thinned as Discord's light custom themes thin it,
     /// `0.85·(0.6 + 0.4·m)`.
     func readingVeil(vividness: Double) -> Double {
-        switch base {
+        let veil = switch base {
         case .dark: Self.veil(from: 0.80, to: 0.48 + 0.32 * 0.3, vividness: vividness)
         case .light: Self.veil(from: 0.85, to: 0.85 * (0.6 + 0.4 * 0.3), vividness: vividness)
         }
+        return veil * veilScale
     }
 
     /// How much black Discord lays over the gradient under a server's channel
@@ -315,10 +330,20 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
     /// A light theme's channel list sits under 70 % of white, thinned as
     /// `0.42 + 0.28·m`.
     func sidebarVeil(vividness: Double) -> Double {
-        switch base {
+        let veil = switch base {
         case .dark: Self.veil(from: 0.75, to: 0.45 + 0.30 * 0.3, vividness: vividness)
         case .light: Self.veil(from: 0.70, to: 0.42 + 0.28 * 0.3, vividness: vividness)
         }
+        return veil * veilScale
+    }
+
+    /// What a preset scales every veil by: Discord's
+    /// `unsupported_overlayOpacityMultiplier`, set as
+    /// `--custom-background-gradient-opacity-multiplier` and multiplied into
+    /// each veil's opacity by its stylesheet. Only Vice City has one, 0.8, so
+    /// more of its gradient shows: 64 % under the chat rather than 80 %.
+    var veilScale: Double {
+        self == .viceCity ? 0.8 : 1
     }
 
     private static func veil(from preset: Double, to mostVivid: Double, vividness: Double) -> Double {

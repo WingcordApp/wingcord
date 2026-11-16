@@ -317,6 +317,7 @@ extension DiscordREST {
     public func launchActivity(
         _ entryPoint: ActivityEntryPoint,
         channelID: ChannelID,
+        guildID: GuildID? = nil,
         sessionID: String,
         nonce: String,
         analyticsSection: String?
@@ -325,7 +326,7 @@ extension DiscordREST {
             method: "POST",
             path: "/interactions",
             route: "interactions",
-            body: LaunchInteraction(entryPoint, channelID: channelID, sessionID: sessionID,
+            body: LaunchInteraction(entryPoint, channelID: channelID, guildID: guildID, sessionID: sessionID,
                                     nonce: nonce, section: analyticsSection)
         )
     }
@@ -827,6 +828,14 @@ struct SearchDTO: Decodable, Sendable {
 struct LaunchInteraction: Encodable {
     var type = 2
     var application_id: String
+    /// **The channel's server, for a launch in one.** Discord's interaction
+    /// executor sends `guild_id` beside `channel_id` for every command run in
+    /// a server (web build 125371: `{type, application_id, guild_id,
+    /// channel_id, session_id, data, nonce, …}`); without it a server channel
+    /// is looked for among the reader's DMs and the launch is refused as
+    /// "Unknown Channel" (the Server Hub's whiteboard, 2026-11-16). Nil in a DM,
+    /// where the synthesised encoding leaves the key out, as Discord does.
+    var guild_id: String?
     var channel_id: String
     var session_id: String
     var data: Data
@@ -875,11 +884,13 @@ struct LaunchInteraction: Encodable {
     init(
         _ entryPoint: ActivityEntryPoint,
         channelID: ChannelID,
+        guildID: GuildID? = nil,
         sessionID: String,
         nonce: String,
         section: String?
     ) {
         application_id = entryPoint.applicationID.description
+        guild_id = guildID?.description
         channel_id = channelID.description
         session_id = sessionID
         self.nonce = nonce

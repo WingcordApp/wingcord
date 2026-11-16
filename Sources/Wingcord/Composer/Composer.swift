@@ -310,47 +310,8 @@ struct Composer: View {
                     .transition(.materialize(from: .bottom))
             }
 
-            // **One banner, never two.** An edit and a reply are mutually
-            // exclusive at the store — starting either cancels the other — so
-            // the bar shows whichever is live and the reader never has to work
-            // out what Return will do.
-            if isEditing {
-                ComposerBanner(
-                    symbolName: "pencil",
-                    text: "Editing message — Escape to cancel",
-                    cancelLabel: "Cancel edit",
-                    cancel: cancelEdit
-                )
-                .transition(.materialize(from: .bottom))
-            } else if let reply {
-                ReplyBar(reply: reply, jump: jumpToReply, togglePing: toggleReplyPing, cancel: cancelReply)
-                    .transition(.materialize(from: .bottom))
-            }
-
-            // **Beside a reply, never beside an edit.** A scheduled reply is a
-            // real thing Discord sends; an edit borrows the bar and is sent
-            // now, so the time is set aside while it is open.
-            if !isEditing, let scheduledAt {
-                scheduleBanner(scheduledAt)
-                    .transition(.materialize(from: .bottom))
-            }
-
-            if canSend, !attachments.isEmpty || attachmentRefusal != nil || compressingFiles > 0 {
-                AttachmentTray(
-                    attachments: attachments,
-                    refusal: attachmentRefusal,
-                    compressingFiles: compressingFiles,
-                    sendCompressed: sendCompressed,
-                    alwaysCompress: alwaysCompress,
-                    remove: removeAttachment,
-                    toggleSpoiler: toggleAttachmentSpoiler,
-                    toggleAnonymise: toggleAttachmentAnonymise,
-                    modify: modifyAttachment,
-                    dismissRefusal: dismissAttachmentRefusal
-                )
-                .transition(.materialize(from: .bottom))
-            }
-
+            // The header and the tray are inside the bar's own glass now — see
+            // `accessories`.
             if canSend {
                 composerRow
             } else {
@@ -403,6 +364,78 @@ struct Composer: View {
         }
     }
 
+    /// What the message is and what it carries, inside the bar's glass over
+    /// the words (Alex, 2026-11-16: "the composer should smoothly and fluidly
+    /// expand to accommodate it"): a reply's or an edit's header, a schedule,
+    /// the staged files. Each arrives condensing out of the bar as the plate
+    /// grows upward to hold it, and goes back the same way.
+    @ViewBuilder private var accessories: some View {
+        // **One header, never two.** An edit and a reply are mutually exclusive
+        // at the store — starting either cancels the other — so the bar shows
+        // whichever is live and the reader never has to work out what Return
+        // will do.
+        if isEditing {
+            ComposerSection {
+                ComposerBanner(
+                    symbolName: "pencil",
+                    text: "Editing message",
+                    cancelLabel: "Cancel edit",
+                    cancelHelp: "Cancel edit (Escape)",
+                    cancel: cancelEdit
+                )
+            }
+            .transition(.materialize(from: .bottom))
+        } else if let reply {
+            ComposerSection {
+                ReplyBar(reply: reply, jump: jumpToReply, togglePing: toggleReplyPing, cancel: cancelReply)
+            }
+            .transition(.materialize(from: .bottom))
+        }
+        // **Beside a reply, never beside an edit.** A scheduled reply is a real
+        // thing Discord sends; an edit borrows the bar and is sent now, so the
+        // time is set aside while it is open.
+        if !isEditing, let scheduledAt {
+            ComposerSection { scheduleBanner(scheduledAt) }
+                .transition(.materialize(from: .bottom))
+        }
+        if showsTray {
+            ComposerSection {
+                AttachmentTray(
+                    attachments: attachments,
+                    refusal: attachmentRefusal,
+                    compressingFiles: compressingFiles,
+                    sendCompressed: sendCompressed,
+                    alwaysCompress: alwaysCompress,
+                    remove: removeAttachment,
+                    toggleSpoiler: toggleAttachmentSpoiler,
+                    toggleAnonymise: toggleAttachmentAnonymise,
+                    modify: modifyAttachment,
+                    dismissRefusal: dismissAttachmentRefusal
+                )
+            }
+            // No blur: the tray holds glass — a tile's hover pill, Send
+            // Compressed — and glass inside a blur's offscreen pass paints
+            // black (`Transition.materialize(from:blurring:)`).
+            .transition(.materialize(from: .bottom, blurring: false))
+        }
+    }
+
+    private var showsTray: Bool {
+        !attachments.isEmpty || attachmentRefusal != nil || compressingFiles > 0
+    }
+
+    /// Everything that changes the plate's height from above the words — what
+    /// `glassMorph` animates the plate on, so it grows and shrinks as one.
+    private var accessoryLayout: [Int] {
+        [
+            isEditing ? 1 : reply == nil ? 0 : 2,
+            scheduledAt == nil ? 0 : 1,
+            attachments.count,
+            attachmentRefusal == nil ? 0 : 1,
+            compressingFiles > 0 ? 1 : 0,
+        ]
+    }
+
     private var composerRow: some View {
         Group {
             if inlineControls {
@@ -441,6 +474,8 @@ struct Composer: View {
                     }
                 } strip: {
                     voiceStrip(.inline)
+                } accessories: {
+                    accessories
                 }
                 .animation(motion.glassMorph, value: shape)
             } else {
@@ -471,9 +506,15 @@ struct Composer: View {
                     }
                 } strip: {
                     voiceStrip(.messages)
+                } accessories: {
+                    accessories
                 }
             }
         }
+        // The plate grows and shrinks with what it holds over the words: the
+        // springier class, because a header or a file arriving is a thing
+        // landing (`AttachmentTray`'s note).
+        .animation(motion.glassMorph, value: accessoryLayout)
         .animation(motion.panel, value: voicePhase)
         .contentShape(.rect)
         // The keys, while a note's going. Not a shortcut on each button, since those
@@ -564,6 +605,15 @@ struct Composer: View {
                     voiceNote.togglePlay()
                 }
             }
+            // **Gone at once when it goes, back once the plate has settled.**
+            // It goes and comes because a header or the files came and went
+            // over the words, and while the plate reshapes, a view on its way
+            // in or out sits at its place in the plate's old or new shape — a
+            // mic hanging over the tray, or riding the shrinking top edge.
+            .transition(.asymmetric(
+                insertion: .opacity.animation(.easeOut(duration: 0.16).delay(Motion.glassMorph.response)),
+                removal: .identity
+            ))
         }
     }
 
@@ -1187,13 +1237,19 @@ private struct ComposerBanner: View {
     var text: String
     var edit: Edit?
     var cancelLabel: String
+    /// The tooltip on ✕, where it has a key to name.
+    var cancelHelp: String?
     var cancel: () -> Void
 
+    /// A header row inside the bar's glass (`ComposerSection`): the field's own
+    /// size, so it reads as part of the message being written, and its words on
+    /// the caret's edge.
     var body: some View {
         HStack(spacing: Spacing.base) {
             Image(symbol: symbolName)
-                .font(.system(.caption))
-                .foregroundStyle(Ink.tertiary)
+                .font(.system(.body))
+                .foregroundStyle(Ink.secondary)
+                .accessibilityHidden(true)
             if let edit {
                 Button(action: edit.action) { line }
                     .buttonStyle(.plain)
@@ -1202,24 +1258,16 @@ private struct ComposerBanner: View {
                 line
             }
             Spacer(minLength: Spacing.tight)
-            Button(action: cancel) {
-                Image(systemName: "xmark")
-                    .font(.system(.caption2, weight: .bold))
-                    .foregroundStyle(Ink.secondary)
-                    .frame(width: 20, height: 20)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(cancelLabel))
+            ComposerHeaderClose(label: cancelLabel, help: cancelHelp, action: cancel)
         }
-        .padding(.horizontal, Spacing.snug)
-        .padding(.vertical, Spacing.base)
-        .glassEffect(.regular, in: .rect(cornerRadius: Radius.chip))
+        .padding(.leading, Metrics.composerTextInset)
+        .padding(.trailing, Spacing.tight)
+        .frame(minHeight: Metrics.composerHeaderHeight)
     }
 
     private var line: some View {
         Text(text)
-            .font(.system(.caption))
+            .font(.system(.body))
             .foregroundStyle(Ink.secondary)
             .lineLimit(1)
     }

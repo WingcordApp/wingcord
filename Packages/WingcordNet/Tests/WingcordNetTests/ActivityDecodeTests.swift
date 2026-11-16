@@ -472,6 +472,36 @@ struct ActivityDecodeTests {
     /// the envelope carries `slash_ui` with **neither** `section_name` nor
     /// `source`. This client sent `app_launcher`, `2`, `false` and `""` for
     /// every launch it had ever made.
+    /// Discord's interaction executor sends the server beside the channel for
+    /// a command run in one, and a launch without it was refused as "Unknown
+    /// Channel" (the Server Hub's whiteboard, 2026-11-16). A DM has no server
+    /// and no key.
+    @Test("A launch in a server names the server; one in a DM leaves the key out")
+    func launchBodyNamesTheServer() throws {
+        let entry = ActivityEntryPoint(
+            id: "1070090180457087068",
+            applicationID: ApplicationID(rawValue: 1_070_087_967_294_631_976),
+            version: "1",
+            name: "launch",
+            contexts: [0],
+            integrationTypes: [0],
+            dmPermission: false,
+            handler: 2
+        )
+        let inServer = LaunchInteraction(
+            entry, channelID: ChannelID(rawValue: 77), guildID: GuildID(rawValue: 7),
+            sessionID: "s", nonce: "n", section: nil
+        )
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(inServer)) as? [String: Any]
+        )
+        #expect(json["guild_id"] as? String == "7")
+        #expect(json["channel_id"] as? String == "77")
+        let inDM = LaunchInteraction(entry, channelID: ChannelID(rawValue: 77), sessionID: "s", nonce: "n", section: nil)
+        let dm = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(inDM)) as? [String: Any])
+        #expect(dm["guild_id"] == nil)
+    }
+
     @Test("A launch from an app's own page echoes the index and drops the section")
     func launchBodyEchoesTheIndex() throws {
         let entry = ActivityEntryPoint(

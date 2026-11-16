@@ -115,4 +115,42 @@ struct TranscriptRedesignRenderTests {
         }
         #expect(height > 0)
     }
+
+    @Test("Tapbacks under a name: beside it, the bubble where it would be without them")
+    func tapbacksUnderCaption() throws {
+        let thumbs = [Reaction(emoji: EmojiRef(name: "👍"), count: 1, isMine: false)]
+        // Each message a run of its own, so each carries the name over it.
+        func bubbleRow(_ id: UInt64, _ content: String, reactions: [Reaction] = []) -> TimelineRow? {
+            let engine = TimelineLayoutEngine(presentationRevision: 0)
+            var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
+            return engine.layout(
+                TimelineLayoutEngine.Input(
+                    items: [.message(TimelineMessage(
+                        message: message(id, content, payload: MessagePayload(reactions: reactions)),
+                        flags: [.head, .tail]
+                    ))],
+                    width: Self.width,
+                    style: style,
+                    mentions: MentionContext(),
+                    channelName: "general",
+                    authors: [
+                        UserID(rawValue: 7): TimelineLayoutEngine.AuthorInfo(
+                            name: "Ada Lovelace", colorValue: nil, avatarURL: nil,
+                            monogram: "A", decorationURL: nil, isBot: false
+                        ),
+                    ],
+                    calendar: .current,
+                    settings: .comfortable,
+                    arrangement: .bubbles(namesAuthors: true)
+                ),
+                cache: &cache
+            ).first { if case .message = $0.kind { true } else { false } }
+        }
+        let laid = try [
+            #require(bubbleRow(1, "you don't really have to, this update has no features")),
+            #require(bubbleRow(2, "you don't really have to, this update has no features", reactions: thumbs)),
+            #require(bubbleRow(3, "ok", reactions: thumbs)),
+        ]
+        #expect(try render(laid, name: "tapbacks-under-caption") > 0)
+    }
 }

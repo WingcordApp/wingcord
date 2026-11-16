@@ -95,6 +95,69 @@ struct EmbedLayoutTests {
         #expect(slot.rect.width == 200)
     }
 
+    /// Image 22, 2026-11-16: long words over a picture narrower than them.
+    /// Discord's `getMaxWidth`: a picture at least 300 wide (or a film) sets
+    /// the card to its own width and the padding round it, and the words wrap
+    /// to that.
+    @Test("A card with a wide picture is as wide as the picture, and its words wrap to it")
+    func cardHugsItsPicture() throws {
+        let slot = layout(Embed(
+            title: "Release",
+            kind: "link",
+            description: notes,
+            image: Embed.Media(url: "https://example.com/wide.png", width: 2400, height: 1500)
+        ), width: 900)
+        let picture = try #require(slot.images.first { $0.viewerMedia != nil })
+        #expect(picture.rect.width == 400)
+        #expect(slot.rect.width == EmbedLayoutEngine.ruleWidth + EmbedLayoutEngine.padding + 400
+            + EmbedLayoutEngine.trailingPadding)
+        #expect(slot.texts.allSatisfy { $0.origin.x + EmbedLayoutEngine.usedWidth(of: $0.block) <= picture.rect.maxX + 0.5 })
+    }
+
+    @Test("A small picture leaves the card as wide as its words")
+    func smallPictureKeepsTheWords() {
+        let slot = layout(Embed(
+            title: "Release",
+            description: notes,
+            image: Embed.Media(url: "https://example.com/small.png", width: 200, height: 200)
+        ), width: 900)
+        #expect(slot.rect.width == EmbedLayoutEngine.ruleWidth + EmbedLayoutEngine.maxWidth)
+    }
+
+    /// "In embeds i cant click the images" (2026-11-16): each picture carries
+    /// what the viewer opens; the marks beside an author or a footer do not.
+    @Test("An embed's pictures open in the viewer, its marks do not")
+    func picturesOpenInTheViewer() {
+        let slot = layout(Embed(
+            title: "Release",
+            description: "Notes",
+            author: Embed.Author(name: "Author", iconURL: "https://example.com/author.png"),
+            footer: Embed.Footer(text: "Footer", iconURL: "https://example.com/footer.png"),
+            image: Embed.Media(url: "https://example.com/picture.png", width: 800, height: 600),
+            thumbnail: Embed.Media(url: "https://example.com/corner.png", width: 80, height: 80)
+        ), width: 900)
+        let opened = Set(slot.images.compactMap(\.viewerMedia).map(\.url))
+        #expect(opened == ["https://example.com/picture.png", "https://example.com/corner.png"])
+    }
+
+    @Test("A picture opens as a file the viewer can show, numbered past a forward's")
+    func embedPictureAsFile() throws {
+        let picture = EmbedPicture(
+            media: Embed.Media(url: "https://example.com/p/photo.JPG", proxyURL: "https://media.example.com/p.jpg",
+                               width: 800, height: 600),
+            sourceIndex: MediaSources.embedIndex(embed: 1, image: 2),
+            posterWidth: 400,
+            posterURL: nil
+        )
+        let file = picture.attachment
+        #expect(file.contentType == "image/jpeg")
+        #expect(file.filename == "photo.JPG")
+        #expect(file.id == picture.attachment.id)
+        #expect(MediaItem(file, posterWidth: 400) != nil)
+        #expect(picture.sourceIndex > MediaSources.forwardedIndexBase)
+        #expect(picture.sourceIndex == MediaSources.embedIndexBase + 102)
+    }
+
     @Test("A card with little in it is as wide as that, and no wider")
     func fitsItsContent() {
         let slot = layout(Embed(title: "Release", description: "Notes"), width: 900)

@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import SwiftUI
 import WingcordCore
+import WingcordVoice
 
 // MARK: - A call inside a conversation
 //
@@ -18,7 +19,7 @@ import WingcordCore
 struct VoiceCallOverlay: View {
     var presentation: VoicePresentation
     var effects: [UserID: String]
-    var cameraSession: AVCaptureSession?
+    var cameraSession: CaptureSessionHandle?
     var selfUserID: UserID?
     var attachVideo: (UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void
     /// Opens or closes somebody's screen share.
@@ -229,7 +230,7 @@ struct VoiceCallOverlayContainer: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
-    @State private var cameraSession: AVCaptureSession?
+    @State private var cameraSession: CaptureSessionHandle?
 
     var body: some View {
         // **Read once per evaluation.** This is a walk of every voice state the

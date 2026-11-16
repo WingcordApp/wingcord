@@ -312,17 +312,28 @@ nonisolated enum TimelineMetrics {
 
     // A button an app attached. Layout and painter read the SAME constants —
     // two halves of one geometry, and drifting them is invisible until it isn't.
-    static let componentHeight: CGFloat = 30
+    //
+    // **Discord's message button** (its legacy `Button`, size SMALL, 2026-11-16):
+    // 32 tall, 12 of padding each side (11 and its 1-point border), 8 between
+    // buttons, 8 round, a 16-point mark 8 from the words.
+    static let componentHeight: CGFloat = 32
     static let componentPadding: CGFloat = 12
-    static let componentGap: CGFloat = 6
+    static let componentGap: CGFloat = 8
     static let componentGlyphSide: CGFloat = 16
-    static let componentGlyphGap: CGFloat = 5
+    static let componentGlyphGap: CGFloat = 6
+    static let componentCorner: CGFloat = 8
+
+    /// A button's label: the reading size, medium — Discord's 14 on its 16,
+    /// at the size its buttons read on screen (Alex, 2026-11-16: "bigger").
+    static func componentFont(_ style: MessageTextStyle) -> NSFont {
+        NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .medium)
+    }
     /// The band at a button's trailing edge for the mark that says what kind of
     /// button it is — a menu's chevron, a link's arrow. **Reserved by the
     /// layout and respected by the painter**: a mark drawn into space the label
     /// was allowed to fill lands on top of the words, which is exactly what a
     /// link button did.
-    static let componentTrailingGlyphRoom: CGFloat = 16
+    static let componentTrailingGlyphRoom: CGFloat = 23
     /// A select menu's width, where the column has it — Discord's `.select`,
     /// `width: 400px`.
     static let selectMenuWidth: CGFloat = 400

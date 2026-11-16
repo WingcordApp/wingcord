@@ -234,6 +234,7 @@ nonisolated enum ComponentsLayoutEngine {
                 style: context.style,
                 into: &placed
             )
+            for index in placed.indices { placed[index].isOnCard = true }
             controls.append(contentsOf: placed)
             return bottom
 

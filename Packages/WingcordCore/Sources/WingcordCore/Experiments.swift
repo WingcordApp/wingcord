@@ -183,6 +183,40 @@ public enum Experiments {
         return bucket
     }
 
+    /// A server's variant in an apex experiment of kind "guild", or nil where
+    /// Discord's answer is the experiment's default.
+    ///
+    /// **Discord's own evaluation** (web build 125371: the apex store's
+    /// `getEvaluationAndAssignment("guild", …)`, module `340344`, and the
+    /// experiment's `getConfig`, `400845`). A server's assignment alone is not
+    /// enough:
+    ///
+    /// 1. the reader must hold an assignment of their own for the same
+    ///    experiment; an override of theirs decides outright;
+    /// 2. otherwise theirs must be marked "use as eligibility", and the
+    ///    server's assignment names the variant;
+    /// 3. an assignment that is itself only an eligibility marker gives the
+    ///    default.
+    ///
+    /// The server's assignments ride on its own guild object in READY and
+    /// GUILD_CREATE (`experiments`); the reader's on READY's `apex_experiments`.
+    public static func guildVariant(
+        _ name: String,
+        reader: [UInt32: ApexAssignment],
+        guild: [UInt32: ApexAssignment]
+    ) -> Int? {
+        let hash = MurmurHash3.hash32(name)
+        guard let own = reader[hash] else { return nil }
+        let decided: ApexAssignment
+        if own.isOverride {
+            decided = own
+        } else {
+            guard own.usesAsEligibility, let server = guild[hash] else { return nil }
+            decided = server
+        }
+        return decided.usesAsEligibility ? nil : decided.variantID
+    }
+
     /// `murmurhash.v3("<key>:<id>") % 1e4`.
     public static func position(_ key: String, guildID: UInt64) -> Int {
         Int(MurmurHash3.hash32("\(key):\(guildID)") % 10_000)
@@ -224,20 +258,27 @@ public enum Experiments {
 /// Discord's apex experiments — the newer system: per unit (the user, the
 /// installation, a guild) a list of `[hashedName, variantId, flags, revision,
 /// trackedVariantId, config]`.
-public struct ApexAssignment: Hashable, Sendable {
+public struct ApexAssignment: Hashable, Sendable, Codable {
     public var hash: UInt32
     public var variantID: Int
     public var isOverride: Bool
     public var revision: Int
+    /// `flags & UseAsEligibility`: on the reader's own assignment for a
+    /// server experiment, it says the reader may see it at all; the server's
+    /// assignment then names the variant (`Experiments.guildVariant`).
+    public var usesAsEligibility: Bool
 
     /// `flags & IsOverride`.
     public static let overrideFlag = 1
+    /// `flags & UseAsEligibility` (Discord's `fd`, module `967648`).
+    public static let eligibilityFlag = 8
 
-    public init(hash: UInt32, variantID: Int, isOverride: Bool, revision: Int) {
+    public init(hash: UInt32, variantID: Int, isOverride: Bool, revision: Int, usesAsEligibility: Bool = false) {
         self.hash = hash
         self.variantID = variantID
         self.isOverride = isOverride
         self.revision = revision
+        self.usesAsEligibility = usesAsEligibility
     }
 }
 
@@ -246,11 +287,20 @@ public struct ExperimentSnapshot: Hashable, Sendable {
     public var user: [UserExperimentAssignment]
     public var guild: [UInt32: GuildExperiment]
     public var apex: [ApexAssignment]
+    /// The reader's own apex assignments (the "user" unit), by hashed name:
+    /// what a server experiment asks first (`Experiments.guildVariant`).
+    public var apexReader: [UInt32: ApexAssignment]
 
-    public init(user: [UserExperimentAssignment] = [], guild: [UInt32: GuildExperiment] = [:], apex: [ApexAssignment] = []) {
+    public init(
+        user: [UserExperimentAssignment] = [],
+        guild: [UInt32: GuildExperiment] = [:],
+        apex: [ApexAssignment] = [],
+        apexReader: [UInt32: ApexAssignment] = [:]
+    ) {
         self.user = user
         self.guild = guild
         self.apex = apex
+        self.apexReader = apexReader
     }
 
     public var isEmpty: Bool { user.isEmpty && guild.isEmpty && apex.isEmpty }

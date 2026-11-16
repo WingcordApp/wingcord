@@ -201,7 +201,10 @@ extension SessionController {
     /// instance is named from the interaction's own id rather than waited for
     /// — Discord dispatches the invitation message a beat later, and a client
     /// that waited for it would open the frame after the app already had.
-    func launchActivity(_ app: ActivityApp, in channelID: ChannelID, section: String?) async {
+    /// - Parameter guildID: the channel's server where the caller knows it
+    ///   better than the channel list does (the Server Hub's own channel);
+    ///   otherwise the channel's own.
+    func launchActivity(_ app: ActivityApp, in channelID: ChannelID, section: String?, guildID: GuildID? = nil) async {
         guard app.isLaunchable else {
             model.reportActionFailure("\(app.name) cannot be launched here.")
             return
@@ -236,6 +239,7 @@ extension SessionController {
                 try await rest.launchActivity(
                     entryPoint,
                     channelID: channelID,
+                    guildID: guildID ?? model.channelIndex[channelID]?.guildID,
                     sessionID: sessionID,
                     nonce: nonce,
                     analyticsSection: section

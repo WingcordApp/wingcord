@@ -871,6 +871,9 @@ nonisolated struct ComponentSlot: Sendable {
     /// What choosing in it names, for a select menu this client can answer.
     /// Nil for everything else — a button's is `customID`.
     var selectID: String? = nil
+    /// Inside a card (a Components V2 container) rather than under one, on a
+    /// bubble: a grey button takes its grey over the card it sits on.
+    var isOnCard = false
 }
 
 /// The line under a message that says only the reader can see it, and the
@@ -1898,6 +1901,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let nameLine = isCaption
             ? ceil(nameFace.ascender - nameFace.descender) + 2
             : TimelineMetrics.headerHeight
+        /// The caption's reach across the row, name to role icon: where the
+        /// bubble under it may let its tapbacks rise beside it.
+        var captionSpan: ClosedRange<CGFloat>?
         if hasAuthorLine {
             // In bubbles the face sits beside a run's LAST bubble, and the
             // name lines up with the words in the bubble under it.
@@ -1967,6 +1973,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     height: TimelineMetrics.headerHeight
                 )
             }
+            if isCaption { captionSpan = authorRect.minX...afterName }
             y += nameLine + (isCaption ? BubbleMetrics.captionGap : TimelineMetrics.headerGap)
         }
         let contentTop = y
@@ -2426,12 +2433,34 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 // ends: never narrower than the bubble is tall.
                 let height = probe.bottom - y
                 let width = min(lane.width, max(probe.width, probe.hasCards ? 0 : height))
+                let x = lane.isTrailing && width < lane.width - 0.5 ? lane.maxX - width : probe.x
+                // **Under its own caption the badges rise beside the name**
+                // rather than pushing the bubble away from it (Alex,
+                // 2026-11-16: the name "raised up" over a bubble with a
+                // tapback). The step down is for a bubble above, which the
+                // badges would land on; a caption only needs them clear of
+                // its words, so the bubble keeps its place unless the name
+                // reaches across to where they sit.
+                var top = y
+                if wantsTapbacks, let captionSpan {
+                    let badges = Self.layoutTapbacks(
+                        message.reactions,
+                        bubble: CGRect(x: x, y: y, width: width, height: height),
+                        side: bubbleSide,
+                        rowWidth: input.width,
+                        style: input.style
+                    )
+                    let reach = (badges.map(\.rect.minX).min() ?? 0)...(badges.map(\.rect.maxX).max() ?? 0)
+                    let clear = reach.lowerBound - BubbleMetrics.tapbackCaptionClearance > captionSpan.upperBound
+                        || reach.upperBound + BubbleMetrics.tapbackCaptionClearance < captionSpan.lowerBound
+                    if clear { top -= TimelineMetrics.tapbackRise }
+                }
                 // Laid out again only to move it: every piece here is the same
                 // at any origin, so the second pass breaks no line differently.
-                var laid = lane.isTrailing && width < lane.width - 0.5
-                    ? layoutContent(x: lane.maxX - width, top: y, bubbled: true)
+                var laid = x != probe.x || top != y
+                    ? layoutContent(x: x, top: top, bubbled: true)
                     : probe
-                let rect = CGRect(x: laid.x, y: y, width: width, height: height)
+                let rect = CGRect(x: laid.x, y: top, width: width, height: height)
                 if let words, !laid.hasCards {
                     laid.textOrigin.x = rect.minX + ((rect.width - words.block.size.width) / 2).rounded()
                 }
@@ -3453,7 +3482,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         into slots: inout [ComponentSlot]
     ) -> CGFloat {
         var y = startY
-        let font = NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold)
+        let font = TimelineMetrics.componentFont(style)
 
         for row in rows {
             var x = contentX

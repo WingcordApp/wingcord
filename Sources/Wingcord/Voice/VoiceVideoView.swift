@@ -3,6 +3,7 @@ import AVKit
 import CoreMedia
 import SwiftUI
 import WingcordCore
+import WingcordVoice
 
 // MARK: - Somebody else's picture
 //
@@ -221,24 +222,36 @@ struct VoiceVideoView: NSViewRepresentable {
 /// reference client's self-view has no latency and every hand-rolled one has
 /// about two hundred milliseconds of it.
 struct CameraPreviewView: NSViewRepresentable {
-    var session: AVCaptureSession?
+    var session: CaptureSessionHandle?
     /// Mirrored, because a self-view that is not is a self-view people cannot
     /// use to aim. Nobody else sees the mirroring.
     var isMirrored = true
 
     func makeNSView(context: Context) -> PreviewHostView {
         let view = PreviewHostView()
-        view.attach(session, mirrored: isMirrored)
+        view.show(session, mirrored: isMirrored)
         return view
     }
 
     func updateNSView(_ view: PreviewHostView, context: Context) {
-        view.attach(session, mirrored: isMirrored)
+        view.show(session, mirrored: isMirrored)
     }
 
+    /// The view is going: its preview leaves the camera on the camera's queue
+    /// now, rather than when the layer is freed on this thread.
+    static func dismantleNSView(_ view: PreviewHostView, coordinator: ()) {
+        view.show(nil, mirrored: true)
+    }
+
+    /// **The preview joins and leaves the camera only through the handle**,
+    /// on the camera's own queue. Bound here on the main thread, it could
+    /// land inside the camera's start or stop, which AVFoundation answers with
+    /// an exception: the capture bar's crash (issue #22), and the same race
+    /// when a call's camera turns off as its tile goes.
     final class PreviewHostView: NSView {
         private var preview: AVCaptureVideoPreviewLayer?
-        private var attached: AVCaptureSession?
+        private var shown: CaptureSessionHandle?
+        private var isMirrored = true
 
         override init(frame: NSRect) {
             super.init(frame: frame)
@@ -249,25 +262,33 @@ struct CameraPreviewView: NSViewRepresentable {
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("not from a nib") }
 
-        func attach(_ session: AVCaptureSession?, mirrored: Bool) {
-            guard session !== attached else {
-                preview?.connection?.isVideoMirrored = mirrored
+        isolated deinit {
+            if let preview, let shown { shown.detach(preview) }
+        }
+
+        func show(_ session: CaptureSessionHandle?, mirrored: Bool) {
+            guard session != shown else {
+                // Only a real change goes to the camera's queue: this runs on
+                // every SwiftUI update.
+                if mirrored != isMirrored, let preview, let shown {
+                    shown.setMirrored(mirrored, on: preview)
+                }
+                isMirrored = mirrored
                 return
             }
-            preview?.removeFromSuperlayer()
-            attached = session
-            guard let session else {
-                preview = nil
-                return
+            if let preview, let shown {
+                preview.removeFromSuperlayer()
+                shown.detach(preview)
             }
-            let layer = AVCaptureVideoPreviewLayer(session: session)
+            shown = session
+            preview = nil
+            isMirrored = mirrored
+            guard let session else { return }
+            let layer = AVCaptureVideoPreviewLayer()
             layer.videoGravity = .resizeAspectFill
             layer.frame = bounds
-            if let connection = layer.connection, connection.isVideoMirroringSupported {
-                connection.automaticallyAdjustsVideoMirroring = false
-                connection.isVideoMirrored = mirrored
-            }
             self.layer?.addSublayer(layer)
+            session.attach(layer, mirrored: mirrored)
             preview = layer
         }
 

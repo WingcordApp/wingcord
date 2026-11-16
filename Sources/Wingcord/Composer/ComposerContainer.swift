@@ -616,8 +616,9 @@ struct ComposerContainer: View {
               let message = box.messages.first(where: { $0.id == replyID }),
               model.users[message.authorID] != nil
         else { return nil }
+        // The header's size: the field's, now it sits inside the bar.
         let font = NSFont.systemFont(
-            ofSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize,
+            ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
             weight: .semibold
         )
         let guildID = model.channelIndex[channelID]?.guildID
@@ -633,7 +634,8 @@ struct ComposerContainer: View {
             face: author.nameFace,
             tracking: author.nameTracking,
             pings: box.replyPings,
-            showsMentionToggle: guildID != nil && message.authorID != model.currentUserID
+            showsMentionToggle: guildID != nil && message.authorID != model.currentUserID,
+            avatarURL: model.avatarURL(forUserID: message.authorID, inGuild: guildID, side: 18)
         )
     }
 

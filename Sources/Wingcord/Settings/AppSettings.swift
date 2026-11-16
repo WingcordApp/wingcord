@@ -315,9 +315,11 @@ final class AppSettings {
     }
 
     /// Servers' Server Hubs (docs/BETA2.md, phase 9): Discord's page of
-    /// widgets, shown where Discord has given a server one. Off until the
-    /// reader turns it on — it is Discord's experiment, not yet everyone's.
-    var showsServerHub = false {
+    /// widgets, shown where Discord has given a server one. **On unless the
+    /// reader turns it off** (Alex, 2026-11-16): Wingcord follows Discord's
+    /// own per-server rollout (`AppModel.isInServerHubExperiment`) and the
+    /// server's settings, so it appears exactly where Discord shows it.
+    var showsServerHub = true {
         didSet {
             guard showsServerHub != oldValue else { return }
             defaults.set(showsServerHub, forKey: Key.showsServerHub)
@@ -1769,7 +1771,7 @@ final class AppSettings {
         nowPlayingFindsCovers = defaults.object(forKey: Key.nowPlayingFindsCovers) as? Bool ?? true
         blockedRPCApplications = defaults.dictionary(forKey: Key.blockedRPCApplications) as? [String: String] ?? [:]
         drawsCustomTypingIndicators = defaults.object(forKey: Key.drawsCustomTypingIndicators) as? Bool ?? true
-        showsServerHub = defaults.object(forKey: Key.showsServerHub) as? Bool ?? false
+        showsServerHub = defaults.object(forKey: Key.showsServerHub) as? Bool ?? true
         voiceInviteCardStyle = defaults.string(forKey: Key.voiceInviteCardStyle)
             .flatMap(VoiceInviteCardStyle.init(rawValue:)) ?? .asDiscordDecides
         customPresences = defaults.data(forKey: Key.customPresences)

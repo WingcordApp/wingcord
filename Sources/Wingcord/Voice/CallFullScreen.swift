@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import SwiftUI
 import WingcordCore
+import WingcordVoice
 
 // MARK: - The call, full screen
 //
@@ -74,7 +75,7 @@ private struct CallFullScreenView: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
-    @State private var cameraSession: AVCaptureSession?
+    @State private var cameraSession: CaptureSessionHandle?
     @State private var isIdle = false
     /// Where the pointer last moved, kept out of observation: a full-screen
     /// call hears every move, and none of them is a reason to draw.

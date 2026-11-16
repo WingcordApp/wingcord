@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import SwiftUI
 import WingcordCore
+import WingcordVoice
 
 // MARK: - The tiles, and how they move
 //
@@ -18,7 +19,7 @@ struct VoiceTileGrid: View {
     var participants: [VoiceParticipant]
     var spotlightUserID: UserID?
     var effects: [UserID: String]
-    var cameraSession: AVCaptureSession?
+    var cameraSession: CaptureSessionHandle?
     var selfUserID: UserID?
     var attachVideo: (UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void
     /// Opens or closes somebody's screen share. Nil where watching cannot work.

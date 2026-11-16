@@ -3,6 +3,7 @@ import AVFoundation
 import CoreMedia
 import SwiftUI
 import WingcordCore
+import WingcordVoice
 
 // MARK: - One person in a call
 //
@@ -26,7 +27,7 @@ struct VoiceTile: View {
     /// The sound they just pressed, drawn as a chip for a beat.
     var effectName: String?
     /// Nil unless this is the reader's own tile with a camera on.
-    var cameraSession: AVCaptureSession?
+    var cameraSession: CaptureSessionHandle?
     var attachVideo: (UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void
     /// Told how big their picture is drawn — `VoiceVideoView.reportPixels`.
     var reportVideoPixels: ((UserID, Int) -> Void)?

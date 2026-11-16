@@ -79,14 +79,14 @@ struct EventLinkCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            // A drawn embed's own fill — `ThemeInk.cardFill`, the raised
-            // surface at 85% — and Discord's `--background-mod-normal` over it
-            // under the pointer.
-            shape.fill(Palette.surfaceRaised.opacity(0.85))
+            // A drawn embed's own fill — Discord's card, the same in every
+            // theme (`DiscordCardInk`) — and Discord's
+            // `--background-mod-normal` over it under the pointer.
+            shape.fill(Color(cgColor: ThemeInk.current.discordCard))
             if isMember && isHovering { shape.fill(Palette.hoverFill) }
         }
         .clipShape(shape)
-        .overlay { shape.strokeBorder(Palette.hoverFill, lineWidth: 1) }
+        .overlay { shape.strokeBorder(Color(cgColor: ThemeInk.current.discordCardBorder), lineWidth: 1) }
         .contentShape(shape)
         .onTapGesture { model.openCardEvent(key, event: event) }
         .onHover { hovering in
@@ -331,7 +331,9 @@ private struct EmbedButtonStyle: ButtonStyle {
             let shape = RoundedRectangle(cornerRadius: EmbedLayoutEngine.corner, style: .continuous)
             configuration.label
                 .font(.system(.body, weight: .medium))
-                .foregroundStyle(isProminent ? AnyShapeStyle(Color.white) : AnyShapeStyle(InkColor.primary))
+                .foregroundStyle(isProminent
+                    ? AnyShapeStyle(Color.white)
+                    : AnyShapeStyle(Color(cgColor: ThemeInk.current.discord.secondaryText)))
                 .lineLimit(1)
                 .padding(.horizontal, Spacing.margin)
                 .frame(minWidth: 100, minHeight: 40)
@@ -349,8 +351,10 @@ private struct EmbedButtonStyle: ButtonStyle {
             if isProminent {
                 return Color(cgColor: isLit ? TimelineRowPainter.joinFillHovered : TimelineRowPainter.joinFill)
             }
-            // The painter's `ThemeInk.lift(0.12)`, and `lift(0.18)` lit.
-            return isLit ? Color.relative(dark: 0.18, light: 0.135) : Color.relative(dark: 0.12, light: 0.09)
+            // Discord's grey on its card, the same in every theme — the
+            // painter's (`DiscordCardInk`).
+            let card = ThemeInk.current.discord
+            return Color(cgColor: isLit ? card.secondaryHover : card.secondaryFill)
         }
     }
 }

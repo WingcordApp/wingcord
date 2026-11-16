@@ -20,11 +20,19 @@ struct ComposerReply: Equatable {
     /// Whether the toggle is offered: in a server, and never on the reader's
     /// own message (Discord's `showMentionToggle: !isPrivate && !isMe`).
     var showsMentionToggle: Bool
+    /// Their face beside the name, as Alex drew the header (2026-11-16,
+    /// screenshot 31) — the person being answered, not only their name.
+    var avatarURL: URL? = nil
 }
 
 /// Discord's reply bar (`tc`, chunk `9494e99e…`): "Replying to" and the name in
 /// their role colour and their style's face, a jump to the message on the
 /// label, the **@ ON / OFF** toggle, and ✕.
+///
+/// **A header inside the composer's glass, not a strip over it** (Alex,
+/// 2026-11-16, screenshot 31): flat, at the field's size, its words on the
+/// caret's edge, the face of the person being answered before their name. The
+/// plate and the hairline under it are `ComposerSection`'s.
 struct ReplyBar: View {
     var reply: ComposerReply
     var jump: () -> Void
@@ -33,52 +41,46 @@ struct ReplyBar: View {
 
     var body: some View {
         HStack(spacing: Spacing.base) {
-            Image(systemName: "arrowshape.turn.up.left.fill")
-                .font(.system(.caption))
-                .foregroundStyle(Ink.tertiary)
-                .accessibilityHidden(true)
             Button(action: jump) { label }
                 .buttonStyle(.plain)
+                .help("Jump to the message")
                 .accessibilityLabel(Text("Replying to \(reply.name)"))
             Spacer(minLength: Spacing.tight)
             if reply.showsMentionToggle {
                 mentionToggle
                 Rectangle()
                     .fill(Ink.quaternary)
-                    .frame(width: 1, height: 14)
+                    .frame(width: 1, height: 16)
                     .accessibilityHidden(true)
             }
-            Button(action: cancel) {
-                Image(systemName: "xmark")
-                    .font(.system(.caption2, weight: .bold))
-                    .foregroundStyle(Ink.secondary)
-                    .frame(width: 20, height: 20)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Cancel reply"))
+            ComposerHeaderClose(label: "Cancel reply", help: "Cancel reply (Escape)", action: cancel)
         }
-        .padding(.horizontal, Spacing.snug)
-        .padding(.vertical, Spacing.base)
-        .glassEffect(.regular, in: .rect(cornerRadius: Radius.chip))
+        .padding(.leading, Metrics.composerTextInset)
+        .padding(.trailing, Spacing.tight)
+        .frame(minHeight: Metrics.composerHeaderHeight)
     }
 
     private var label: some View {
-        HStack(spacing: 0) {
-            Text("Replying to ")
+        HStack(spacing: 6) {
+            Text("Replying to")
                 .foregroundStyle(Ink.secondary)
+            AvatarView(url: reply.avatarURL, monogram: String(reply.name.prefix(1)), side: Self.faceSide)
+                .accessibilityHidden(true)
             name
         }
-        .font(.system(.caption))
+        .font(.system(.body))
         .lineLimit(1)
         .contentShape(.rect)
     }
+
+    /// A face the height of the words beside it, and a little more.
+    private static let faceSide: CGFloat = 18
 
     /// Semibold (`.name { font-weight: semibold }`), in their face where they
     /// chose one.
     private var name: some View {
         Text(reply.name)
-            .font(reply.face.map { Font($0 as CTFont) } ?? .system(.caption, weight: .semibold))
+            .font(reply.face.map { Font($0 as CTFont) } ?? .system(.body, weight: .semibold))
             .tracking(reply.tracking)
             .foregroundStyle(nameInk)
     }
@@ -101,11 +103,11 @@ struct ReplyBar: View {
         Button(action: togglePing) {
             HStack(spacing: 3) {
                 Image(systemName: "at")
-                    .font(.system(.caption, weight: .bold))
+                    .font(.system(.callout, weight: .bold))
                 Text(reply.pings ? "ON" : "OFF")
-                    .font(.system(.caption, weight: .bold))
+                    .font(.system(.callout, weight: .bold))
             }
-            .foregroundStyle(reply.pings ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.tertiary))
+            .foregroundStyle(reply.pings ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary))
             .padding(.horizontal, Spacing.tight)
             .contentShape(.rect)
         }

@@ -4,11 +4,12 @@ import WingcordCore
 
 nonisolated extension TimelineRowPainter {
 
-    /// Discord's affirmative green (`GREEN_430`) and its pressed shade — the
-    /// invite card's Join, and the event card's (`EmbedButtonStyle`).
-    static let joinFill = CGColor(srgbRed: 0x24 / 255, green: 0x80 / 255, blue: 0x45 / 255, alpha: 1)
+    /// Discord's green and its hover (`--control-connected-background-*`,
+    /// 2026-11-16) — the invite card's Join, and the event card's
+    /// (`EmbedButtonStyle`) — the same in every theme, `DiscordCardInk`'s rule.
+    static let joinFill = CGColor(srgbRed: 0x00 / 255, green: 0x85 / 255, blue: 0x45 / 255, alpha: 1)
     static let joinFillHovered = CGColor(
-        srgbRed: 0x1A / 255, green: 0x63 / 255, blue: 0x34 / 255, alpha: 1
+        srgbRed: 0x00 / 255, green: 0x6B / 255, blue: 0x38 / 255, alpha: 1
     )
     /// `--text-status-online` and `--text-status-offline`.
     private static let onlineDot = CGColor(srgbRed: 0x23 / 255, green: 0xA5 / 255, blue: 0x59 / 255, alpha: 1)
@@ -44,7 +45,7 @@ nonisolated extension TimelineRowPainter {
         }
         let outline = CGPath(roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil)
         context.addPath(outline)
-        context.setFillColor(ink.cardFill)
+        context.setFillColor(ink.discordCard)
         context.fillPath()
 
         switch slot.body {
@@ -105,7 +106,7 @@ nonisolated extension TimelineRowPainter {
                 cornerHeight: InviteCardLayoutEngine.buttonCorner,
                 transform: nil
             ))
-            context.setFillColor(ink.lift(hovered == hide.origin ? 0.18 : 0.12))
+            context.setFillColor(hovered == hide.origin ? ink.discord.secondaryHover : ink.discord.secondaryFill)
             context.fillPath()
             drawTextFrame(label, at: shifted(labelOrigin, offset), context: context, images: images, scale: scale)
         }
@@ -123,7 +124,7 @@ nonisolated extension TimelineRowPainter {
         context.setFillColor(
             face.isProminent
                 ? (isHovered ? joinFillHovered : joinFill)
-                : ink.lift(isHovered ? 0.18 : 0.12)
+                : (isHovered ? ink.discord.secondaryHover : ink.discord.secondaryFill)
         )
         context.fillPath()
         // A disabled face is drawn at half, which is what Discord's disabled
@@ -168,7 +169,7 @@ nonisolated extension TimelineRowPainter {
         for face in voice.faces.reversed() {
             let rect = face.rect.offsetBy(dx: offset.x, dy: offset.y)
             context.addEllipse(in: rect.insetBy(dx: -2, dy: -2))
-            context.setFillColor(ink.cardFill)
+            context.setFillColor(ink.discordCard)
             context.fillPath()
             if let url = face.avatarURL,
                let image = images.cached(InviteCardSlot.imageKey(url, in: face.rect, scale: scale)) {
@@ -179,7 +180,7 @@ nonisolated extension TimelineRowPainter {
                 context.restoreGState()
             } else {
                 context.addEllipse(in: rect)
-                context.setFillColor(ink.surfaceRaised)
+                context.setFillColor(ink.discord.secondaryFill)
                 context.fillPath()
                 drawTextFrame(face.monogram, at: shifted(face.monogramOrigin, offset), context: context,
                               images: images, scale: scale)
@@ -188,10 +189,10 @@ nonisolated extension TimelineRowPainter {
         if let overflow = voice.overflow {
             let rect = overflow.rect.offsetBy(dx: offset.x, dy: offset.y)
             context.addEllipse(in: rect.insetBy(dx: -2, dy: -2))
-            context.setFillColor(ink.cardFill)
+            context.setFillColor(ink.discordCard)
             context.fillPath()
             context.addEllipse(in: rect)
-            context.setFillColor(ink.lift(0.14))
+            context.setFillColor(ink.discord.secondaryHover)
             context.fillPath()
             drawTextFrame(overflow.label, at: shifted(overflow.labelOrigin, offset), context: context,
                           images: images, scale: scale)
@@ -237,7 +238,7 @@ nonisolated extension TimelineRowPainter {
                 context.restoreGState()
             } else {
                 context.addEllipse(in: rect)
-                context.setFillColor(ink.surfaceRaised)
+                context.setFillColor(ink.discord.secondaryFill)
                 context.fillPath()
                 drawTextFrame(person.monogram, at: shifted(person.monogramOrigin, offset), context: context,
                               images: images, scale: scale)
@@ -287,7 +288,7 @@ nonisolated extension TimelineRowPainter {
         // out of the banner rather than stuck on it.
         let frame = profile.iconFrame.offsetBy(dx: offset.x, dy: offset.y)
         context.addPath(iconShape(frame))
-        context.setFillColor(ink.cardFill)
+        context.setFillColor(ink.discordCard)
         context.fillPath()
 
         let iconRect = profile.iconRect.offsetBy(dx: offset.x, dy: offset.y)
@@ -300,7 +301,7 @@ nonisolated extension TimelineRowPainter {
         {
             drawFlipped(image, in: iconRect, context: context)
         } else {
-            context.setFillColor(ink.surfaceRaised)
+            context.setFillColor(ink.discord.secondaryFill)
             context.fill(iconRect)
             drawTextFrame(profile.monogram, at: shifted(profile.monogramOrigin, offset), context: context,
                           images: images, scale: scale)
@@ -484,7 +485,7 @@ nonisolated extension TimelineRowPainter {
         context.saveGState()
         context.addPath(iconShape)
         context.clip()
-        context.setFillColor(ink.surfaceRaised)
+        context.setFillColor(ink.discord.secondaryFill)
         context.fill(iconRect)
         if let url = classic.iconURL,
            let image = images.cached(InviteCardSlot.imageKey(url, in: classic.iconRect, scale: scale),

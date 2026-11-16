@@ -18,8 +18,8 @@ struct ThemeSyncTests {
     }
 
     /// Discord's enum, read from its bundle: Sepia before Strawberry
-    /// Lemonade, 16 the Easter Egg no picker shows, 23 a Hexagon with no table
-    /// entry.
+    /// Lemonade, 16 the Easter Egg no picker shows, 23 Hexagon, the Grand
+    /// Theft Auto VI campaign's Vice City.
     @Test("The ids are Discord's, not the picker's order")
     func discordsNumbers() {
         #expect(DiscordTheme.mintApple.presetID == 0)
@@ -29,7 +29,7 @@ struct ThemeSyncTests {
         #expect(DiscordTheme.strawberryLemonade.presetID == 20)
         #expect(DiscordTheme.blurpleTwilight.presetID == 22)
         #expect(DiscordTheme(presetID: 16) == nil)
-        #expect(DiscordTheme(presetID: 23) == nil)
+        #expect(DiscordTheme(presetID: 23) == .viceCity)
     }
 
     @Test("A light preset sits on Discord's Light, a dark one on its Dark")

@@ -159,7 +159,23 @@ fi
 # A missing icon FAILS THE BUILD rather than warning. The failure mode of a
 # warning here is a build that ships without an icon while printing one line
 # nobody reads — which is exactly how a stale icon survives for weeks.
+#
+# **Vice City until Discord's Grand Theft Auto VI campaign ends** (Alex,
+# 2026-11-16: "replace the current Wingcord icon for now until the campaign is
+# over"). A build made before 2027-02-20 18:00 UTC, the moment Discord hides the
+# campaign from everyone (`DiscordTheme.ViceCity.nitroUntil`), takes
+# Packaging/AppIcon-ViceCity.icon; any later build is back on the standard icon
+# with nothing to undo. Only the app icon: the wings everywhere else stay as
+# they are. WINGCORD_ICON=standard or WINGCORD_ICON=vice-city overrides the date.
 ICON_SRC="$ROOT/Packaging/AppIcon.icon"
+VICE_CITY_ENDS=1803146400  # 2027-02-20T18:00:00Z
+case "${WINGCORD_ICON:-}" in
+    vice-city) ICON_SRC="$ROOT/Packaging/AppIcon-ViceCity.icon" ;;
+    standard) ;;
+    "") [ "$(date -u +%s)" -lt "$VICE_CITY_ENDS" ] && ICON_SRC="$ROOT/Packaging/AppIcon-ViceCity.icon" ;;
+    *) echo "error: WINGCORD_ICON is standard or vice-city, not \"$WINGCORD_ICON\"." >&2; exit 1 ;;
+esac
+echo "Icon: $(basename "$ICON_SRC" .icon)"
 if [ ! -d "$ICON_SRC" ]; then
     echo "error: $ICON_SRC is missing — refusing to ship an iconless build." >&2
     exit 1

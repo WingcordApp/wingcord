@@ -147,6 +147,9 @@ nonisolated enum BubbleMetrics {
     /// it and the bubble.
     static let captionScale: CGFloat = 12.0 / 13.0
     static let captionGap: CGFloat = 2
+    /// The least room between a caption's last word or chip and the tapbacks
+    /// that rise beside it; any closer and the bubble steps down instead.
+    static let tapbackCaptionClearance: CGFloat = 8
 
     /// `face` at the caption's size — the same font, custom or not.
     static func captionFace(_ face: NSFont) -> NSFont {

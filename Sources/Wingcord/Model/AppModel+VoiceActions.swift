@@ -289,7 +289,7 @@ extension AppModel {
     }
 
     /// The camera's own session, for the self-view.
-    func cameraSession() async -> AVCaptureSession? {
+    func cameraSession() async -> CaptureSessionHandle? {
         await voice.cameraSession()
     }
 

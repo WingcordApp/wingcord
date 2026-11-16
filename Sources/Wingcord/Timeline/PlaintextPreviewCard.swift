@@ -39,7 +39,8 @@ struct PlaintextPreviewCard: View {
             Rectangle().fill(edge).frame(height: 1)
             footer(state)
         }
-        .background(Color(cgColor: ThemeInk.current.cardFill))
+        // Discord's card, the same in every theme (`DiscordCardInk`).
+        .background(Color(cgColor: ThemeInk.current.discordCard))
         .clipShape(shape)
         .overlay { shape.strokeBorder(edge, lineWidth: 1) }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in

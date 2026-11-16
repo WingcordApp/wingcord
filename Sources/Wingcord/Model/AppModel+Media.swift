@@ -85,6 +85,33 @@ extension AppModel {
         )
     }
 
+    /// An embed's pictures in the viewer: the one clicked, and the card's
+    /// others beside it, as Discord opens an embed's image (Alex, 2026-11-16).
+    /// Each is shown as a file would be, from the embed's own full-size link.
+    func openEmbedPictures(messageID: MessageID, in channelID: ChannelID, pictures: [EmbedPicture], index: Int) {
+        guard let message = knownMessage(messageID, in: channelID) else { return }
+        var items: [MediaItem] = []
+        var start = 0
+        for (position, picture) in pictures.enumerated() {
+            guard let item = MediaItem(
+                picture.attachment, posterWidth: picture.posterWidth, posterURL: picture.posterURL,
+                attachmentIndex: picture.sourceIndex
+            ) else { continue }
+            if position == index { start = items.count }
+            items.append(item)
+        }
+        guard !items.isEmpty else { return }
+        mediaViewer = MediaViewerRequest(
+            items: items,
+            index: start,
+            messageID: messageID,
+            channelID: channelID,
+            origin: .transcript,
+            authorName: authorName(of: message, in: channelID),
+            sentAt: message.sentAt
+        )
+    }
+
     /// Follows a forward's breadcrumb to the original — in a server the reader
     /// is in, a jump; in one they are not, a preview of it first, as Discord's
     /// breadcrumb lurks; in a conversation, the conversation.

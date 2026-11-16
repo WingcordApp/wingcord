@@ -33,10 +33,14 @@ extension SessionController {
         else { return }
         let isLight: Bool
         let preset: Int?
-        if case .discord(let theme) = choice {
+        if case .discord(let theme) = choice,
+           theme != .viceCity || DiscordTheme.ViceCity.isAvailable(to: model.entitlements.premiumTier) {
             isLight = theme.base == .light
             preset = theme.presetID
         } else {
+            // Including Vice City once Discord's campaign is over for this
+            // account: Discord's clients would put the previous theme back,
+            // so the account gets the plain base the window is showing.
             isLight = ThemeStore.shared.colors.appearance == .light
             preset = nil
         }

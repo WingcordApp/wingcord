@@ -1180,7 +1180,7 @@ public actor MediaSession {
     /// `AVCaptureVideoPreviewLayer` is a separate hardware path with no round
     /// trip through an encoder, which is why its self-view has no latency.
     public var cameraSession: CaptureSessionHandle? {
-        camera.map { CaptureSessionHandle($0.session) }
+        camera?.handle
     }
 
     /// Turns the call's camera on or off. Only a call has one.

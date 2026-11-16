@@ -76,4 +76,45 @@ struct ExperimentWireTests {
         #expect(snapshot.guild[1]?.populations.isEmpty == true)
         #expect(snapshot.apex.isEmpty)
     }
+
+    @Test("The reader's own apex unit is kept apart, with the eligibility flag read")
+    func readerUnit() throws {
+        let hub = h("2026-09-guild-spaces")
+        // Flags 8 = use as eligibility; unit 2 is the installation, not the reader.
+        let json = """
+        {"assignments":{
+          "1":{"987654321987654321":{"evaluation_id":"e","assignments":[[\(hub),0,8,2,0,null]]}},
+          "2":{"install":{"evaluation_id":"i","assignments":[[55,1,0,1,1,null]]}}}}
+        """
+        let snapshot = ExperimentWire.snapshot(experiments: nil, guild: nil, apex: try tree(json))
+        #expect(snapshot.apex.count == 2)
+        #expect(snapshot.apexReader.count == 1)
+        let own = try #require(snapshot.apexReader[hub])
+        #expect(own.usesAsEligibility)
+        #expect(!own.isOverride)
+        #expect(snapshot.apexReader[55] == nil)
+    }
+
+    @Test("A server's experiments ride beside its properties, and never fail the guild")
+    func guildExperiments() throws {
+        let hub = h("2026-09-guild-spaces")
+        let ready = """
+        {"id":"77","properties":{"name":"Hub","guild_space_settings":{"enabled":true,"publish_status":1}},
+         "experiments":{"evaluation_id":"x","assignments":[[\(hub),1,0,3,1],[12,2,8,1,2]]}}
+        """
+        let guild = try DiscordREST.decoder.decode(GuildDTO.self, from: Data(ready.utf8)).domain
+        #expect(guild.apexAssignments?[hub]?.variantID == 1)
+        #expect(guild.apexAssignments?[12]?.usesAsEligibility == true)
+        #expect(guild.spaceSettings == GuildSpaceSettings(isEnabled: true, publishStatus: .published))
+
+        // A GUILD_UPDATE carries none: nil, which the session reads as "keep".
+        let update = try DiscordREST.decoder.decode(GuildDTO.self, from: Data(#"{"id":"77","name":"Hub"}"#.utf8))
+        #expect(update.domain.apexAssignments == nil)
+        for odd in [#"null"#, #""weird""#, #"[1,2]"#] {
+            let json = #"{"id":"77","name":"Hub","experiments":"# + odd + "}"
+            let decoded = try DiscordREST.decoder.decode(GuildDTO.self, from: Data(json.utf8))
+            #expect(decoded.domain.apexAssignments == nil)
+            #expect(decoded.domain.name == "Hub")
+        }
+    }
 }

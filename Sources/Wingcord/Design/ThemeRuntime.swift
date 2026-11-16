@@ -101,6 +101,13 @@ nonisolated struct ThemeInk: @unchecked Sendable {
     /// derived at each draw: `CGColor.copy(alpha:)` allocates, and a bot channel
     /// is nothing but rows that carry one of these.
     let cardFill: CGColor
+    /// Discord's own card and the grey buttons on it — an embed's, an
+    /// invite's, an app's — the same in every theme. See `DiscordCardInk`.
+    let discord: DiscordCardInk
+    /// The card's ground. **Never `cardFill`** for a card Discord draws: that
+    /// one is translucent and takes the bubble's or the theme's colour.
+    var discordCard: CGColor { discord.card }
+    var discordCardBorder: CGColor { discord.border }
     let accent: CGColor
     /// A row under the pointer on a drawn canvas, and the rule down the side of
     /// a quote. White at 7% and 15%, or black at 5% and 9% in a light room —
@@ -170,6 +177,7 @@ nonisolated struct ThemeInk: @unchecked Sendable {
         let raised = Self.color(colors.surfaceRaised)
         surfaceRaised = raised
         cardFill = raised.copy(alpha: 0.85) ?? raised
+        discord = DiscordCardInk(DiscordCardInk.base(for: colors))
         // A painter needs a concrete value and cannot draw with
         // `Color.accentColor`, which is a *style* the renderer evaluates against
         // the appearance rather than a colour. A theme that follows the system

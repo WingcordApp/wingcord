@@ -20,6 +20,17 @@ import Testing
 ///
 /// So a failure here is the port disagreeing with Discord, never the port
 /// disagreeing with a second port of itself.
+///
+/// **Vice City's row (2026-11-16) is Chrome's alone**: the same steps painted
+/// into an sRGB canvas and read back (`hsl(from … h 100% l)`, then the
+/// lightness, each through whole bytes as chroma.js rounds, then the three
+/// `color-mix`es), because running Discord's own module was not available
+/// that night. The same page gave Blurple Twilight's row above byte for byte.
+/// One byte is chroma.js's rather than Chrome's: the text tint's blue,
+/// `(2 × 0.95 − 1) × 255`, is 229.5 to Chrome, which rounds it up to `E6`, and
+/// 229.49999999999997 in chroma.js's doubles, which round it to `E5`, as every
+/// row above that took the same step from Discord's own code (Sunset, Forest,
+/// Crimson Moon, Mars, Strawberry Lemonade, Sepia) shows.
 @Suite("Discord themes")
 struct DiscordThemeTests {
 
@@ -57,6 +68,7 @@ struct DiscordThemeTests {
         Expected(theme: .aurora, tint: 0x00_09_1A, canvas: 0x0B_0F_16, surface: 0x10_15_1D, raised: 0x13_18_21, text: 0x99_AB_FF),
         Expected(theme: .sepia, tint: 0x1A_0F_00, canvas: 0x15_11_0D, surface: 0x1A_17_14, raised: 0x1E_1B_17, text: 0xFF_F3_E5),
         Expected(theme: .blurpleTwilight, tint: 0x02_00_1A, canvas: 0x0A_0C_17, surface: 0x0F_11_1E, raised: 0x12_14_22, text: 0x99_A3_FF),
+        Expected(theme: .viceCity, tint: 0x00_00_1A, canvas: 0x07_0C_17, surface: 0x0C_11_1E, raised: 0x10_15_22, text: 0xFF_F5_E5),
     ]
 
     private static func hex(_ value: UInt32) -> String {
@@ -105,8 +117,8 @@ struct DiscordThemeTests {
             // One gradient for both columns: the veils are the only difference.
             #expect(ground.page == theme.gradient)
             #expect(ground.frame == theme.gradient)
-            #expect(ground.pageVeil == (theme.base == .light ? 0.85 : 0.80))
-            #expect(ground.frameVeil == (theme.base == .light ? 0.70 : 0.75))
+            #expect(ground.pageVeil == (theme.base == .light ? 0.85 : 0.80) * theme.veilScale)
+            #expect(ground.frameVeil == (theme.base == .light ? 0.70 : 0.75) * theme.veilScale)
             #expect(ground.appearance == theme.base)
             #expect(theme.colors.appearance == theme.base)
             #expect(ground.paintsFrame)
@@ -125,7 +137,38 @@ struct DiscordThemeTests {
             "Sunset", "Chroma Glow", "Forest", "Crimson Moon", "Midnight Blurple",
             "Mars", "Dusk", "Under the Sea", "Retro Storm", "Neon Nights",
             "Strawberry Lemonade", "Aurora", "Sepia", "Blurple Twilight",
+            // Discord's Grand Theft Auto VI campaign's, which its picker never lists.
+            "Vice City Theme",
         ])
+    }
+
+    @Test("Vice City: Discord's thinner veils, and its campaign's dates")
+    func viceCity() {
+        // `unsupported_overlayOpacityMultiplier: 0.8` on every veil.
+        #expect(abs(DiscordTheme.viceCity.readingVeil(vividness: 0) - 0.64) < 1e-9)
+        #expect(abs(DiscordTheme.viceCity.sidebarVeil(vividness: 0) - 0.60) < 1e-9)
+        #expect(DiscordTheme.sunset.veilScale == 1)
+        #expect(DiscordTheme.viceCity.presetID == 23)
+        #expect(DiscordTheme.viceCity.angle == 135)
+
+        let campaign = DiscordTheme.ViceCity.self
+        let before = campaign.start.addingTimeInterval(-60)
+        let during = campaign.start.addingTimeInterval(86_400)
+        let lateFree = campaign.freeUntil.addingTimeInterval(60)
+        let over = campaign.nitroUntil.addingTimeInterval(60)
+        // Everyone until 13 December; Nitro, and only Nitro, until 20 February.
+        #expect(!campaign.isAvailable(to: .none, at: before))
+        #expect(campaign.isAvailable(to: .none, at: during))
+        #expect(!campaign.isAvailable(to: .none, at: lateFree))
+        #expect(!campaign.isAvailable(to: .basic, at: lateFree))
+        #expect(campaign.isAvailable(to: .nitro, at: lateFree))
+        #expect(!campaign.isAvailable(to: .nitro, at: over))
+        // Offered while it runs; after, only to a reader still wearing it.
+        #expect(DiscordTheme.offered(wearing: nil, at: during).last == .viceCity)
+        #expect(!DiscordTheme.offered(wearing: nil, at: over).contains(.viceCity))
+        #expect(!DiscordTheme.offered(wearing: nil, at: before).contains(.viceCity))
+        #expect(DiscordTheme.offered(wearing: .viceCity, at: over).contains(.viceCity))
+        #expect(DiscordTheme.offered(wearing: nil, at: over).count == DiscordTheme.allCases.count - 1)
     }
 
     @Test("Stops run forward along the line, inside it")

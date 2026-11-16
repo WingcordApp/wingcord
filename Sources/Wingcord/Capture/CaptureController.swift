@@ -75,6 +75,9 @@ final class CaptureController {
     @ObservationIgnored private var recording: ScreenRecording?
     @ObservationIgnored private var cursor: CursorRecorder?
     @ObservationIgnored private var camera: CameraTake?
+    /// Whether `camera` has started. Its bubble waits for that, so it comes in
+    /// with a picture rather than as an empty ring.
+    @ObservationIgnored private var isCameraLive = false
     @ObservationIgnored private var take: (package: URL, located: ScreenRecording.Located, source: TakeManifest.Source, settings: ScreenRecording.Settings, started: Date)?
 
     init() {
@@ -314,35 +317,59 @@ final class CaptureController {
 
     // MARK: The camera
 
+    /// Turns the camera on: it starts on its own queue, and the bubble comes
+    /// in once it runs (`CameraTake`, `CaptureSessionHandle`).
     private func openCamera() {
         guard camera == nil else {
             if isBarShown { showBubble(onDisplayOf: nil) }
             return
         }
         let camera = CameraTake()
-        do {
-            try camera.open(deviceID: AppSettings.shared.cameraDeviceID)
-        } catch {
-            failure = error.localizedDescription
-            return
-        }
         self.camera = camera
-        if isBarShown || isRecording { showBubble(onDisplayOf: nil) }
+        isCameraLive = false
+        Task { [weak self] in
+            do {
+                try await camera.open(deviceID: AppSettings.shared.cameraDeviceID)
+            } catch {
+                guard let self, self.camera === camera else { return }
+                // The switch says what is true: a camera that couldn't start
+                // is off, and the bar says why.
+                usesCamera = false
+                failure = error.localizedDescription
+                return
+            }
+            // Switched off, or the bar put away, while it started.
+            guard let self, self.camera === camera else {
+                camera.close()
+                return
+            }
+            isCameraLive = true
+            if isBarShown || isRecording { showBubble(onDisplayOf: nil) }
+        }
     }
 
     private func closeCamera() {
+        // The preview leaves the camera first, then the camera stops: two
+        // steps in that order on the camera's queue, never the stop on one
+        // thread while the preview leaves on another.
+        bubble?.detachCamera()
         bubble?.orderOut(nil)
         bubble = nil
         camera?.close()
         camera = nil
+        isCameraLive = false
     }
 
     private func showBubble(onDisplayOf source: ScreenRecording.Source?) {
-        guard let camera else { return }
-        let bubble = self.bubble ?? CameraBubblePanel(session: camera.handle)
+        guard let camera, isCameraLive else { return }
+        let bubble = self.bubble ?? CameraBubblePanel(camera: camera.handle)
         self.bubble = bubble
-        if !bubble.isVisible { bubble.placeInCorner(of: Self.screen(for: source)) }
-        bubble.orderFrontRegardless()
+        if bubble.isVisible {
+            bubble.orderFrontRegardless()
+        } else {
+            bubble.placeInCorner(of: Self.screen(for: source))
+            bubble.fadeIn()
+        }
     }
 
     private static func screen(for source: ScreenRecording.Source?) -> NSScreen? {

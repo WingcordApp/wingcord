@@ -116,6 +116,10 @@ nonisolated struct EmbedImage: Sendable {
     var placeholder: String?
     /// A gallery item sent as a spoiler: drawn covered, and never fetched.
     var isSpoiler = false
+    /// The picture as the embed carries it, full size: what a click opens in
+    /// the viewer (Discord's embed pictures are zoomable). Nil for the marks
+    /// beside an author or a footer, and for a film's poster, which plays.
+    var viewerMedia: Embed.Media? = nil
 }
 
 /// A clip an embed's picture stands in for.
@@ -270,6 +274,26 @@ nonisolated enum EmbedLayoutEngine {
                     availableWidth: thumbnailSide, maximumHeight: thumbnailSide
                 )
         }
+        // **Discord's `getMaxWidth`** (its embed component): with a video, or
+        // a picture fitted at 300 points wide or more, the card is the media's
+        // width plus its 32 points of rule and padding, so the words wrap to the
+        // picture rather than run past it (Alex's Images 22/23, 2026-11-16). A
+        // smaller picture leaves the words their own width; a gallery keeps the
+        // whole card.
+        if embed.galleryImages.isEmpty {
+            let room = max(40, cardWidth - ruleWidth - padding - trailingPadding)
+            let isVideo = videoPoster != nil || file != nil
+            let mediaWidth: CGFloat? = if let poster = videoPoster {
+                min(room, 400, imageMaxHeight * (embed.video?.aspectRatio ?? poster.aspectRatio ?? 16.0 / 9.0))
+            } else if let file {
+                Self.mediaBox(for: file.poster, in: room).width
+            } else {
+                picture.map { Self.mediaBox(for: $0, in: room).width }
+            }
+            if let mediaWidth, isVideo || mediaWidth >= 300 {
+                cardWidth = min(cardWidth, ruleWidth + padding + ceil(mediaWidth) + trailingPadding)
+            }
+        }
         let contentX = origin.x + ruleWidth + padding
         let fullContentWidth = max(40, cardWidth - ruleWidth - padding - trailingPadding)
         let contentWidth = thumbnailBox.map { max(40, fullContentWidth - $0.width - thumbnailGap) } ?? fullContentWidth
@@ -392,6 +416,10 @@ nonisolated enum EmbedLayoutEngine {
             ))
         }
 
+        if let thumbnailIndex, let thumbnail = embed.thumbnail {
+            images[thumbnailIndex].viewerMedia = thumbnail
+        }
+
         y = layoutFields(
             embed.fields,
             contentX: contentX,
@@ -474,6 +502,7 @@ nonisolated enum EmbedLayoutEngine {
                     cropsToFill: true,
                     placeholder: media.placeholder
                 ))
+                images[images.count - 1].viewerMedia = media
             }
             y += (frames.map(\.maxY).max() ?? 0) + gap
         } else if let image = picture {
@@ -495,6 +524,7 @@ nonisolated enum EmbedLayoutEngine {
                 isAnimated: moves,
                 placeholder: image.placeholder
             ))
+            images[images.count - 1].viewerMedia = image
             y += box.height + gap
         }
 

@@ -19,7 +19,11 @@ enum ExperimentWire {
                 (guild?.array ?? []).compactMap(self.guild).map { ($0.hash, $0) },
                 uniquingKeysWith: { first, _ in first }
             ),
-            apex: self.apex(apex)
+            apex: self.apex(apex),
+            apexReader: Dictionary(
+                readerApex(apex).map { ($0.hash, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
         )
     }
 
@@ -119,19 +123,37 @@ enum ExperimentWire {
         var out: [ApexAssignment] = []
         for unit in tree?.object?["assignments"]?.object?.values ?? [:].values {
             for entity in unit.object?.values ?? [:].values {
-                for entry in entity.object?["assignments"]?.array ?? [] {
-                    guard let fields = entry.array, fields.count >= 2, let hash = fields[0].uint32 else { continue }
-                    let flags = fields.count > 2 ? fields[2].int ?? 0 : 0
-                    out.append(ApexAssignment(
-                        hash: hash,
-                        variantID: fields[1].int ?? 0,
-                        isOverride: flags & ApexAssignment.overrideFlag != 0,
-                        revision: fields.count > 3 ? fields[3].int ?? 0 : 0
-                    ))
-                }
+                out += assignments(entity)
             }
         }
         return out
+    }
+
+    /// The reader's own unit only: Discord's unit 1, "user" (`967648`'s `ni`),
+    /// keyed by the account's id. There is one account in it.
+    static func readerApex(_ tree: JSONTree?) -> [ApexAssignment] {
+        let unit = tree?.object?["assignments"]?.object?[userUnit]
+        return (unit?.object?.values ?? [:].values).flatMap(assignments)
+    }
+
+    /// Discord's number for the "user" unit, as READY keys it.
+    static let userUnit = "1"
+
+    /// One entity's `{evaluation_id, assignments: [[hash, variant, flags,
+    /// revision, tracked, config]]}`: a unit's entry in READY, or a guild
+    /// object's own `experiments`.
+    static func assignments(_ entity: JSONTree) -> [ApexAssignment] {
+        (entity.object?["assignments"]?.array ?? []).compactMap { entry in
+            guard let fields = entry.array, fields.count >= 2, let hash = fields[0].uint32 else { return nil }
+            let flags = fields.count > 2 ? fields[2].int ?? 0 : 0
+            return ApexAssignment(
+                hash: hash,
+                variantID: fields[1].int ?? 0,
+                isOverride: flags & ApexAssignment.overrideFlag != 0,
+                revision: fields.count > 3 ? fields[3].int ?? 0 : 0,
+                usesAsEligibility: flags & ApexAssignment.eligibilityFlag != 0
+            )
+        }
     }
 }
 

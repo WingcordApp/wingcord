@@ -171,12 +171,20 @@ struct DiscordThemeGallery: View {
 
     @State private var theme = ThemeStore.shared
 
+    /// The Discord theme the reader has on, if any: kept in the gallery even
+    /// once Discord stops offering it.
+    private var wornDiscordTheme: DiscordTheme? {
+        if case .discord(let worn) = theme.choice { worn } else { nil }
+    }
+
     var body: some View {
         ThemeGrid {
-            ForEach(DiscordTheme.allCases) { discord in
+            ForEach(DiscordTheme.offered(wearing: wornDiscordTheme)) { discord in
                 ThemeTile(
                     title: discord.title,
-                    help: nil,
+                    // Discord's themes carry no words of their own, except
+                    // its campaign's, which says it won't last.
+                    help: discord == .viceCity ? DiscordTheme.ViceCity.help : nil,
                     isSelected: ThemeLook.isWorn && theme.choice == .discord(discord),
                     ring: ring
                 ) {

@@ -24,6 +24,12 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// The Server Hub's switch and publishing state — `guild_space_settings`.
     /// Nil where Discord hasn't given the server a hub.
     public var spaceSettings: GuildSpaceSettings?
+    /// The server's own apex experiment assignments, by hashed name: the
+    /// guild object's `experiments` in READY and GUILD_CREATE (Discord's apex
+    /// store reads them from exactly there). Nil where the payload carried
+    /// none, which is not the same as "in none": a GUILD_UPDATE never carries
+    /// them, so the session keeps the last ones.
+    public var apexAssignments: [UInt32: ApexAssignment]?
     /// Feature flags, as Discord's uppercase strings. A `Set` because every read
     /// is a membership test.
     public var features: Set<String>

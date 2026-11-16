@@ -242,7 +242,7 @@ extension AppModel {
             PopularGamesCardModel.Tile(
                 id: game.applicationID,
                 name: serverHubGameName(game.applicationID),
-                coverURL: games[game.applicationID].flatMap { gameArtURL($0, kind: .cover, side: ServerHubMetrics.gameTileWidth) },
+                coverURL: serverHubGameCover(game.applicationID, side: ServerHubMetrics.gameTileWidth),
                 iconURL: serverHubGameIcon(game.applicationID, side: 64),
                 players: game.userIDs.count
             )
@@ -264,13 +264,24 @@ extension AppModel {
         )
     }
 
+    /// A widget's game by its application id, as Discord names it: the
+    /// canonical game's name, else the application's own.
     func serverHubGameName(_ id: ApplicationID) -> String {
-        games[id]?.name ?? activityApp(id)?.name ?? "Unknown game"
+        games[canonicalGameID(for: id)]?.name ?? widgetApplications[id]?.name
+            ?? activityApp(id)?.name ?? "Unknown game"
     }
 
+    /// The application's own icon first, as Discord draws it on a leaderboard
+    /// row (`getIconURL(64)`), then the game's mark.
     func serverHubGameIcon(_ id: ApplicationID, side: CGFloat) -> URL? {
-        if let game = games[id], let url = gameArtURL(game, kind: .mark, side: side) { return url }
+        if let hash = widgetApplications[id]?.iconHash { return CDN.applicationIcon(id: id, hash: hash, side: side) }
+        if let game = games[canonicalGameID(for: id)], let url = gameArtURL(game, kind: .mark, side: side) { return url }
         return applicationIconURL(id, side: side)
+    }
+
+    /// The canonical game's box art, for a Popular Games tile.
+    func serverHubGameCover(_ id: ApplicationID, side: CGFloat) -> URL? {
+        games[canonicalGameID(for: id)].flatMap { gameArtURL($0, kind: .cover, side: side) }
     }
 
     // MARK: Popular Music

@@ -174,7 +174,7 @@ final class VoiceTestRig {
 @Observable
 @MainActor
 final class CameraTestRig {
-    private(set) var session: AVCaptureSession?
+    private(set) var session: CaptureSessionHandle?
     private(set) var isDenied = false
 
     @ObservationIgnored private var capture: CameraCapture?
@@ -188,7 +188,7 @@ final class CameraTestRig {
         let capture = self.capture ?? CameraCapture()
         self.capture = capture
         guard await capture.start(deviceID: deviceID, framerate: 30) else { return }
-        session = capture.session
+        session = capture.handle
     }
 
     func stop() {

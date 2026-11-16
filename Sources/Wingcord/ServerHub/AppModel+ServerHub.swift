@@ -13,6 +13,9 @@ extension AppModel {
     /// Discord's whiteboard app, which the hub's whiteboard widget runs.
     static let whiteboardApplicationID = ApplicationID(rawValue: 1_070_087_967_294_631_976)
 
+    /// The server experiment Discord rolls the hub out with (`256497`).
+    static let serverHubExperiment = "2026-09-guild-spaces"
+
     /// The largest banner or picture Discord's own editor accepts (`0xa00000`).
     static let serverHubImageLimit = 10 * 1024 * 1024
 
@@ -29,12 +32,13 @@ extension AppModel {
     /// Whether a server's channel list offers its Server Hub.
     ///
     /// **Only where Discord has given the server one** (D14): its settings on
-    /// the guild, or the hub's own channel. Wingcord can't read the server's
-    /// half of the experiment, and never turns the feature on for a server —
-    /// it only shows what Discord already decided. Within that, Discord's own
-    /// rule (`GuildSpaceSettings.isVisible`): editors see a draft, everyone sees
-    /// a published hub, nobody sees one switched off. And the Settings ›
-    /// Experiments switch is the reader's: off, nothing here.
+    /// the guild, the hub's own channel, or (for the people who can make one)
+    /// Discord's own experiment saying the server has the feature. Wingcord
+    /// never turns it on for a server; it only shows what Discord already
+    /// decided. Within that, Discord's own rule (`GuildSpaceSettings.isVisible`):
+    /// editors see a draft, everyone sees a published hub, nobody sees one
+    /// switched off. And the Settings › Experiments switch is the reader's:
+    /// off, nothing here.
     func offersServerHub(_ guildID: GuildID) -> Bool {
         guard AppSettings.shared.showsServerHub, let guild = guilds[guildID] else { return false }
         let isEditor = canEditServerHub(guildID)
@@ -43,6 +47,10 @@ extension AppModel {
             // Discord answered that there's none yet: the page is for making one.
             return !serverHub.missing.contains(guildID) || isEditor
         }
+        // No hub yet, in a server Discord has put in the experiment: Discord's
+        // channel list offers its editors the row, to make one (`313627`'s
+        // `c` with no settings at all).
+        if isEditor, isInServerHubExperiment(guild) == true { return true }
         guard hasServerHubChannel(guildID) else { return false }
         return serverHub.spaces[guildID]?.widgets.isEmpty == false
     }
@@ -51,6 +59,23 @@ extension AppModel {
     func mayHaveServerHub(_ guildID: GuildID) -> Bool {
         guard AppSettings.shared.showsServerHub, let guild = guilds[guildID] else { return false }
         return guild.spaceSettings != nil || hasServerHubChannel(guildID)
+            || (canEditServerHub(guildID) && isInServerHubExperiment(guild) == true)
+    }
+
+    /// Whether Discord has given this server the Server Hub: its
+    /// `2026-09-guild-spaces` assignment, evaluated as Discord's client does
+    /// (`Experiments.guildVariant`), variant 1 being "on". Nil where READY
+    /// said nothing either way (no assignments for the reader, or none on the
+    /// server's object), so the answer is unknown rather than no.
+    ///
+    /// **Used only to offer more, never to hide.** The hub's settings already
+    /// say where Discord shows one, and a misread experiment must not take a
+    /// published hub away.
+    func isInServerHubExperiment(_ guild: Guild) -> Bool? {
+        guard let assignments = guild.apexAssignments, !experiments.apexReader.isEmpty else { return nil }
+        return Experiments.guildVariant(
+            Self.serverHubExperiment, reader: experiments.apexReader, guild: assignments
+        ) == 1
     }
 
     func hasServerHubChannel(_ guildID: GuildID) -> Bool {

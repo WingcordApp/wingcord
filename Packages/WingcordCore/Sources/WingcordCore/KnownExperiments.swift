@@ -423,7 +423,7 @@ public enum KnownExperiments {
         .init("2026-09-clips-editor-image-track", kind: .user),
         .init("2026-09-conversation-topic-header", kind: .user),
         .init("2026-09-gsimagic2", kind: .user),
-        .init("2026-09-guild-spaces", kind: .user),
+        .init("2026-09-guild-spaces", kind: .guild, apex: true),
         .init("2026-09-ios-callkit-connected-on-rtc", kind: .user),
         .init("2026-09-linked-game-org-invites-dev", kind: .user),
         .init("2026-09-linux-gpu-decode", kind: .user),

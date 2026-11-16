@@ -68,6 +68,9 @@ struct AttachmentTray: View {
                 .frame(height: AttachmentTile.height + 4)
             }
         }
+        // Inside the composer's plate (`ComposerSection`): the tiles sit as far
+        // in from its edge as the send disc does, clear of the rounded corner.
+        .padding(Spacing.base - 2)
         // `glassMorph`, the springier class: the composer opening into a
         // preview is a thing arriving, and it should land (Alex, 2026-10-26:
         // "smooth seamless animations").

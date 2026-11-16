@@ -23,6 +23,11 @@ nonisolated enum TimelineRowPainter {
 
     struct State: Sendable {
         var isHovered = false
+        /// Whether the row draws its own face. **Not in the transcript's
+        /// bubbles**, where each run's face is a layer that rides the scroll
+        /// (`StickyFaces`) and the row leaves its place empty; every other
+        /// surface that paints a row (pins, search, the inbox) draws it here.
+        var drawsFace = true
         /// Whether this message is one the reader has kept.
         ///
         /// **On the paint state, not in the layout.** §4.5: a row's layout is
@@ -449,22 +454,24 @@ nonisolated enum TimelineRowPainter {
 
         // Avatar, or the monogram plate behind it.
         if let avatarRect = row.avatarRect {
-            let frame = avatarRect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
-            drawAvatar(
-                url: row.avatarURL,
-                monogram: row.avatarMonogram,
-                in: frame,
-                context: context,
-                style: style,
-                images: images,
-                scale: scale,
-                // A bubble's face is smaller than the size the prefetch asked
-                // for, and the cache is keyed on the asking.
-                peekSide: row.bubbles == nil ? nil : Metrics.avatarMessage,
-                decorationURL: row.decorationURL,
-                avatarFrame: state.avatarFrame,
-                decorationFrame: state.decorationFrame
-            )
+            if state.drawsFace {
+                let frame = avatarRect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+                drawAvatar(
+                    url: row.avatarURL,
+                    monogram: row.avatarMonogram,
+                    in: frame,
+                    context: context,
+                    style: style,
+                    images: images,
+                    scale: scale,
+                    // A bubble's face is smaller than the size the prefetch asked
+                    // for, and the cache is keyed on the asking.
+                    peekSide: row.bubbles == nil ? nil : Metrics.avatarMessage,
+                    decorationURL: row.decorationURL,
+                    avatarFrame: state.avatarFrame,
+                    decorationFrame: state.decorationFrame
+                )
+            }
         } else if let symbol = row.systemSymbol {
             // A system event's mark, where a face would be. Tinted rather than
             // achromatic: a join, a boost and a removal are three different
@@ -1795,6 +1802,37 @@ nonisolated enum TimelineRowPainter {
     ///   size, so a reply header drawing a 16-point face has to look in the slot
     ///   the 38-point prefetch filled — peeking with its own box's size looks in
     ///   a slot nothing was ever put in, and the face is a permanent monogram.
+    /// A bubble run's face on its own, for the layer that carries it while it
+    /// rides the scroll (`StickyFaces`): the same drawing as a row's (picture
+    /// or monogram, decoration, the hover film's frames), asking the cache
+    /// with the same key the transcript's prefetch does.
+    static func drawBubbleFace(
+        url: URL?,
+        monogram: String,
+        decorationURL: URL?,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat,
+        avatarFrame: CGImage?,
+        decorationFrame: CGImage?
+    ) {
+        drawAvatar(
+            url: url,
+            monogram: monogram,
+            in: frame,
+            context: context,
+            style: style,
+            images: images,
+            scale: scale,
+            peekSide: Metrics.avatarMessage,
+            decorationURL: decorationURL,
+            avatarFrame: avatarFrame,
+            decorationFrame: decorationFrame
+        )
+    }
+
     private static func drawAvatar(
         url: URL?,
         monogram: String,
@@ -2193,7 +2231,7 @@ nonisolated enum TimelineRowPainter {
                 cornerHeight: EmbedLayoutEngine.corner,
                 transform: nil
             ))
-            context.setFillColor(ink.cardFill)
+            context.setFillColor(ink.discordCard)
             context.fillPath()
             drawSymbol(
                 "photo",
@@ -2353,7 +2391,7 @@ nonisolated enum TimelineRowPainter {
 
         if !voice.isBare {
             context.addPath(CGPath(roundedRect: frame, cornerWidth: radius, cornerHeight: radius, transform: nil))
-            context.setFillColor(ink.cardFill)
+            context.setFillColor(ink.discordCard)
             context.fillPath()
             context.addPath(CGPath(
                 roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
@@ -2553,7 +2591,7 @@ nonisolated enum TimelineRowPainter {
             transform: nil
         )
         context.addPath(outline)
-        context.setFillColor(ink.cardFill)
+        context.setFillColor(ink.discordCard)
         context.fillPath()
         context.addPath(CGPath(
             roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
@@ -3288,7 +3326,7 @@ nonisolated enum TimelineRowPainter {
             case .ground(let rect, let ground, let corners, let radius):
                 let frame = rect.offsetBy(dx: offset.x, dy: offset.y)
                 let fill = switch ground {
-                case .card: ink.cardFill
+                case .card: ink.discordCard
                 case .bar: ink.surface
                 case .plate: ink.hoverFill
                 case .critical: criticalGround

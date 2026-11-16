@@ -53,6 +53,38 @@ struct ServerHubTests {
         }
     }
 
+    @Test("Discord's experiment offers an editor the row to make a hub, and never hides one")
+    func experimentOffering() async {
+        await withAppSettings(\.showsServerHub) { settings in
+            settings.showsServerHub = true
+            let name = AppModel.serverHubExperiment
+            let hash = MurmurHash3.hash32(name)
+            let eligible = [hash: ApexAssignment(hash: hash, variantID: 0, isOverride: false, revision: 1, usesAsEligibility: true)]
+            @MainActor func inExperiment(_ model: AppModel, variant: Int) -> AppModel {
+                model.experiments = ExperimentSnapshot(apexReader: eligible)
+                model.guilds[guildID]?.apexAssignments = [
+                    hash: ApexAssignment(hash: hash, variantID: variant, isOverride: false, revision: 3),
+                ]
+                return model
+            }
+
+            // No hub yet, in a server Discord has put in the experiment.
+            #expect(inExperiment(model(isOwner: true, settings: nil), variant: 1).offersServerHub(guildID))
+            #expect(inExperiment(model(isOwner: true, settings: nil), variant: 1).mayHaveServerHub(guildID))
+            // Only its editors: the others have nothing to see until it's published.
+            #expect(!inExperiment(model(isOwner: false, settings: nil), variant: 1).offersServerHub(guildID))
+            // Variant 0 is "off", and with no experiment data at all nothing is guessed.
+            #expect(!inExperiment(model(isOwner: true, settings: nil), variant: 0).offersServerHub(guildID))
+            #expect(model(isOwner: true, settings: nil).isInServerHubExperiment(Guild(id: guildID, name: "x", ownerID: me)) == nil)
+            // A published hub stays offered whatever the experiment reads.
+            let published = GuildSpaceSettings(isEnabled: true, publishStatus: .published)
+            #expect(inExperiment(model(isOwner: false, settings: published), variant: 0).offersServerHub(guildID))
+            // Switched off by the server, nobody gets it.
+            let off = GuildSpaceSettings(isEnabled: false, publishStatus: .published)
+            #expect(!inExperiment(model(isOwner: true, settings: off), variant: 1).offersServerHub(guildID))
+        }
+    }
+
     @Test("A drop moves the card to the column and the place it landed")
     func reorder() {
         let model = model(isOwner: true, settings: .init(isEnabled: true, publishStatus: .published))

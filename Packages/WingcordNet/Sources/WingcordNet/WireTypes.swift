@@ -756,6 +756,11 @@ struct GuildDTO: Decodable, Sendable {
     var guild_scheduled_events: LossyList<ScheduledEventDTO>?
     /// Present on the READY payload's guild objects, absent on a plain fetch.
     var properties: GuildProperties?
+    /// The server's apex experiment assignments — beside `properties` in
+    /// READY and at the top level of GUILD_CREATE, never inside either.
+    /// Discord's apex store reads a server's experiments (the Server Hub's
+    /// among them) from nowhere else. Never throws.
+    var experiments: GuildApexField?
     /// When the reader joined, at the top level. Nested on READY — see
     /// `GuildProperties.joined_at`.
     var joined_at: Date?
@@ -874,6 +879,7 @@ struct GuildDTO: Decodable, Sendable {
         guild.premiumProgressBarEnabled = premium_progress_bar_enabled
             ?? properties?.premium_progress_bar_enabled ?? false
         guild.spaceSettings = guild_space_settings?.settings ?? properties?.guild_space_settings?.settings
+        guild.apexAssignments = experiments?.assignments
         return guild
     }
 }

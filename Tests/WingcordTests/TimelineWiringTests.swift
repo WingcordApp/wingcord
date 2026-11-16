@@ -47,6 +47,7 @@ struct TimelineWiringTests {
         #expect(canvas.onOpenEmoji != nil, "a custom emoji")
         #expect(canvas.onOpenSticker != nil, "a sticker")
         #expect(canvas.onOpenAttachment != nil, "a picture or a clip")
+        #expect(canvas.onOpenEmbedPictures != nil, "a picture in an embed")
         #expect(canvas.onToggleFavoriteGIF != nil, "the star on a GIF")
         #expect(canvas.isFavoriteGIF != nil, "which way that star points")
         #expect(canvas.onTogglePreview != nil, "a music card's Preview chip")

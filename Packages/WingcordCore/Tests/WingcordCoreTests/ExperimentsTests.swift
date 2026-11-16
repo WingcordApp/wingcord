@@ -85,5 +85,32 @@ struct ExperimentsTests {
         #expect(known?.label == "Voice Channel List Invite Embed")
         #expect(known?.kind == .guild)
         #expect(ExperimentBucket.title(2) == "Treatment 2")
+        // Discord's `mj({kind: "guild", name: "2026-09-guild-spaces"})`.
+        let hub = KnownExperiments.byHash[MurmurHash3.hash32("2026-09-guild-spaces")]
+        #expect(hub?.kind == .guild)
+        #expect(hub?.isApex == true)
+    }
+
+    @Test("A server's apex variant: the reader's eligibility first, then the server's own")
+    func apexGuildVariant() {
+        let hub = "2026-09-guild-spaces"
+        let hash = MurmurHash3.hash32(hub)
+        func assignment(_ variant: Int, override: Bool = false, eligibility: Bool = false) -> [UInt32: ApexAssignment] {
+            [hash: ApexAssignment(hash: hash, variantID: variant, isOverride: override, revision: 1, usesAsEligibility: eligibility)]
+        }
+        let eligible = assignment(0, eligibility: true)
+        let server = assignment(1)
+
+        #expect(Experiments.guildVariant(hub, reader: eligible, guild: server) == 1)
+        // The reader holds nothing for it: the default, whatever the server holds.
+        #expect(Experiments.guildVariant(hub, reader: [:], guild: server) == nil)
+        // Held, but not as eligibility.
+        #expect(Experiments.guildVariant(hub, reader: assignment(1), guild: server) == nil)
+        // Eligible, and the server holds nothing.
+        #expect(Experiments.guildVariant(hub, reader: eligible, guild: [:]) == nil)
+        // An override of the reader's decides outright.
+        #expect(Experiments.guildVariant(hub, reader: assignment(2, override: true), guild: server) == 2)
+        // A server assignment that is only an eligibility marker gives the default.
+        #expect(Experiments.guildVariant(hub, reader: eligible, guild: assignment(1, eligibility: true)) == nil)
     }
 }

@@ -25,27 +25,28 @@ public struct CameraDevice: Hashable, Sendable, Identifiable {
     public var kind: String
 }
 
-/// A capture session, safe to hand across an isolation boundary.
+/// The call's camera, and the settings' test of it.
 ///
-/// `AVCaptureSession` is not `Sendable` and its own documentation is explicit
-/// that configuration must be serialised — which this type does, on its capture
-/// queue. What a preview layer needs is only to *hold* the session, and that is
-/// what the wrapper vouches for.
-public struct CaptureSessionHandle: @unchecked Sendable {
-    public let session: AVCaptureSession
-    public init(_ session: AVCaptureSession) { self.session = session }
-}
-
+/// **Everything that touches the session runs on `queue`**: its
+/// configuration, the device's frame rate, the start and the stop, and (through
+/// `handle`) every preview. That queue is also where frames arrive. See
+/// `CaptureSessionHandle` for the crash that rule prevents.
 public final class CameraCapture: NSObject, @unchecked Sendable {
     private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Camera")
 
     /// A frame, on the capture queue. Never the main actor.
     public var onFrame: (@Sendable (CVPixelBuffer, CMTime) -> Void)?
 
-    public let session = AVCaptureSession()
+    private let session = AVCaptureSession()
     private let output = AVCaptureVideoDataOutput()
     private let queue = DispatchQueue(label: "dev.wingcord.camera", qos: .userInitiated)
+    /// Changed on `queue` only.
     private var input: AVCaptureDeviceInput?
+
+    /// The camera, for a self-view's preview.
+    public var handle: CaptureSessionHandle {
+        CaptureSessionHandle(session: session, queue: queue)
+    }
 
     public override init() {
         super.init()
@@ -98,9 +99,30 @@ public final class CameraCapture: NSObject, @unchecked Sendable {
 
     // MARK: Running
 
+    /// Picks the camera and starts it, or switches a running one to another
+    /// device. Answers once it runs.
+    ///
+    /// **All of it on `queue`, in one piece.** It used to configure on
+    /// whichever thread called and start on the queue, so two calls close
+    /// together (the preview sheet opening as the device changes) could start
+    /// the session inside the other's configuration, which AVFoundation answers
+    /// with an exception. `startRunning` also blocks for as long as the
+    /// hardware takes to come up (up to a second on an external camera), which
+    /// is the other reason it never runs on the actor drawing the tile.
     public func start(deviceID: String?, framerate: Int = 30) async -> Bool {
         guard await Self.requestAccess() else { return false }
+        return await withCheckedContinuation { continuation in
+            // `self`, not `session`: `AVCaptureSession` is not `Sendable` and
+            // this type is the thing that vouches for it.
+            queue.async { [self] in
+                continuation.resume(returning: run(deviceID: deviceID, framerate: framerate))
+            }
+        }
+    }
 
+    /// The start, on `queue`.
+    private func run(deviceID: String?, framerate: Int) -> Bool {
+        dispatchPrecondition(condition: .onQueue(queue))
         let device = deviceID.flatMap { AVCaptureDevice(uniqueID: $0) }
             ?? AVCaptureDevice.default(for: .video)
         guard let device else { return false }
@@ -131,26 +153,15 @@ public final class CameraCapture: NSObject, @unchecked Sendable {
             device.unlockForConfiguration()
         }
 
-        guard !session.isRunning else { return true }
-        // `startRunning` blocks for as long as the hardware takes to come up —
-        // up to a second on an external camera — so it never runs on the actor
-        // that is drawing the tile it is about to fill.
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            // `self`, not `session`: `AVCaptureSession` is not `Sendable` and
-            // this type is the thing that vouches for it. Capturing the session
-            // directly is the same object crossing the same boundary with
-            // nothing standing behind it.
-            queue.async { [self] in
-                session.startRunning()
-                continuation.resume()
-            }
-        }
+        if !session.isRunning { session.startRunning() }
         return true
     }
 
+    /// Stops the camera, after anything already asked of it.
     public func stop() {
-        guard session.isRunning else { return }
-        queue.async { [self] in session.stopRunning() }
+        queue.async { [self] in
+            if session.isRunning { session.stopRunning() }
+        }
     }
 }
 

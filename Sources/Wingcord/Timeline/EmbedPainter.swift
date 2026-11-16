@@ -59,7 +59,7 @@ nonisolated extension TimelineRowPainter {
                 roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
             ))
             context.clip()
-            context.setFillColor(ThemeInk.current.cardFill)
+            context.setFillColor(ThemeInk.current.discordCard)
             context.fill(frame)
             // A link's card always has its rule: the embed's colour, or
             // Discord's neutral `--border-normal` where it names none
@@ -84,7 +84,7 @@ nonisolated extension TimelineRowPainter {
                     cornerHeight: corner - 0.5,
                     transform: nil
                 ))
-                context.setStrokeColor(ThemeInk.current.plates.codeBorder)
+                context.setStrokeColor(ThemeInk.current.discordCardBorder)
                 context.setLineWidth(1)
                 context.strokePath()
                 context.restoreGState()
@@ -393,18 +393,26 @@ nonisolated extension TimelineRowPainter {
         images: ImageStore,
         scale: CGFloat
     ) {
-        let corner: CGFloat = 8
-        context.addPath(CGPath(
-            roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
-        ))
-        context.setFillColor(fill(for: slot, isHovered: isHovered).cgColor)
+        let corner = TimelineMetrics.componentCorner
+        // **A disabled button is the same button at half strength**, as
+        // Discord's `:disabled` is, never a recoloured one.
+        context.saveGState()
+        if !slot.isEnabled { context.setAlpha(0.5) }
+        defer { context.restoreGState() }
+        let shape = CGPath(roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil)
+        let colors = Self.buttonColors(for: slot, isHovered: isHovered && slot.isEnabled, card: ThemeInk.current.discord)
+        context.addPath(shape)
+        context.setFillColor(colors.fill)
         context.fillPath()
+        context.addPath(CGPath(
+            roundedRect: frame.insetBy(dx: 0.5, dy: 0.5), cornerWidth: corner - 0.5, cornerHeight: corner - 0.5,
+            transform: nil
+        ))
+        context.setStrokeColor(colors.border)
+        context.setLineWidth(1)
+        context.strokePath()
 
-        // White on a coloured button; the room's own ink on a secondary one,
-        // whose fill is only a shade of the ground — white on a light theme's
-        // shade is no label at all.
-        let ink = !slot.isEnabled ? style.tertiaryColor
-            : slot.style == .secondary ? style.primaryColor : NSColor.white
+        let ink = NSColor(cgColor: colors.text) ?? .white
         var x = frame.minX + TimelineMetrics.componentPadding
 
         if let emoji = slot.emoji {
@@ -420,7 +428,7 @@ nonisolated extension TimelineRowPainter {
             x = glyph.maxX + TimelineMetrics.componentGlyphGap
         }
 
-        let font = NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold)
+        let font = TimelineMetrics.componentFont(style)
         let hasTrailingGlyph = slot.isMenu || slot.url != nil
         let trailing = TimelineMetrics.componentPadding
             + (hasTrailingGlyph ? TimelineMetrics.componentTrailingGlyphRoom : 0)
@@ -433,17 +441,16 @@ nonisolated extension TimelineRowPainter {
             context: context
         )
 
-        // Centred in the band the layout reserved, so the mark and the label
-        // can never meet however long the words are.
+        // At the trailing end of the band the layout reserved, so the mark and
+        // the label can never meet however long the words are — and sit
+        // Discord's 8 apart when the button fits them.
         if hasTrailingGlyph {
-            let side: CGFloat = slot.isMenu ? 10 : 12
-            let band = frame.maxX - TimelineMetrics.componentPadding
-                - TimelineMetrics.componentTrailingGlyphRoom
+            let side: CGFloat = slot.isMenu ? 11 : 15
             drawSymbol(
                 slot.isMenu ? "chevron.down" : "arrow.up.forward.square",
-                tint: slot.isMenu ? style.tertiaryColor : ink.withAlphaComponent(0.75),
+                tint: slot.isMenu ? ink.withAlphaComponent(0.7) : ink,
                 in: CGRect(
-                    x: band + (TimelineMetrics.componentTrailingGlyphRoom - side) / 2,
+                    x: frame.maxX - TimelineMetrics.componentPadding - side,
                     y: frame.midY - side / 2,
                     width: side,
                     height: side
@@ -524,15 +531,35 @@ nonisolated extension TimelineRowPainter {
     /// everything else. A disabled control is the same ground at a third of the
     /// weight rather than a fourth colour — it is the *same button*, not another
     /// kind of one.
-    private static func fill(for slot: ComponentSlot, isHovered: Bool) -> NSColor {
-        let base: NSColor = switch slot.style {
-        case .primary, .link: NSColor(Palette.accent)
-        case .success: NSColor(Palette.affirmative)
-        case .danger: NSColor(Palette.destructive)
-        case .secondary: NSColor(cgColor: ThemeInk.current.lift(0.12)) ?? .clear
+    /// **Discord's colours for each style, the same in every theme** (Alex,
+    /// 2026-11-16): its message button maps PRIMARY to BRAND, SUCCESS to GREEN,
+    /// DANGER to RED and everything else, a link included, to its grey
+    /// PRIMARY; read off its stylesheet (`--control-primary-*`,
+    /// `--control-connected-*`, `--control-critical-primary-*`,
+    /// `--control-secondary-*`). Never the app's accent.
+    static func buttonColors(
+        for slot: ComponentSlot,
+        isHovered: Bool,
+        card: DiscordCardInk
+    ) -> (fill: CGColor, text: CGColor, border: CGColor) {
+        let white = CGColor(gray: 1, alpha: 1)
+        let edge = CGColor(gray: 1, alpha: 0.08)
+        func srgb(_ hex: UInt32) -> CGColor {
+            CGColor(
+                srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
+                blue: CGFloat(hex & 0xFF) / 255, alpha: 1
+            )
         }
-        guard slot.isEnabled else { return base.withAlphaComponent(0.22) }
-        return isHovered ? base.blended(withFraction: 0.18, of: .white) ?? base : base
+        let grey = slot.isOnCard
+            ? (isHovered ? card.secondaryHover : card.secondaryFill)
+            : (isHovered ? card.looseHover : card.looseFill)
+        if slot.isMenu { return (grey, card.secondaryText, card.border) }
+        return switch slot.style {
+        case .primary: (srgb(isHovered ? 0x45_52_BA : 0x59_66_F2), white, edge)
+        case .success: (srgb(isHovered ? 0x00_6B_38 : 0x00_85_45), white, edge)
+        case .danger: (srgb(isHovered ? 0xA8_24_2E : 0xD1_2E_38), white, edge)
+        case .secondary, .link: (grey, card.secondaryText, card.secondaryBorder)
+        }
     }
 }
 
@@ -1111,7 +1138,7 @@ nonisolated extension TimelineRowPainter {
             cornerHeight: EmbedLayoutEngine.corner,
             transform: nil
         ))
-        context.setFillColor(ThemeInk.current.cardFill)
+        context.setFillColor(ThemeInk.current.discordCard)
         context.fillPath()
 
         drawTextFrame(

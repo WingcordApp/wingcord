@@ -8,13 +8,19 @@ import SwiftUI
 struct PopularGamesCardView: View {
     var games: PopularGamesCardModel
 
+    @Environment(AppModel.self) private var model
     @State private var visibleCount = 3
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.margin) {
             HStack(alignment: .top, spacing: Spacing.snug) {
                 ForEach(games.tiles.prefix(visibleCount)) { tile in
-                    PopularGameTileView(tile: tile)
+                    // A game opens its profile, as Discord's tile does.
+                    Button { model.openGameProfile(tile.id) } label: {
+                        PopularGameTileView(tile: tile)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(Text("Opens the game\u{2019}s profile"))
                 }
                 // Fewer games than room: the tiles keep their size, not stretch.
                 ForEach(0..<max(0, visibleCount - min(visibleCount, games.tiles.count)), id: \.self) { _ in

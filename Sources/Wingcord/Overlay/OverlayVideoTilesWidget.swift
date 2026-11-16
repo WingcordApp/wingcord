@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import SwiftUI
 import WingcordCore
+import WingcordVoice
 
 // MARK: - Cameras, as tiles
 //
@@ -69,7 +70,7 @@ private struct OverlayVideoTile: View {
     var attachVideo: (UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void
 
     @Environment(AppModel.self) private var model
-    @State private var cameraSession: AVCaptureSession?
+    @State private var cameraSession: CaptureSessionHandle?
 
     private var height: CGFloat { OverlayVideoTilesWidget.width * 3 / 4 }
 

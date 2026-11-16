@@ -36,7 +36,9 @@ final class TimelineCanvasView: NSView {
     /// answers it in a scroll's worth of time.
     private(set) var offsets: [CGFloat] = [0]
 
-    var style: MessageTextStyle
+    var style: MessageTextStyle {
+        didSet { stickyFaces.style = style }
+    }
     /// Whether a continuation row draws its gutter time without being pointed
     /// at. Set beside `style` from the same revision, for the same reason.
     var alwaysShowsTimestamps = false
@@ -75,6 +77,8 @@ final class TimelineCanvasView: NSView {
         avatarFilm.onFrameChange = { [weak self] in
             guard let self else { return }
             self.invalidateRow(self.hoveredRow)
+            // A bubble's face plays on its own layer, wherever it is riding.
+            self.stickyFaces.refreshContents()
             self.refreshStickerAnimation()
         }
     }
@@ -398,6 +402,8 @@ final class TimelineCanvasView: NSView {
     /// width and URL — the thumbnail the viewer opens on, peeked by the exact
     /// key the transcript cached it under.
     var onOpenAttachment: ((MessageID, Int, [CGFloat], [URL?]) -> Void)?
+    /// An embed's pictures, and which of them was clicked.
+    var onOpenEmbedPictures: ((MessageID, [EmbedPicture], Int) -> Void)?
     /// A spoilered attachment was uncovered — its picture is wanted now.
     var onRevealAttachment: (() -> Void)?
 
@@ -707,6 +713,13 @@ final class TimelineCanvasView: NSView {
 
     /// The layers the moving pictures play on.
     let films = TranscriptFilms()
+    /// The bubbles' faces, which ride the scroll. See `StickyFaces`.
+    let stickyFaces: StickyFaces
+    /// Where the pointer last was, in the document: which face, if any, it is on.
+    private var pointer: CGPoint?
+    /// The run whose face the pointer is on, so moving onto one within a row
+    /// starts its film as moving onto its row does.
+    private var pointerFace: MessageID?
     private var isAnimatingStickers = false
     /// The rate the clock was last asked for. See `clockRate`.
     private var subscribedRate: Double = 0
@@ -714,6 +727,7 @@ final class TimelineCanvasView: NSView {
 
     init(style: MessageTextStyle) {
         self.style = style
+        stickyFaces = StickyFaces(style: style)
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
@@ -721,6 +735,10 @@ final class TimelineCanvasView: NSView {
         layer?.drawsAsynchronously = false
         // Under any subview's layer, over this view's own drawing.
         layer?.insertSublayer(films.container, at: 0)
+        layer?.insertSublayer(stickyFaces.container, above: films.container)
+        stickyFaces.filmFrames = { [weak self] id in
+            (self?.avatarFilm.avatarFrame(forRow: id.rawValue), self?.avatarFilm.decorationFrame(forRow: id.rawValue))
+        }
         postsFrameChangedNotifications = true
         setAccessibilityElement(true)
         setAccessibilityRole(.list)
@@ -878,6 +896,8 @@ final class TimelineCanvasView: NSView {
         for (index, row) in rows.enumerated() {
             if let id = row.messageID { messageRows[id] = index }
         }
+        stickyFaces.update(runs: StickyFaceRun.runs(in: rows, offsets: offsets))
+        placeStickyFaces()
         // A selection whose message is gone has nothing left to point at.
         if let selection, messageRows[selection.anchor.messageID] == nil
             || messageRows[selection.focus.messageID] == nil
@@ -904,6 +924,20 @@ final class TimelineCanvasView: NSView {
         refreshStickerAnimation()
         reconcileFilms()
         return running
+    }
+
+    /// Puts the bubbles' faces where the viewport wants them: on each run's
+    /// last bubble, or riding the bottom above the composer. Called from every
+    /// scroll step (`TimelineView.viewportDidChange`) and whenever the rows
+    /// change. Nothing to do in columns, which have no runs here.
+    func placeStickyFaces() {
+        guard let scrollView = enclosingScrollView else { return }
+        let visible = scrollView.contentView.bounds
+        stickyFaces.place(
+            visible: visible,
+            readableBottom: visible.maxY - scrollView.contentInsets.bottom - StickyFaces.composerGap,
+            scale: window?.backingScaleFactor ?? 2
+        )
     }
 
     /// Subscribes to the clock while something the painter draws is moving,
@@ -1375,6 +1409,25 @@ final class TimelineCanvasView: NSView {
         guard let index = rows.firstIndex(where: { $0.messageID == key.messageID }),
               case .message(let message) = rows[index].kind
         else { return nil }
+        // An embed's pictures are numbered past a forward's — see
+        // `MediaSources.embedIndexBase`.
+        if key.attachmentIndex >= MediaSources.embedIndexBase {
+            let place = key.attachmentIndex - MediaSources.embedIndexBase
+            let (embedIndex, imageIndex) = (place / 100, place % 100)
+            guard message.embeds.indices.contains(embedIndex),
+                  message.embeds[embedIndex].images.indices.contains(imageIndex)
+            else { return nil }
+            let image = message.embeds[embedIndex].images[imageIndex]
+            let row = rowFrame(at: index)
+            let frame = image.rect.offsetBy(dx: row.minX, dy: row.minY)
+            guard frame.intersects(visibleRect), window != nil else { return nil }
+            return MediaSources.Thumbnail(
+                frame: convert(frame, to: nil),
+                cornerRadius: image.corner,
+                cropsToFill: image.cropsToFill,
+                window: window
+            )
+        }
         // A forward's own files are numbered past the message's — see
         // `MediaSources.forwardedIndexBase`.
         let isForwarded = key.attachmentIndex >= MediaSources.forwardedIndexBase
@@ -1696,12 +1749,24 @@ final class TimelineCanvasView: NSView {
                 }
                 state.animationTime = AnimationClock.shared.time
                 if case .message(let message) = row.kind {
+                    state.drawsFace = message.bubbles == nil
                     state.hidesBubble = isFlying(message.id)
                     state.layered = films.layered[message.id] ?? .init()
                     // A picture the viewer has lifted leaves its box empty, as
                     // one playing on a layer does.
                     if let lifted = liftedAttachment, lifted.messageID == message.id {
-                        state.layered.attachments.insert(lifted.attachmentIndex)
+                        if lifted.attachmentIndex >= MediaSources.embedIndexBase {
+                            // An embed's picture: `layered` counts those across
+                            // every embed in the row, in order.
+                            let place = lifted.attachmentIndex - MediaSources.embedIndexBase
+                            let (embed, image) = (place / 100, place % 100)
+                            if message.embeds.indices.contains(embed) {
+                                let before = message.embeds[..<embed].reduce(0) { $0 + $1.images.count }
+                                state.layered.embedImages.insert(before + image)
+                            }
+                        } else {
+                            state.layered.attachments.insert(lifted.attachmentIndex)
+                        }
                     }
                     if selection != nil, let block = message.textBlock {
                         state.selectedRange = selectedRange(
@@ -2182,6 +2247,8 @@ final class TimelineCanvasView: NSView {
     /// Lets go of the pointer: the same work whether it left the canvas or a
     /// card was drawn over it.
     private func clearHover() {
+        pointer = nil
+        pointerFace = nil
         applyCursor(nil)
         hoveredComponent = nil
         hoveredPlate = nil
@@ -2262,6 +2329,22 @@ final class TimelineCanvasView: NSView {
             invalidateRow(index)
             // An emoji the spoiler covered can move now.
             reconcileFilms()
+        case .embedImage(let embedIndex, let imageIndex):
+            guard row.embeds.indices.contains(embedIndex) else { return }
+            var pictures: [EmbedPicture] = []
+            var clicked = 0
+            for (position, image) in row.embeds[embedIndex].images.enumerated()
+            where image.controls == nil && !image.isSpoiler {
+                guard let media = image.viewerMedia else { continue }
+                if position == imageIndex { clicked = pictures.count }
+                pictures.append(EmbedPicture(
+                    media: media,
+                    sourceIndex: MediaSources.embedIndex(embed: embedIndex, image: position),
+                    posterWidth: image.decodeWidth,
+                    posterURL: image.url
+                ))
+            }
+            onOpenEmbedPictures?(row.id, pictures, clicked)
         case .attachment(let attachmentIndex, let isHidden):
             // The first click on a spoiler uncovers it and stops there. Opening
             // it full-screen in the same press would show the picture to the
@@ -2655,6 +2738,9 @@ final class TimelineCanvasView: NSView {
         case attachment(index: Int, isHidden: Bool)
         /// The same, among a forward's own files.
         case forwardedAttachment(index: Int, isHidden: Bool)
+        /// One of an embed's pictures, which opens in the viewer as Discord's
+        /// do: the embed's index in the row and the picture's in its slot.
+        case embedImage(embedIndex: Int, imageIndex: Int)
         /// A forward's breadcrumb: the way to the original.
         case forwardJump(ForwardJump)
         /// The star on a GIF. Ahead of the picture in the hit test, because it
@@ -2760,6 +2846,12 @@ final class TimelineCanvasView: NSView {
     private func target(in row: MessageRow, at point: CGPoint, rowIndex index: Int) -> Target? {
         let frame = rowFrame(at: index)
         let local = CGPoint(x: point.x - frame.minX, y: point.y - frame.minY)
+
+        // A bubble's face is wherever it is riding, over whichever of its
+        // run's rows is under it (`StickyFaces`).
+        if let face = stickyFaces.face(at: point) {
+            return face.run.isCrosspost ? .crosspostAuthor(face.frame) : .person(face.run.authorID, face.frame)
+        }
 
         // The quoted line sits above the author line and overlaps nothing, so
         // it is tested first and costs one rect containment on a reply and a
@@ -2986,6 +3078,16 @@ final class TimelineCanvasView: NSView {
             }
         }
 
+        // An embed's picture opens the viewer (Alex, 2026-11-16: "in embeds
+        // i cant click the images"). Not a film's poster — its controls are
+        // above — nor a covered spoiler, nor an author's or footer's mark.
+        for (embedIndex, slot) in row.embeds.enumerated() {
+            for (imageIndex, image) in slot.images.enumerated()
+            where image.viewerMedia != nil && image.controls == nil && !image.isSpoiler && image.rect.contains(local) {
+                return .embedImage(embedIndex: embedIndex, imageIndex: imageIndex)
+            }
+        }
+
         let revealedHere = revealedAttachments[row.id] ?? []
         // A file's Download first: it hangs past the card, over whatever is
         // beside it, as Discord's hover group does.
@@ -3083,7 +3185,7 @@ final class TimelineCanvasView: NSView {
         if row.tag != nil, row.hasAuthorLine, row.tagRect.contains(local) {
             return .serverTag(row.authorID, row.tagRect.offsetBy(dx: frame.minX, dy: frame.minY))
         }
-        if let avatarRect = row.avatarRect, avatarRect.contains(local) {
+        if row.bubbles == nil, let avatarRect = row.avatarRect, avatarRect.contains(local) {
             let rect = avatarRect.offsetBy(dx: frame.minX, dy: frame.minY)
             return row.isCrosspost ? .crosspostAuthor(rect) : .person(row.authorID, rect)
         }
@@ -3137,6 +3239,12 @@ final class TimelineCanvasView: NSView {
 
     private func updateHover(at point: CGPoint) {
         let index = hoveredIndex(at: point)
+        pointer = point
+        let face = stickyFaces.face(at: point)?.run.headID
+        if face != pointerFace {
+            pointerFace = face
+            updateAvatarPlayback()
+        }
 
         // The pointing hand and the lit button, resolved from the same function
         // the click uses. Bounded work: one row's rectangles, and only while
@@ -3286,7 +3394,7 @@ final class TimelineCanvasView: NSView {
             case .interactionCommand(let rect):
                 component = rect.origin
                 cursor = .pointingHand
-            case .favoriteGIF:
+            case .favoriteGIF, .embedImage:
                 cursor = .pointingHand
             case .downloadAttachment(_, let rect):
                 component = rect.origin
@@ -3413,8 +3521,11 @@ final class TimelineCanvasView: NSView {
     /// same test the painter uses.
     func updateAvatarPlayback() {
         let wanted: HoverAvatarFilm.Subject? = {
-            guard AnimationClock.playsAnimatedEmoji, !isScrolling,
-                  let index = hoveredRow, rows.indices.contains(index),
+            guard AnimationClock.playsAnimatedEmoji, !isScrolling else { return nil }
+            // A bubble's face riding the bottom is over another row of its
+            // run: the run's last message is still the one it belongs to.
+            let faceRow = pointer.flatMap { stickyFaces.face(at: $0) }.flatMap { messageRows[$0.run.tailID] }
+            guard let index = faceRow ?? hoveredRow, rows.indices.contains(index),
                   case .message(let row) = rows[index].kind,
                   row.avatarRect != nil
             else { return nil }

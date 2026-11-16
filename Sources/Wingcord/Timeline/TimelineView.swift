@@ -299,6 +299,10 @@ final class TimelineCoordinator: NSObject {
     /// Where the viewport's top was on the last tick, so a page is asked for in
     /// the direction the reader is travelling. See `viewportDidChange`.
     private var lastViewportMinY: CGFloat = 0
+    /// The bottom inset riding the composer's spring: where it started, where
+    /// it is going and when. See `glideBottomInset`.
+    private var insetGlide: (from: CGFloat, to: CGFloat, start: CFTimeInterval)?
+    private var insetGlideLink: CADisplayLink?
     /// When that tick was, and how fast the viewport has been moving — the
     /// difference between a reader, whose pictures are fetched ahead of the
     /// scroll, and a fling, whose are not. See `schedulePrefetch`.
@@ -640,6 +644,10 @@ final class TimelineCoordinator: NSObject {
                 forwarded: true
             )
         }
+        canvas.onOpenEmbedPictures = { [weak self] messageID, pictures, index in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.openEmbedPictures(messageID: messageID, in: channelID, pictures: pictures, index: index)
+        }
         canvas.onJumpToForwarded = { [weak self] jump in self?.model.jumpToForwarded(jump) }
 
         // The media viewer flies a picture out of its box here and back into
@@ -832,6 +840,9 @@ final class TimelineCoordinator: NSObject {
     func tearDown() {
         guard !isTornDown else { return }
         isTornDown = true
+        // A display link holds its target: one left running would keep this
+        // coordinator alive after its window had gone.
+        stopInsetGlide()
         stopVoiceNoteOnThisTranscript()
         layoutTask?.cancel()
         layoutTask = nil
@@ -872,6 +883,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.onOpenSticker = nil
         canvas?.onOpenAttachment = nil
         canvas?.onOpenForwardedAttachment = nil
+        canvas?.onOpenEmbedPictures = nil
         canvas?.onJumpToForwarded = nil
         canvas?.onRevealAttachment = nil
         MediaSources.shared.unregister(self)
@@ -984,38 +996,25 @@ final class TimelineCoordinator: NSObject {
         canvas?.apply(voiceRevision: voiceRevision, isLive: isVoiceLive)
         canvas?.apply(activityInviteStatuses: activityInviteStatuses)
         canvas?.apply(uploadProgress: uploadProgress)
+        // Measured against where a glide is GOING, not where it has got to: an
+        // update in the middle of one is not a new change.
         if let scrollView,
-           abs(scrollView.contentInsets.bottom - bottomInset) > 0.5
+           abs((insetGlide?.to ?? scrollView.contentInsets.bottom) - bottomInset) > 0.5
             || abs(scrollView.contentInsets.top - topInset) > 0.5 {
-            // Set on the SCROLL VIEW, not reserved in the canvas: an inset keeps
-            // the content scrollable under the bar, where extra canvas padding
-            // would leave dead space that can never hold a message.
-            //
-            // **The top one is the whole scroll edge.** A scroll view that runs
-            // under the toolbar with a top inset gets AppKit's own scroll pocket
-            // across that inset — the soft blur the system draws wherever content
-            // passes under a window's chrome. Nothing here draws it or gates it:
-            // over an empty ground it is invisible, and over rows it is the edge.
-            // Stopped at the toolbar's foot instead, the transcript had nothing
-            // passing under the bar and there was no edge to draw.
-            //
-            // The bottom arithmetic elsewhere in this file is unaffected: an
-            // `NSClipView` scrolled fully down still sits at
-            // `documentHeight + insets.bottom - viewportHeight`, and a top inset
-            // moves the *minimum* to `-insets.top` rather than the maximum.
-            scrollView.contentInsets = NSEdgeInsets(
-                top: max(0, topInset), left: 0, bottom: max(0, bottomInset), right: 0
-            )
-            scrollView.scrollerInsets = NSEdgeInsets(
-                top: max(0, topInset), left: 0, bottom: max(0, bottomInset), right: 0
-            )
-            // The scrollable range just changed by the delta. A reader sitting
-            // at the bottom has to stay there, or growing the composer by a line
-            // silently scrolls the newest message out from under them.
-            // A short channel's rows sit on the composer, so the band they
-            // sit in just moved under them.
-            refreshLeadingSpace()
-            if isNearBottom, self.reachesPresent, !isTornDown { scrollToBottom() }
+            let delta = bottomInset - (insetGlide?.to ?? scrollView.contentInsets.bottom)
+            // **The composer grows and shrinks on a spring** — a reply's header,
+            // the staged files (Alex, 2026-11-16) — and a reader at the foot sees
+            // the words above it ride the same spring, rather than jump the
+            // whole distance at once and leave the bar to catch up.
+            if abs(scrollView.contentInsets.top - topInset) <= 0.5,
+               abs(delta) > 1, abs(delta) < 480,
+               isNearBottom, reachesPresent, canvas?.isScrolling != true,
+               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                glideBottomInset(to: bottomInset)
+            } else {
+                stopInsetGlide()
+                applyInsets(top: topInset, bottom: bottomInset)
+            }
         }
         guard !isTornDown else { return }
 
@@ -1186,6 +1185,73 @@ final class TimelineCoordinator: NSObject {
         publishPosition()
         trackTopicPlace()
         trackSummaryPlace()
+    }
+
+    /// The bottom inset, followed from where it is to `target` on the
+    /// composer's own spring — `Motion.glassMorph`, the plate's — one display
+    /// frame at a time, the transcript held at its foot throughout.
+    private func glideBottomInset(to target: CGFloat) {
+        guard let scrollView else { return }
+        insetGlide = (from: scrollView.contentInsets.bottom, to: target, start: CACurrentMediaTime())
+        guard insetGlideLink == nil else { return }
+        let link = scrollView.displayLink(target: self, selector: #selector(stepInsetGlide(_:)))
+        link.add(to: .main, forMode: .common)
+        insetGlideLink = link
+    }
+
+    @objc private func stepInsetGlide(_ link: CADisplayLink) {
+        guard let glide = insetGlide, let scrollView, !isTornDown else {
+            stopInsetGlide()
+            return
+        }
+        let spring = Motion.glassMorph.spring
+        let elapsed = link.targetTimestamp - glide.start
+        let done = elapsed >= spring.settlingDuration
+        let progress = done ? 1 : spring.value(target: 1.0, time: elapsed)
+        applyInsets(top: scrollView.contentInsets.top, bottom: glide.from + (glide.to - glide.from) * progress)
+        if done { stopInsetGlide() }
+    }
+
+    private func stopInsetGlide() {
+        insetGlideLink?.invalidate()
+        insetGlideLink = nil
+        insetGlide = nil
+    }
+
+    /// Sets both insets and keeps a reader at the foot there.
+    private func applyInsets(top topInset: CGFloat, bottom bottomInset: CGFloat) {
+        guard let scrollView, !isTornDown else { return }
+        // Set on the SCROLL VIEW, not reserved in the canvas: an inset keeps
+        // the content scrollable under the bar, where extra canvas padding
+        // would leave dead space that can never hold a message.
+        //
+        // **The top one is the whole scroll edge.** A scroll view that runs
+        // under the toolbar with a top inset gets AppKit's own scroll pocket
+        // across that inset — the soft blur the system draws wherever content
+        // passes under a window's chrome. Nothing here draws it or gates it:
+        // over an empty ground it is invisible, and over rows it is the edge.
+        // Stopped at the toolbar's foot instead, the transcript had nothing
+        // passing under the bar and there was no edge to draw.
+        //
+        // The bottom arithmetic elsewhere in this file is unaffected: an
+        // `NSClipView` scrolled fully down still sits at
+        // `documentHeight + insets.bottom - viewportHeight`, and a top inset
+        // moves the *minimum* to `-insets.top` rather than the maximum.
+        scrollView.contentInsets = NSEdgeInsets(
+            top: max(0, topInset), left: 0, bottom: max(0, bottomInset), right: 0
+        )
+        scrollView.scrollerInsets = NSEdgeInsets(
+            top: max(0, topInset), left: 0, bottom: max(0, bottomInset), right: 0
+        )
+        // The scrollable range just changed by the delta. A reader sitting
+        // at the bottom has to stay there, or growing the composer by a line
+        // silently scrolls the newest message out from under them.
+        // A short channel's rows sit on the composer, so the band they
+        // sit in just moved under them.
+        refreshLeadingSpace()
+        if isNearBottom, self.reachesPresent, !isTornDown { scrollToBottom() }
+        // A face riding the bottom sits on the composer's new top.
+        canvas?.placeStickyFaces()
     }
 
     /// Puts the leaving conversation's layouts aside and takes the arriving
@@ -1590,6 +1656,9 @@ final class TimelineCoordinator: NSObject {
             if grew, isNearBottom, reachesPresent, !canvas.isScrolling { scrollToBottom() }
         }
         positionCanvas()
+        // In the scroll's own transaction, so a riding face never trails its
+        // bubbles by a frame.
+        canvas.placeStickyFaces()
         reconcileUserCards()
         // **Pages go the way the reader is travelling.** A trim leaves the far
         // edge of the window a page away, well inside the prefetch distance —

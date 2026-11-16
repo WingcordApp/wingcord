@@ -19,7 +19,12 @@ import SwiftUI
 /// Both arrangements are `alignment: .bottom`, so a composer grown to three
 /// lines keeps its controls on the last one rather than centring them against a
 /// paragraph.
-struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View, Strip: View>: View {
+///
+/// **What the message is and what it carries live inside the same glass**
+/// (Alex, 2026-11-16, screenshots 29–31): a reply's or an edit's header and the
+/// staged files stack over the words, hairlines between, and the plate grows
+/// upward to hold them — one shape, never a strip floating over a pill.
+struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View, Strip: View, Accessories: View>: View {
     var shape: ChromeShape
     @ViewBuilder var leading: Leading
     @ViewBuilder var input: Input
@@ -27,6 +32,8 @@ struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View, St
     @ViewBuilder var send: Send
     /// A voice message's waveform: behind the field and the controls, the width of both.
     @ViewBuilder var strip: Strip
+    /// The header and the tray, over the words. See `ComposerSection`.
+    @ViewBuilder var accessories: Accessories
 
     /// The plate's corner.
     ///
@@ -42,30 +49,36 @@ struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View, St
 
     var body: some View {
         if shape.enclosesFlankingControls {
-            HStack(alignment: .bottom, spacing: Spacing.hair) {
-                leading
+            VStack(spacing: 0) {
+                accessories
                 HStack(alignment: .bottom, spacing: Spacing.hair) {
-                    input
-                    controls
+                    leading
+                    HStack(alignment: .bottom, spacing: Spacing.hair) {
+                        input
+                        controls
+                    }
+                    .background(alignment: .bottom) { strip }
+                    ComposerSendDivider()
+                    send
                 }
-                .background(alignment: .bottom) { strip }
-                ComposerSendDivider()
-                send
+                .padding(.horizontal, Metrics.composerControlInset)
             }
-            .padding(.horizontal, Metrics.composerControlInset)
             .glassEffect(.regular, in: .rect(cornerRadius: corner))
         } else {
             HStack(alignment: .bottom, spacing: Spacing.base) {
                 leading
-                HStack(alignment: .bottom, spacing: Spacing.hair) {
-                    input
-                    controls
+                VStack(spacing: 0) {
+                    accessories
+                    HStack(alignment: .bottom, spacing: Spacing.hair) {
+                        input
+                        controls
+                    }
+                    .background(alignment: .bottom) { strip }
+                    // The field's own inset. The trailing side is the last control's
+                    // air, so both of its sides match.
+                    .padding(.leading, Spacing.snug)
+                    .padding(.trailing, Metrics.composerControlInset)
                 }
-                .background(alignment: .bottom) { strip }
-                // The field's own inset. The trailing side is the last control's
-                // air, so both of its sides match.
-                .padding(.leading, Spacing.snug)
-                .padding(.trailing, Metrics.composerControlInset)
                 .glassEffect(.regular, in: .rect(cornerRadius: corner))
                 send
             }
@@ -98,25 +111,31 @@ private struct ComposerSendDivider: View {
 /// reason: a radius that tracked a three-line field would round it into a
 /// lozenge. Bottom-aligned, so a grown field keeps its controls on the last
 /// line.
-struct MessagesComposerChrome<Leading: View, Input: View, Trailing: View, Strip: View>: View {
+struct MessagesComposerChrome<Leading: View, Input: View, Trailing: View, Strip: View, Accessories: View>: View {
     @ViewBuilder var leading: Leading
     @ViewBuilder var input: Input
     @ViewBuilder var trailing: Trailing
     /// A voice message's waveform: behind the words and the controls, the width of both.
     @ViewBuilder var strip: Strip
+    /// The header and the tray, over the words, inside the capsule — which
+    /// keeps its corner as it grows, so it opens into a rounded panel.
+    @ViewBuilder var accessories: Accessories
 
     var body: some View {
         HStack(alignment: .bottom, spacing: Spacing.base) {
             leading
-            HStack(alignment: .bottom, spacing: Spacing.hair) {
-                input
-                trailing
+            VStack(spacing: 0) {
+                accessories
+                HStack(alignment: .bottom, spacing: Spacing.hair) {
+                    input
+                    trailing
+                }
+                .background(alignment: .bottom) { strip }
+                // The words start a capsule's corner in; the send disc sits as far
+                // from the end as from the top and bottom.
+                .padding(.leading, Metrics.composerTextInset)
+                .padding(.trailing, MessagesSendButton.inset)
             }
-            .background(alignment: .bottom) { strip }
-            // The words start a capsule's corner in; the send disc sits as far
-            // from the end as from the top and bottom.
-            .padding(.leading, Spacing.snug + Spacing.hair)
-            .padding(.trailing, MessagesSendButton.inset)
             .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerControlHeight / 2))
         }
     }

@@ -2329,6 +2329,12 @@ enum DemoFixtures {
     /// Near the foot, with the `ansi` blocks: a source file and a README, for
     /// the text preview's highlighting and Render Markdown.
     private static let textFilesIndex = 209
+    /// Near the foot too: an app's paged card with a button in every colour
+    /// Discord has, and a link's card whose picture is narrower than its words
+    /// (Alex, 2026-11-16: the card hugs the picture, as Discord's does).
+    private static let buttonColorsIndex = 216
+    private static let linkCardIndex = 218
+    private static let linkCardURL = "https://wingcord.app/"
 
     /// The GIF that link unfurls into. A real file on disk — see `DemoMedia` —
     /// so the row actually animates rather than reserving a box for a 404.
@@ -2336,8 +2342,70 @@ enum DemoFixtures {
         DemoMedia.attachments().first { $0.filename.hasSuffix(".gif") }?.url ?? ""
     }
 
+    /// Every button colour: Discord's brand, green, red and grey, a link, and a
+    /// disabled one, with emoji where a paging app puts them.
+    private static var buttonColorsPayload: MessagePayload {
+        MessagePayload(
+            embeds: [Embed(
+                title: "Command Usage Counts",
+                description: "**caption**: 36783440\n**gif**: 16344681\n**avatar**: 5479787\n"
+                    + "**speed**: 4695606\n**cat**: 3498490",
+                colorValue: 0xFF_00_00,
+                author: Embed.Author(name: "Mika"),
+                footer: Embed.Footer(text: "Page 1 of 9")
+            )],
+            components: [
+                ActionRow(components: [
+                    MessageComponent(
+                        id: "back", label: "Back", kind: .action(customID: "back"), style: .primary,
+                        emoji: EmojiRef(name: "\u{25C0}\u{FE0F}")
+                    ),
+                    MessageComponent(
+                        id: "forward", label: "Forward", kind: .action(customID: "forward"), style: .primary,
+                        emoji: EmojiRef(name: "\u{25B6}\u{FE0F}")
+                    ),
+                    MessageComponent(
+                        id: "delete", label: "Delete", kind: .action(customID: "delete"), style: .danger,
+                        emoji: EmojiRef(name: "\u{1F5D1}\u{FE0F}")
+                    ),
+                ]),
+                ActionRow(components: [
+                    MessageComponent(id: "approve", label: "Approve", kind: .action(customID: "approve"), style: .success),
+                    MessageComponent(id: "details", label: "Details", kind: .action(customID: "details"), style: .secondary),
+                    MessageComponent(id: "docs", label: "Docs", kind: .link("https://wingcord.app/"), style: .link),
+                    MessageComponent(
+                        id: "expired", label: "Expired", kind: .action(customID: "expired"), style: .primary,
+                        isDisabled: true
+                    ),
+                ]),
+            ]
+        )
+    }
+
+    /// A site's card: words wider than its picture, and four link buttons.
+    private static var linkCardPayload: MessagePayload {
+        let still = DemoMedia.attachments().first { $0.filename.hasSuffix(".png") }
+        return MessagePayload(
+            embeds: [Embed(
+                title: "Wingcord",
+                kind: "link",
+                description: "A Discord client for the Mac, written in Swift: native menus and keyboard "
+                    + "shortcuts, Liquid Glass, conversations in bubbles, and calls with screen sharing. "
+                    + "Free and open source, in beta for macOS 27 and later.",
+                url: linkCardURL,
+                colorValue: 0xF0_94_1F,
+                image: still.map { Embed.Media(url: $0.url, proxyURL: $0.proxyURL, width: 2400, height: 1500) }
+            )],
+            components: [ActionRow(components: ["Download", "Website", "GitHub", "Discord"].map {
+                MessageComponent(id: $0, label: $0, kind: .link(linkCardURL), style: .link)
+            })]
+        )
+    }
+
     private static func content(at index: Int) -> String {
         if index == bareImageLinkIndex { return bareImageLinkURL }
+        if index == linkCardIndex { return linkCardURL }
+        if index == buttonColorsIndex { return "" }
         if let ansi = ansiBodies[index] { return ansi }
         return switch index % 23 {
         case 7: "🎉"
@@ -2482,6 +2550,8 @@ enum DemoFixtures {
         if index == textFilesIndex {
             return MessagePayload(attachments: DemoMedia.textFiles())
         }
+        if index == buttonColorsIndex { return buttonColorsPayload }
+        if index == linkCardIndex { return linkCardPayload }
         return switch index % 31 {
         case 12:
             MessagePayload(

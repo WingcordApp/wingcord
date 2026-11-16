@@ -7,6 +7,8 @@ struct LeaderboardCardView: View {
     /// How many leaders the card shows; the sheet shows them all.
     var rowLimit: Int?
 
+    @Environment(AppModel.self) private var model
+
     private var rows: [LeaderboardCardModel.Row] {
         guard let rowLimit, board.rows.count > rowLimit else { return board.rows }
         let leaders = Array(board.rows.prefix(rowLimit))
@@ -21,7 +23,16 @@ struct LeaderboardCardView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(spacing: 2) {
                 ForEach(rows) { row in
-                    LeaderboardRowView(row: row)
+                    // A place opens the person's profile on its Activity tab,
+                    // as Discord's row does (`openUserProfileModal`, RECENT_ACTIVITY).
+                    Button {
+                        model.openProfile(row.id, anchor: .zero, depth: .full, tab: .activity)
+                    } label: {
+                        LeaderboardRowView(row: row)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(row.isHidden)
+                    .accessibilityHint(Text("Opens their profile"))
                 }
                 if let unranked = board.unranked {
                     LeaderboardUnrankedRow(unranked: unranked)

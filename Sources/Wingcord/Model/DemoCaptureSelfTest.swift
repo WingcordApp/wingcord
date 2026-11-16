@@ -86,12 +86,46 @@ enum DemoCaptureSelfTest {
             let mode = arguments.indices.contains(index + 1) ? arguments[index + 1] : "both"
             Task { await callFullScreen(model: model, mode: mode) }
         }
+        // The composer through its states on a loop — a reply, then files,
+        // then an edit — to watch the plate grow and shrink with no keystroke
+        // reaching whatever is in front (Alex, 2026-11-16).
+        if arguments.contains("--composer-tour") {
+            Task { await composerTour(model: model) }
+        }
         // The bar itself, up at launch, to be looked at — `--overlay`'s idea.
         if arguments.contains("--capture-bar") {
             Task {
                 try? await Task.sleep(for: .seconds(1))
                 model.capture.showBar()
             }
+        }
+    }
+
+    @MainActor
+    private static func composerTour(model: AppModel) async {
+        try? await Task.sleep(for: .seconds(3))
+        for _ in 0 ..< 6 {
+            guard let channelID = model.selectedChannelID,
+                  let messages = model.messages(in: channelID)?.messages
+            else { return }
+            let theirs = messages.last { $0.authorID != model.currentUserID }
+            let mine = messages.last { $0.authorID == model.currentUserID }
+            if let theirs { model.beginReply(to: theirs.id, in: channelID) }
+            try? await Task.sleep(for: .seconds(2))
+            let files = DemoMedia.attachments().prefix(2).compactMap { URL(string: $0.url) }
+            model.stageAttachments(Array(files), in: channelID)
+            try? await Task.sleep(for: .seconds(2.5))
+            model.cancelReply(in: channelID)
+            try? await Task.sleep(for: .seconds(2))
+            for attachment in model.messages(in: channelID)?.attachments ?? [] {
+                model.removeAttachment(attachment.id, in: channelID)
+                try? await Task.sleep(for: .seconds(0.8))
+            }
+            try? await Task.sleep(for: .seconds(1.5))
+            if let mine { model.beginEdit(of: mine.id, in: channelID) }
+            try? await Task.sleep(for: .seconds(2.5))
+            model.cancelEdit(in: channelID)
+            try? await Task.sleep(for: .seconds(2))
         }
     }
 

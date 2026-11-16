@@ -105,8 +105,17 @@ extension SessionController {
             }
         }
         requestServerHubMembers(people, in: guildID)
-        let unknownGames = Array(Set(gameIDs)).filter { model.games[$0] == nil }
-        if !unknownGames.isEmpty { await loadGames(ids: unknownGames) }
+        // **Applications first, then their games** — Discord's `eh`: the
+        // widgets name *application* ids; the application gives the name and
+        // the icon, and its canonical game (itself for a game, else the game
+        // it links) gives the box art. Asking `/games` with the application
+        // ids alone left every game whose id differs as "Unknown game" with
+        // an empty icon (Alex's leaderboard, 2026-11-16).
+        let applications = Array(Set(gameIDs))
+        guard !applications.isEmpty else { return }
+        await loadWidgetApplications(ids: applications)
+        let canonical = Set(applications.map { model.canonicalGameID(for: $0) }).filter { model.games[$0] == nil }
+        if !canonical.isEmpty { await loadGames(ids: Array(canonical)) }
     }
 
     /// Asks the gateway about people the hub names whom this client doesn't
@@ -241,7 +250,7 @@ extension SessionController {
             model.reportActionFailure("The whiteboard isn\u{2019}t available right now.")
             return
         }
-        await launchActivity(app, in: channelID, section: "guild_space")
+        await launchActivity(app, in: channelID, section: "guild_space", guildID: guildID)
     }
 
     /// Who may draw: Use Activities denied to @everyone in the hub's channel and

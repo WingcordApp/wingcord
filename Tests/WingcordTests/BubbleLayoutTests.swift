@@ -149,6 +149,44 @@ struct BubbleLayoutTests {
         #expect(badge.minX < ownBubble.rect.minX && badge.maxX > ownBubble.rect.minX)
     }
 
+    @Test("Under its own caption a bubble keeps its place, its tapbacks rising beside the name")
+    func tapbacksBesideCaption() throws {
+        let sentence = "a sentence of some length"
+        let plain = try #require(rows([(Self.them, sentence)]).first?.bubbles?.bubble)
+        let row = try #require(rows([reacted(Self.them, sentence, [Self.thumbs(1)])]).first)
+        let bubble = try #require(row.bubbles?.bubble)
+        let badge = try #require(row.reactions.first?.rect)
+        // The same distance from the name as a bubble with nothing on it…
+        #expect(bubble.rect.minY == plain.rect.minY)
+        // …the badge still half above the bubble, beside the name and clear
+        // of it, and inside the row.
+        #expect(badge.minY < bubble.rect.minY)
+        #expect(badge.minX > row.authorRect.maxX + BubbleMetrics.tapbackCaptionClearance)
+        #expect(badge.minY >= 0)
+
+        // A bubble narrower than its name: the badge would land on the name,
+        // so the bubble steps down as before.
+        let narrowPlain = try #require(rows([(Self.them, "a")]).first?.bubbles?.bubble)
+        let narrow = try #require(rows([reacted(Self.them, "a", [Self.thumbs(1)])]).first?.bubbles?.bubble)
+        #expect(narrow.rect.minY == narrowPlain.rect.minY + TimelineMetrics.tapbackRise)
+
+        // Under another bubble of the run there is no caption: it steps down,
+        // so the badge doesn't land on the bubble above.
+        let run = [
+            Message(id: MessageID(rawValue: 1), channelID: ChannelID(rawValue: 9), authorID: Self.them, content: sentence),
+            Message(
+                id: MessageID(rawValue: 2), channelID: ChannelID(rawValue: 9), authorID: Self.them, content: sentence,
+                payload: MessagePayload(reactions: [Self.thumbs(1)])
+            ),
+        ]
+        let laid = rows(run)
+        let second = try #require(laid.last)
+        let secondBubble = try #require(second.bubbles?.bubble)
+        let secondBadge = try #require(second.reactions.first?.rect)
+        #expect(secondBadge.minY >= 0)
+        #expect(secondBubble.rect.minY >= TimelineMetrics.tapbackRise)
+    }
+
     @Test("A gap is cut round each tapback into the bubble it rides")
     func tapbackNotch() throws {
         let row = try #require(rows([reacted(Self.them, "a sentence of some length", [Self.thumbs(1)])]).first)
