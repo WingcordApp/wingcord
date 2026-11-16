@@ -179,6 +179,13 @@ extension AppModel {
                     resolve(named, into: &result)
                 }
             }
+            // A Server Hub line names the leader, the one overtaken, the top
+            // listener — each only where this client knows them.
+            if let hub = message.message.guildSpaceData {
+                for named in hub.namedUserIDs where users[named] != nil {
+                    resolve(named, into: &result)
+                }
+            }
         }
         return result
 
@@ -339,7 +346,10 @@ extension AppModel {
             )
         }
         table.guildNames.reserveCapacity(guilds.count)
-        for (guildID, guild) in guilds { table.guildNames[guildID] = guild.name }
+        for (guildID, guild) in guilds {
+            table.guildNames[guildID] = guild.name
+            if let hash = guild.iconHash { table.guildIconHashes[guildID] = hash }
+        }
         linkTableCache = (key, table)
         return table
     }
@@ -445,6 +455,7 @@ extension AppModel {
         let table = linkChannelTable()
         context.channels = table.channels
         context.guildNames = table.guildNames
+        context.guildIconHashes = table.guildIconHashes
 
         // **Every server's roles, keyed by id** — Discord resolves a role
         // mention against the message's own server, and a role id belongs to
@@ -604,6 +615,7 @@ struct LinkTableKey: Hashable, Sendable {
 struct LinkChannelTable: Sendable {
     var channels: [ChannelID: LinkChannel] = [:]
     var guildNames: [GuildID: String] = [:]
+    var guildIconHashes: [GuildID: String] = [:]
 }
 
 struct TimelineMemoKey: Hashable, Sendable {

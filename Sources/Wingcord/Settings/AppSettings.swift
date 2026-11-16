@@ -314,6 +314,16 @@ final class AppSettings {
         }
     }
 
+    /// Servers' Server Hubs (docs/BETA2.md, phase 9): Discord's page of
+    /// widgets, shown where Discord has given a server one. Off until the
+    /// reader turns it on — it is Discord's experiment, not yet everyone's.
+    var showsServerHub = false {
+        didSet {
+            guard showsServerHub != oldValue else { return }
+            defaults.set(showsServerHub, forKey: Key.showsServerHub)
+        }
+    }
+
     /// Which card a voice invite gets: Discord's, or its channel-row variant —
     /// as Discord's experiment puts each server, or always one of them.
     var voiceInviteCardStyle: VoiceInviteCardStyle = .asDiscordDecides {
@@ -866,6 +876,40 @@ final class AppSettings {
             guard storedGroupSpacing != oldValue else { return }
             defaults.set(storedGroupSpacing, forKey: Key.groupSpacing)
             notifyPresentation()
+        }
+    }
+
+    /// The channel list's air between rows, in points, on either side of the
+    /// system's own (Alex, 2026-11-16: "an option to adjust the spacing between
+    /// channels and categories in the channel list"). Negative is denser than
+    /// the system sidebar, positive roomier.
+    var channelSpacing: Double {
+        get { storedChannelSpacing }
+        set { storedChannelSpacing = min(Self.channelSpacingRange.upperBound, max(Self.channelSpacingRange.lowerBound, newValue)) }
+    }
+
+    static let channelSpacingRange: ClosedRange<Double> = -6...12
+
+    private var storedChannelSpacing: Double = 0 {
+        didSet {
+            guard storedChannelSpacing != oldValue else { return }
+            defaults.set(storedChannelSpacing, forKey: Key.channelSpacing)
+        }
+    }
+
+    /// The air above each category heading, in points, on top of the list's
+    /// own — the other half of the same ask.
+    var categorySpacing: Double {
+        get { storedCategorySpacing }
+        set { storedCategorySpacing = min(Self.categorySpacingRange.upperBound, max(Self.categorySpacingRange.lowerBound, newValue)) }
+    }
+
+    static let categorySpacingRange: ClosedRange<Double> = -4...24
+
+    private var storedCategorySpacing: Double = 0 {
+        didSet {
+            guard storedCategorySpacing != oldValue else { return }
+            defaults.set(storedCategorySpacing, forKey: Key.categorySpacing)
         }
     }
 
@@ -1633,6 +1677,8 @@ final class AppSettings {
         announcesNewMessages =
             defaults.object(forKey: Key.announcesNewMessages) as? Bool ?? false
         storedGroupSpacing = defaults.object(forKey: Key.groupSpacing) as? Double ?? 0
+        storedChannelSpacing = defaults.object(forKey: Key.channelSpacing) as? Double ?? 0
+        storedCategorySpacing = defaults.object(forKey: Key.categorySpacing) as? Double ?? 0
         showsSeconds = defaults.object(forKey: Key.showsSeconds) as? Bool ?? false
         alwaysShowsTimestamps = defaults.object(forKey: Key.alwaysShowsTimestamps) as? Bool
             ?? false
@@ -1723,6 +1769,7 @@ final class AppSettings {
         nowPlayingFindsCovers = defaults.object(forKey: Key.nowPlayingFindsCovers) as? Bool ?? true
         blockedRPCApplications = defaults.dictionary(forKey: Key.blockedRPCApplications) as? [String: String] ?? [:]
         drawsCustomTypingIndicators = defaults.object(forKey: Key.drawsCustomTypingIndicators) as? Bool ?? true
+        showsServerHub = defaults.object(forKey: Key.showsServerHub) as? Bool ?? false
         voiceInviteCardStyle = defaults.string(forKey: Key.voiceInviteCardStyle)
             .flatMap(VoiceInviteCardStyle.init(rawValue:)) ?? .asDiscordDecides
         customPresences = defaults.data(forKey: Key.customPresences)
@@ -1866,6 +1913,8 @@ final class AppSettings {
         static let mutedSpokenDetails = "accessibility.mutedSpokenDetails"
         static let announcesNewMessages = "accessibility.announcesNewMessages"
         static let groupSpacing = "appearance.messageGroupSpacing"
+        static let channelSpacing = "appearance.channelSpacing"
+        static let categorySpacing = "appearance.categorySpacing"
         static let showsSeconds = "chat.showsSeconds"
         static let alwaysShowsTimestamps = "chat.alwaysShowsTimestamps"
         static let hidesMessageTimes = "chat.hidesMessageTimes"
@@ -1941,6 +1990,7 @@ final class AppSettings {
         static let nowPlayingFindsCovers = "nowPlaying.findsCovers"
         static let blockedRPCApplications = "activity.blockedRPCApplications"
         static let drawsCustomTypingIndicators = "previews.customTypingIndicators"
+        static let showsServerHub = "previews.serverHub"
         static let voiceInviteCardStyle = "previews.voiceInviteCardStyle"
         static let silentTyping = "silentTyping.enabled"
         static let silentTypingShowsIcon = "silentTyping.showIcon"

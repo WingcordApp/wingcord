@@ -28,14 +28,38 @@ extension AppModel {
         voice.join(channelID: channelID, guildID: guildID)
     }
 
-    /// Starts a call in a direct message and rings the other side.
+    /// Starts a call in a direct message and rings the other side — or, when
+    /// somebody is already in it, joins it and rings nobody.
+    ///
+    /// **Decided here, not by each control** (#14, "it has to recall every time
+    /// you want to join a vc that is already active"). The header's button
+    /// asked first, but the shortcut, the menu bar, the conversation's menu
+    /// and a profile's Call came straight here and rang a phone in the ear of
+    /// everybody already on the call.
     func startCall(in channelID: ChannelID) {
+        if isDirectCallRunning(in: channelID) {
+            joinCall(in: channelID)
+            return
+        }
         voice.startDirectCall(channelID: channelID)
     }
 
-    /// Discord's Start Video Call: the same call, with the camera on.
+    /// Discord's Start Video Call: the same call, with the camera on — joined
+    /// without ringing when it is already running.
     func startVideoCall(in channelID: ChannelID) {
+        if isDirectCallRunning(in: channelID) {
+            voice.joinDirectCall(channelID: channelID, withCamera: true)
+            return
+        }
         voice.startDirectCall(channelID: channelID, withCamera: true)
+    }
+
+    /// Whether somebody other than the reader is sitting in a conversation's
+    /// call. Read from the voice states rather than from `directCalls`, which
+    /// survives the last person leaving — the same rule the header draws.
+    func isDirectCallRunning(in channelID: ChannelID) -> Bool {
+        connectedVoiceChannelID != channelID
+            && voiceStates.values.contains { $0.channelID == channelID && $0.userID != currentUserID }
     }
 
     /// Joins a direct-message call that is already running.

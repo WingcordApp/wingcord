@@ -1,0 +1,46 @@
+import Foundation
+import WingcordCore
+
+/// A leaderboard, resolved for drawing: names, faces, games and values.
+struct LeaderboardCardModel: Equatable {
+    var stat: GuildSpaceLeaderboard.Stat
+    /// The top twenty, then the reader where they rank below them.
+    var rows: [Row]
+    /// The reader, when they aren't on the board at all.
+    var unranked: Unranked?
+    var lastUpdated: Date?
+
+    struct Row: Equatable, Identifiable {
+        var id: UserID
+        var rank: Int
+        var name: String
+        var nameColor: UInt32?
+        var avatarURL: URL?
+        var monogram: String
+        /// "Last played Fortnite".
+        var lastPlayed: String?
+        var value: String
+        /// The time behind a count of days or games.
+        var detail: String?
+        var valueSymbol: String
+        var games: [Game]
+        /// Games past the ones shown: "+3".
+        var moreGames: Int
+        var isReader: Bool
+        /// Blocked or ignored: drawn without a face or a game.
+        var isHidden: Bool
+    }
+
+    struct Game: Equatable, Identifiable {
+        var id: ApplicationID
+        var name: String
+        var iconURL: URL?
+    }
+
+    struct Unranked: Equatable {
+        var name: String
+        var avatarURL: URL?
+        var monogram: String
+        var message: String
+    }
+}

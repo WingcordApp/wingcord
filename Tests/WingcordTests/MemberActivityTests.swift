@@ -116,3 +116,29 @@ struct MemberActivityTests {
         #expect(block.cardIndex(at: block.height + 1) == nil)
     }
 }
+
+/// The list's height counts the Activity section above the rows (Alex,
+/// 2026-11-16: "the offline users go past overscroll and I can't see them").
+@MainActor
+struct MemberListHeightTests {
+    @Test("The document holds the Activity section and every row under it")
+    func heightIncludesActivity() {
+        let canvas = MemberListCanvas(style: MessageTextStyle.current())
+        canvas.frame = CGRect(x: 0, y: 0, width: 280, height: 600)
+        var roster = Roster(identity: "1:everyone", sections: [], members: [:], rowCount: 0)
+        roster.sections.append(RosterSection(
+            key: .role(RoleID(rawValue: 1)), title: "Offline", countText: "3", index: 0, count: 3
+        ))
+        roster.rowCount = 4
+        let rowsOnly = canvas.apply(roster: roster)
+        let block = MemberActivityBlock(count: 0, isExpanded: false, isHidden: false, cards: [])
+        canvas.apply(activity: block)
+        let withActivity = canvas.apply(roster: roster)
+        // The section on top, and the hairline its arrival puts over the first
+        // heading (`RosterLayout.isSeparated`).
+        let hairline = MemberSectionGeometry.separatedHeight - MemberSectionGeometry.height
+        #expect(withActivity == rowsOnly + block.height + hairline)
+        // The last row ends inside the document, where a scroll can reach it.
+        #expect(canvas.rowFrame(at: 3).maxY <= withActivity)
+    }
+}

@@ -103,6 +103,8 @@ final class MemberListCoordinator: NSObject {
     private var layoutWidth: CGFloat = 0
     private var scrollBeganObserver: NSObjectProtocol?
     private var scrollEndedObserver: NSObjectProtocol?
+    /// `ImageStore.picturesMayRetry` — see the transcript's.
+    private var retryObserver: NSObjectProtocol?
     private var prefetchTask: Task<Void, Never>?
     private var liveScrollTimeout: Task<Void, Never>?
     /// Whether a scroll gesture (or its momentum) is in progress, by the scroll
@@ -261,6 +263,13 @@ final class MemberListCoordinator: NSObject {
                 if self.motionSettle == nil { self.setScrolling(false) }
             }
         }
+        retryObserver = center.addObserver(
+            forName: ImageStore.picturesMayRetry,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.schedulePrefetch() }
+        }
     }
 
     func setAnimatesPlate(_ animates: Bool) {
@@ -294,9 +303,10 @@ final class MemberListCoordinator: NSObject {
         rowReport?.cancel()
         rowReport = nil
         let center = NotificationCenter.default
-        for observer in [boundsObserver, frameObserver, scrollBeganObserver, scrollEndedObserver] {
+        for observer in [boundsObserver, frameObserver, scrollBeganObserver, scrollEndedObserver, retryObserver] {
             if let observer { center.removeObserver(observer) }
         }
+        retryObserver = nil
         boundsObserver = nil
         frameObserver = nil
         scrollBeganObserver = nil

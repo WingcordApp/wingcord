@@ -53,6 +53,37 @@ nonisolated enum SlideRule {
         guard travel > 0 else { return 1 }
         return Double(max(0, min(1, 1 - position / (travel * 0.72))))
     }
+
+    /// How far a pull may stretch past home before it stops giving.
+    static let homeGive: CGFloat = 10
+
+    /// Where a drag puts the knob for a pointer that wants `wanted`.
+    ///
+    /// **A hard stop at the end**, as the system's own slider has (#6,
+    /// WC-4AC1). The pull used to stretch past the end by a quarter of the
+    /// track, and the knob sailed out of the bar it was supposed to be riding
+    /// in. Home keeps a little give, so a pull the wrong way still answers.
+    static func dragPosition(wanted: CGFloat, travel: CGFloat) -> CGFloat {
+        guard travel > 0 else { return 0 }
+        if wanted >= travel { return travel }
+        return Motion.clampWithResistance(wanted, to: 0...travel, limit: homeGive)
+    }
+
+    /// How long the knob takes to settle `distance` points after a release at
+    /// `velocity` points per second: what an ease-out needs for its first
+    /// moment to move at about the release's speed, within limits that keep a
+    /// slow release from crawling and a fling from snapping.
+    ///
+    /// **An ease-out rather than a spring**, because an ease-out cannot pass
+    /// its target: the spring this used to land on carried the knob past the
+    /// end of the bar again after every throw.
+    static func settleDuration(distance: CGFloat, velocity: CGFloat) -> Double {
+        let distance = abs(distance)
+        guard distance > 0.5 else { return 0.12 }
+        // An ease-out (0, 0, 0.58, 1) starts at about 1.7 × its average speed.
+        let speed = max(abs(velocity), 400)
+        return Double(min(0.32, max(0.12, 1.7 * distance / speed)))
+    }
 }
 
 /// The control's sizes. Outside the view, which is generic: Swift has no static
@@ -224,7 +255,7 @@ struct SlideToConfirm<Knob: View>: View {
                 guard case .knob(let from) = grab else { return }
                 lastMovement = value.time
                 let wanted = from + value.translation.width
-                let next = Motion.clampWithResistance(wanted, to: 0...travel, limit: max(travel, 1) * 0.25)
+                let next = SlideRule.dragPosition(wanted: wanted, travel: travel)
                 if isSettling {
                     // Caught in flight: on from where it appears, not a jump.
                     isSettling = false
@@ -273,7 +304,7 @@ struct SlideToConfirm<Knob: View>: View {
     private func commit(velocity: CGFloat) {
         isCommitted = true
         Haptics.pop()
-        withAnimation(motion.handoff(velocity: max(velocity, 0), over: travel - position)) {
+        withAnimation(settle(over: travel - position, velocity: velocity)) {
             position = travel
         }
         confirm()
@@ -283,12 +314,18 @@ struct SlideToConfirm<Knob: View>: View {
         isSettling = true
         let animation = motion.reduceMotion
             ? Motion.reposition.reduced
-            : Motion.reposition.handoff(velocity: velocity, over: -position)
+            : settle(over: position, velocity: velocity)
         withAnimation(animation, completionCriteria: .logicallyComplete) {
             position = 0
         } completion: {
             isSettling = false
         }
+    }
+
+    /// An ease-out that starts at about the release's speed and never passes
+    /// where it is going — see `SlideRule.settleDuration`.
+    private func settle(over distance: CGFloat, velocity: CGFloat) -> Animation {
+        .timingCurve(0, 0, 0.58, 1, duration: SlideRule.settleDuration(distance: distance, velocity: velocity))
     }
 
     /// A plain click: out a little and back, the shape of the gesture. Under
@@ -299,7 +336,8 @@ struct SlideToConfirm<Knob: View>: View {
         withAnimation(Motion.hover.animation, completionCriteria: .logicallyComplete) {
             position = SlideMetrics.nudge
         } completion: {
-            withAnimation(Motion.momentum.animation, completionCriteria: .logicallyComplete) {
+            // Critically damped from rest: home, and not a point past it.
+            withAnimation(Motion.reposition.animation, completionCriteria: .logicallyComplete) {
                 position = 0
             } completion: {
                 isSettling = false

@@ -48,6 +48,9 @@ nonisolated struct SidebarBannerLayout: Equatable {
     /// Where the header's title starts — past the rail, or past the traffic
     /// lights on a page with no rail.
     var titleLeading: CGFloat = Self.headerTitleLeading
+    /// Whether the header's sidebar toggle has folded into the + menu, which
+    /// gives its width back to the name (`ShellLayout.foldsSidebarToggle`).
+    var foldsSidebarToggle: Bool = false
 
     // MARK: The two constants
 
@@ -185,13 +188,12 @@ nonisolated struct SidebarBannerLayout: Equatable {
     /// traffic lights, which end about where the rail does.
     static let headerTitleLeading: CGFloat = 20
 
-    /// What the header's trailing controls take: the toggle, the create menu,
-    /// the gaps between them and the row's own trailing padding.
-    private static let headerTrailingReserve: CGFloat =
-        ShellMetrics.headerControl + 56 + Spacing.base * 2 + 10
-
-    /// The widest the header's server name may draw before it truncates.
+    /// The widest the header's server name may draw before it truncates: what
+    /// the trailing controls leave (`ShellMetrics.headerTrailingReserve`), and
+    /// the toggle's width as well once it has folded away.
     var toolbarTitleWidth: CGFloat {
-        max(Metrics.control, columnWidth - titleLeading - Self.headerTrailingReserve)
+        let reserve = ShellMetrics.headerTrailingReserve
+            - (foldsSidebarToggle ? ShellMetrics.foldedToggleSaving : 0)
+        return max(Metrics.control, columnWidth - titleLeading - reserve)
     }
 }

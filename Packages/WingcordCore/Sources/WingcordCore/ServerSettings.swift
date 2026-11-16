@@ -224,6 +224,18 @@ public struct SystemChannelFlags: OptionSet, Hashable, Sendable {
     public static let suppressRoleSubscriptionPurchaseNotificationReplies = SystemChannelFlags(rawValue: 1 << 5)
     /// "A voice hangout has started" — Discord's `512`.
     public static let suppressVoiceSessionNotifications = SystemChannelFlags(rawValue: 1 << 9)
+    /// The Server Hub's three — Discord's `1024`, `2048` and `4096`: the
+    /// leaderboard's turns, a busy whiteboard and the music's new tops.
+    public static let suppressGamingLeaderboardNotifications = SystemChannelFlags(rawValue: 1 << 10)
+    public static let suppressGuildSpaceWhiteboardNotifications = SystemChannelFlags(rawValue: 1 << 11)
+    public static let suppressGuildSpaceMusicNotifications = SystemChannelFlags(rawValue: 1 << 12)
+
+    /// The Server Hub's rows, in Discord's order and words (`733413091c7fb513`).
+    public static let serverHubRows: [(flag: SystemChannelFlags, label: String)] = [
+        (.suppressGamingLeaderboardNotifications, "Gaming Leaderboard: a competition ending, a new one beginning and someone taking the lead."),
+        (.suppressGuildSpaceWhiteboardNotifications, "Whiteboard: when people are drawing on it."),
+        (.suppressGuildSpaceMusicNotifications, "Popular Music: a new top song, top artist or top listener."),
+    ]
 
     /// The four the Engagement page offers, in the order it draws them.
     ///
@@ -247,7 +259,8 @@ public struct SystemChannelFlags: OptionSet, Hashable, Sendable {
     /// one that cannot be put back.
     public static func engagementRows(
         features: Set<String>,
-        flags: SystemChannelFlags
+        flags: SystemChannelFlags,
+        hasServerHub: Bool = false
     ) -> [(flag: SystemChannelFlags, label: String)] {
         // Discord's `936555`: it can sell subscriptions unless that was
         // switched off.
@@ -267,6 +280,9 @@ public struct SystemChannelFlags: OptionSet, Hashable, Sendable {
             ))
         }
         rows.append((.suppressVoiceSessionNotifications, "Send a message when a voice hangout has started."))
+        // Only where the server has a hub: its messages have nothing to be about
+        // otherwise.
+        if hasServerHub { rows += serverHubRows }
         return rows
     }
 

@@ -517,7 +517,7 @@ extension AppModel {
         switch kind {
         case .text, .announcement, .forum, .media: .textChannels
         case .voice, .stage: .voiceChannels
-        case .category, .directory, .unknown,
+        case .category, .directory, .guildSpace, .unknown,
              .announcementThread, .publicThread, .privateThread,
              .directMessage, .groupDirectMessage: nil
         }

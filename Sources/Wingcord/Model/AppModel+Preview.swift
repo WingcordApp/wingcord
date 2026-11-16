@@ -65,7 +65,8 @@ extension AppModel {
             discovery = discoveryReturn ?? DiscoveryState()
             discoveryReturn = nil
             sessionController.loadDiscovery()
-        case .guildProfile:
+        case .guildProfile, .forwardBreadcrumb:
+            // The server and channel restored above are where these came from.
             break
         }
     }

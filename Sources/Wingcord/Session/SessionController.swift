@@ -189,7 +189,9 @@ final class SessionController {
     /// Which people this session has already asked the gateway about, so a
     /// channel of two hundred messages from six people asks six times and not
     /// six hundred. See `resolveMessageMembers`.
-    private var memberRequests: Set<MemberRequest> = []
+    /// Internal so the Server Hub's people go through the same once-each set
+    /// (`requestServerHubMembers`).
+    var memberRequests: Set<MemberRequest> = []
     /// When each role's holders were last asked for — see `loadRoleMembers`.
     private var roleMemberFetches: [RoleMembersKey: Date] = [:]
 
@@ -1115,6 +1117,7 @@ final class SessionController {
             // A call that was up when the socket blipped has to ask again —
             // see `VoiceController.gatewayDidReconnect`.
             voice.gatewayDidReconnect()
+            askAgainAfterReconnect()
         case .update(let update):
             apply(update)
         case .disconnected(let reason, let willRetry):
@@ -1331,6 +1334,9 @@ final class SessionController {
         model.memberLists = [:]
         model.memberListRevision &+= 1
         memberListSubscription = nil
+        // The people asked about on the old session were asked of a session
+        // that is gone; READY's members are not all of them.
+        memberRequests.removeAll()
         if let channelID = model.selectedChannelID {
             subscribeMemberListPages(nil, for: channelID)
         }
@@ -1799,6 +1805,11 @@ final class SessionController {
             let key = MemberListKey(guildID: update.guildID, listID: listID)
             model.memberLists[key, default: MemberList()].apply(update.operations, groups: update.groups)
             model.memberListRevision &+= 1
+            if let channelID = model.selectedChannelID,
+               model.memberListTarget(for: channelID)?.key == key
+            {
+                LoadMarks.shared.mark(.roster, in: channelID)
+            }
 
         case .channelAcknowledged(let channelID, let messageID, let mentionCount, let isManual):
             // **Only a Mark Unread moves the cursor back.** An ordinary ack
@@ -2119,6 +2130,7 @@ final class SessionController {
                     return
                 }
                 model.messageContentRevision &+= 1
+                LoadMarks.shared.mark(.history, in: channelID)
                 resolveSpotifyUnfurls(in: page.messages)
                 resolveInvites(in: page.messages)
                 resolveHostedCards(in: page.messages, inGuild: model.channelIndex.guildID(of: channelID))
@@ -2239,6 +2251,7 @@ final class SessionController {
 
     /// Loads the newest page when a channel is opened.
     func openChannel(_ channelID: ChannelID) {
+        LoadMarks.shared.opened(channelID, isCached: !(model.messages(in: channelID)?.messages.isEmpty ?? true))
         // Arriving anywhere ends a deliberate rewind: the reader has stopped
         // meaning "leave this unread" the moment they navigate.
         if model.suppressedAckChannelID != channelID { model.suppressedAckChannelID = nil }
@@ -2408,9 +2421,35 @@ final class SessionController {
         )
     }
 
+    /// Asks again for what a dropped connection may have swallowed.
+    ///
+    /// **Discord does this on every resume** (its subscription store and its
+    /// member-request queue both act on `CONNECTION_RESUMED`), and this client
+    /// did it only after a whole new READY. A frame sent while the socket was
+    /// between connections goes nowhere (`GatewaySocket.send` has no socket to
+    /// write to), yet the subscription was recorded as sent and never sent
+    /// again: the member list of the channel opened in that moment stayed
+    /// empty for the rest of the session, and the people asked about stayed
+    /// unknown — no roles, no name colour, no row.
+    private func askAgainAfterReconnect() {
+        memberRequests.removeAll()
+        guard let channelID = model.selectedChannelID else { return }
+        subscribeMemberListPages(nil, for: channelID, force: true)
+        if let messages = model.messages(in: channelID)?.messages, !messages.isEmpty {
+            resolveMessageMembers(in: messages, channelID: channelID)
+        }
+        if let guildID = model.channelIndex.guildID(of: channelID) {
+            requestPeopleInRooms(inGuild: guildID)
+        }
+        // The pictures that failed while the connection was down are asked
+        // for again by the surfaces showing them.
+        NotificationCenter.default.post(name: ImageStore.picturesMayRetry, object: nil)
+    }
+
     /// Asks for `pages` of the list a channel shows, unless that is already the
     /// subscription in force — Discord's client compares the same way before it
-    /// sends. The server answers new pages with `SYNC` and pages dropped from
+    /// sends. `force` sends it whatever is in force: after a reconnect, what is
+    /// "in force" is only what this side believes. The server answers new pages with `SYNC` and pages dropped from
     /// the request with `INVALIDATE`.
     ///
     /// **Nil keeps the pages of the list already subscribed**, when the channel
@@ -2418,7 +2457,11 @@ final class SessionController {
     /// at the first page otherwise. Discord keeps its last five channels
     /// subscribed to the same effect: a column scrolled to row five hundred
     /// does not blink back to placeholders because the reader changed channel.
-    private func subscribeMemberListPages(_ pages: [ClosedRange<Int>]?, for channelID: ChannelID) {
+    private func subscribeMemberListPages(
+        _ pages: [ClosedRange<Int>]?,
+        for channelID: ChannelID,
+        force: Bool = false
+    ) {
         guard let target = model.memberListTarget(for: channelID), let socket else { return }
         let kept = memberListSubscription.flatMap { $0.key == target.key ? $0.pages : nil }
         let subscription = MemberListSubscription(
@@ -2426,7 +2469,7 @@ final class SessionController {
             channelID: target.channelID,
             pages: pages ?? kept ?? [0...MemberList.pageSize - 1]
         )
-        guard subscription != memberListSubscription else { return }
+        guard force || subscription != memberListSubscription else { return }
         memberListSubscription = subscription
         Task {
             await socket.subscribeToMemberList(
@@ -3557,6 +3600,9 @@ extension SessionController {
             loadServerGuide(guildID)
             loadOnboarding(guildID)
             loadGameServers(guildID)
+            // Its Server Hub, where Discord may have given it one — the row
+            // appears once the answer is in (`offersServerHub`).
+            if model.mayHaveServerHub(guildID) { loadServerHub(guildID) }
             // **A server can be gated and this client never asked.** Joining on
             // a phone or on discord.com lands the membership here over the
             // socket with no gate raised, which is exactly the case that made

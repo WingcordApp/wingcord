@@ -69,7 +69,8 @@ public enum SystemMessageText {
     public static func sentence(
         for message: Message,
         name: String,
-        subject: String? = nil
+        subject: String? = nil,
+        nameOf: (UserID) -> String? = { _ in nil }
     ) -> SystemSentence? {
         switch message.kind {
         case .userJoin:
@@ -219,6 +220,12 @@ public enum SystemMessageText {
                 emphasis: message.content,
                 symbolName: "person.wave.2.fill", tint: .quiet
             )
+        case .guildSpace:
+            // The person the line is about is the `name` the caller resolved
+            // (`GuildSpaceMessageData.subjectUserID`); anyone else it names
+            // comes through `nameOf`.
+            guard let data = message.guildSpaceData else { return nil }
+            return guildSpaceSentence(data, name: name, nameOf: nameOf)
         case .default, .reply, .chatInputCommand, .contextMenuCommand,
              .threadStarterMessage, .unknown:
             // Not a system event: these carry something somebody wrote.
@@ -227,5 +234,77 @@ public enum SystemMessageText {
             // AutoMod's own card — see `AutoModMessage`.
             return nil
         }
+    }
+
+    // MARK: Server Hub
+
+    /// A Server Hub message in Discord's words (`f1ea8c8b1054ad64`'s
+    /// `GUILD_SPACE_MESSAGE` renderers, `747407`'s plain text).
+    static func guildSpaceSentence(
+        _ data: GuildSpaceMessageData,
+        name: String,
+        nameOf: (UserID) -> String?
+    ) -> SystemSentence? {
+        if let board = data.leaderboard {
+            switch board.event {
+            case .ended:
+                return SystemSentence(
+                    prefix: "", name: name,
+                    suffix: " won this week\u{2019}s competition with \(GuildSpaceFormat.achievement(board.value, stat: board.stat)).",
+                    symbolName: "trophy.fill", tint: .celebratory
+                )
+            case .started:
+                return SystemSentence(
+                    prefix: "A new leaderboard begins! Who will be this week\u{2019}s winner with \(GuildSpaceFormat.competitionSubject(board.stat))? So far ",
+                    name: name, suffix: " is in the lead.",
+                    symbolName: "flag.checkered", tint: .affirmative
+                )
+            case .leaderChanged:
+                let previous = board.secondaryUserID.flatMap(nameOf) ?? "the last leader"
+                return SystemSentence(
+                    prefix: "", name: name,
+                    suffix: " took 1st Place from \(previous) on the leaderboard with \(GuildSpaceFormat.achievement(board.value, stat: board.stat)).",
+                    symbolName: "trophy.fill", tint: .celebratory
+                )
+            }
+        }
+        if let music = data.music {
+            switch music.event {
+            case .topSong:
+                guard let title = music.trackTitle else {
+                    return SystemSentence(prefix: "There\u{2019}s a new top song in Popular Music.", name: "", suffix: "",
+                                          symbolName: "music.note", tint: .affirmative)
+                }
+                return SystemSentence(prefix: "", name: "", suffix: "", emphasis: "\(title) is the new top song!",
+                                      symbolName: "music.note", tint: .affirmative)
+            case .topArtist:
+                guard let artist = music.artistName else {
+                    return SystemSentence(prefix: "There\u{2019}s a new top artist in Popular Music.", name: "", suffix: "",
+                                          symbolName: "music.mic", tint: .affirmative)
+                }
+                return SystemSentence(prefix: "", name: "", suffix: "", emphasis: "\(artist) is the new top artist!",
+                                      symbolName: "music.mic", tint: .affirmative)
+            case .topListener:
+                guard music.userID != nil else {
+                    return SystemSentence(prefix: "There\u{2019}s a new top listener in Popular Music.", name: "", suffix: "",
+                                          symbolName: "headphones", tint: .affirmative)
+                }
+                return SystemSentence(prefix: "", name: name, suffix: " is the new top listener!",
+                                      symbolName: "headphones", tint: .affirmative)
+            }
+        }
+        if let board = data.whiteboard {
+            guard !board.sampledUserIDs.isEmpty else {
+                return SystemSentence(prefix: "The whiteboard is active.", name: "", suffix: "",
+                                      symbolName: "pencil.and.scribble", tint: .affirmative)
+            }
+            let others = max(0, board.connectedUserCount - 1)
+            let suffix = others == 0
+                ? " is drawing on the whiteboard."
+                : " and \(GuildSpaceFormat.count(others, "other", "others")) are drawing on the whiteboard."
+            return SystemSentence(prefix: "", name: name, suffix: suffix,
+                                  symbolName: "pencil.and.scribble", tint: .affirmative)
+        }
+        return nil
     }
 }

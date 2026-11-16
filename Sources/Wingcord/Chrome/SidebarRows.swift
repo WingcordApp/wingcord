@@ -14,6 +14,8 @@ import WingcordCore
 struct SidebarChannelRow: View {
     var channel: SidebarChannel
     var isSelected: Bool
+    /// The reader's channel spacing — `SidebarListSpacing`.
+    @Environment(\.sidebarListSpacing) private var listSpacing
     /// The server this row belongs to. Carried only so a voice row can build the
     /// address of somebody's screen share — see `GoLiveKey`, whose two grammars
     /// differ by exactly this field being present.
@@ -115,7 +117,7 @@ struct SidebarChannelRow: View {
             .frame(
                 minHeight: channel.isPerson
                     ? Metrics.directMessageRowHeight - Metrics.sidebarRowInset * 2
-                    : Metrics.sidebarRowContent,
+                    : listSpacing.channelRowContent,
                 alignment: .leading
             )
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -142,7 +144,12 @@ struct SidebarChannelRow: View {
             .sidebarRowHighlight(isSelected: isSelected, isHovering: isHovering, suppressesSystemHighlight: false)
             // Hover and the right-click through the list's one tracker — see
             // `SidebarHoverRouter`. A catcher only where there is a menu.
-            .modifier(SidebarRowPointer(openMenu: openMenu) { hovering in
+            .modifier(SidebarRowPointer(
+                openMenu: openMenu,
+                // A forum's posts, or a channel's threads, under the pointer —
+                // Discord's More Active Posts (`ActivePostsFlyout`).
+                activePostsChannelID: channel.offersActivePosts ? channel.id : nil
+            ) { hovering in
                 guard isHovering != hovering else { return }
                 isHovering = hovering
                 noteNameHover(hovering)
@@ -724,6 +731,8 @@ struct SidebarCategoryRow: View {
     var createChannel: (() -> Void)?
 
     @Environment(\.motion) private var motion
+    /// The reader's category spacing — `SidebarListSpacing`.
+    @Environment(\.sidebarListSpacing) private var listSpacing
     @State private var isHovering = false
 
     var body: some View {
@@ -746,7 +755,7 @@ struct SidebarCategoryRow: View {
                 .accessibilityLabel(Text("Create Channel"))
             }
         }
-        .padding(.top, Spacing.tight)
+        .padding(.top, listSpacing.categoryTop)
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(SecondaryClickModifier(openMenu: openMenu))
         .onHover { isHovering = $0 }

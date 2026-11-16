@@ -434,6 +434,21 @@ extension EnvironmentValues {
     /// under the bars, out of reach, with the rubber band springing them back.
     /// `safeAreaPadding` on the list itself is the one form that insets it.
     @Entry var sidebarBarsInset: CGFloat = 0
+    /// The reader's channel and category spacing — `AppSettings.channelSpacing`
+    /// and `categorySpacing` — for the channel list's rows to read.
+    @Entry var sidebarListSpacing = SidebarListSpacing()
+}
+
+/// How much air the channel list puts between its rows and above its
+/// categories, on top of the system sidebar's own — see `AppSettings`.
+struct SidebarListSpacing: Equatable, Sendable {
+    var channel: CGFloat = 0
+    var category: CGFloat = 0
+
+    /// A channel row's content height at this spacing.
+    var channelRowContent: CGFloat { max(16, Metrics.sidebarRowContent + channel) }
+    /// The room above a category heading at this spacing.
+    var categoryTop: CGFloat { max(0, Spacing.tight + category) }
 }
 
 // MARK: - The switcher

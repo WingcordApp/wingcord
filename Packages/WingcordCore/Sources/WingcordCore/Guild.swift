@@ -21,6 +21,9 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// Whether the channel list shows the Boost progress bar —
     /// `premium_progress_bar_enabled`, the Boost Perks page's switch.
     public var premiumProgressBarEnabled = false
+    /// The Server Hub's switch and publishing state — `guild_space_settings`.
+    /// Nil where Discord hasn't given the server a hub.
+    public var spaceSettings: GuildSpaceSettings?
     /// Feature flags, as Discord's uppercase strings. A `Set` because every read
     /// is a membership test.
     public var features: Set<String>

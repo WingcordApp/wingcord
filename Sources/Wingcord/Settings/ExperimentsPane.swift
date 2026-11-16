@@ -22,6 +22,13 @@ struct ExperimentsPane: View {
                     isOn: $settings.drawsCustomTypingIndicators
                 )
                 CardDivider()
+                SettingsToggle(
+                    title: "Server Hub",
+                    help: "Shows a server\u{2019}s Server Hub \u{2014} its banner, leaderboard, popular games, "
+                        + "whiteboard and more \u{2014} where Discord has given the server one.",
+                    isOn: $settings.showsServerHub
+                )
+                CardDivider()
                 SettingsControlRow(
                     "Voice invites",
                     help: "Discord is trying a voice invite that looks like the channel in the sidebar."
@@ -42,6 +49,8 @@ struct ExperimentsPane: View {
         }
         // The transcript is drawn: a card whose look changed has to be told.
         .onChange(of: settings.voiceInviteCardStyle) { model.inviteSettlementChanged() }
+        // The channel list's row comes and goes with the switch.
+        .onChange(of: settings.showsServerHub) { model.serverHubSwitchChanged() }
 
         if model.experiments.isEmpty {
             SettingsGroup("Discord's experiments") {

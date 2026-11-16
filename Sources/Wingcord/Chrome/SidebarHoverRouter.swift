@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WingcordCore
 
 /// Which row of one sidebar list the pointer is on, worked out once for the
 /// list rather than once per row.
@@ -51,8 +52,12 @@ final class SidebarHoverRouter {
 
     func detach(_ agent: SidebarRowAgentView) {
         agents.remove(agent)
-        // A row taken away under the pointer is never told the pointer left.
-        if hovered === agent { hovered = nil }
+        // A row taken away under the pointer is never told the pointer left —
+        // nor is its flyout, which would stay up beside a row that is gone.
+        if hovered === agent {
+            hovered = nil
+            if let id = agent.activePostsChannelID { ActivePostsFlyout.shared.pointerLeftRow(id) }
+        }
     }
 
     // MARK: The pointer
@@ -115,6 +120,14 @@ final class SidebarHoverRouter {
         previous?.onHover?(false)
         agent?.onHover?(true)
         hoverChanges += 1
+        // **The flyout hangs off the row's own view**, which only the router
+        // holds — one presenter for the list, never a popover per row (§2).
+        if let id = previous?.activePostsChannelID {
+            ActivePostsFlyout.shared.pointerLeftRow(id)
+        }
+        if let agent, let id = agent.activePostsChannelID {
+            ActivePostsFlyout.shared.pointerEnteredRow(id, anchor: agent)
+        }
     }
 
     // MARK: The scroll
@@ -169,6 +182,18 @@ final class SidebarHoverRouter {
             ScrollWorkGate.endIfOwned(by: owner)
             resolveFromPointer()
         }
+    }
+
+    /// **The gate goes with the router, whatever else does.** The router is
+    /// a list's `@State` and its surface holds it weakly, so a list torn down
+    /// mid-scroll — a swipe to the other page while momentum is still running
+    /// — could free it before `dismantleNSView` asked it to tear down, with
+    /// the app-wide gate still held in its name and its timeout's weak
+    /// reference already gone. That stopped every drawn surface's pictures
+    /// for the rest of the run (WC-0AQB, WC-E5V8). The gate is thread-safe
+    /// and keyed by identity, so this is safe from any thread.
+    nonisolated deinit {
+        ScrollWorkGate.endIfOwned(by: ObjectIdentifier(self))
     }
 
     /// Lets go of everything: the list is going away.
@@ -263,6 +288,8 @@ struct SidebarRowAgent: NSViewRepresentable {
     /// Nil for a row with no menu, which then takes no click at all.
     var onClick: ((CGRect) -> Void)?
     var onHover: ((Bool) -> Void)?
+    /// The channel whose active posts this row offers under the pointer.
+    var activePostsChannelID: ChannelID? = nil
 
     func makeNSView(context: Context) -> SidebarRowAgentView {
         let view = SidebarRowAgentView()
@@ -280,6 +307,7 @@ struct SidebarRowAgent: NSViewRepresentable {
         view.takesClicks = onClick != nil
         view.onClick = onClick ?? { _ in }
         view.onHover = onHover
+        view.activePostsChannelID = activePostsChannelID
     }
 
     static func dismantleNSView(_ view: SidebarRowAgentView, coordinator: ()) {
@@ -291,6 +319,8 @@ struct SidebarRowAgent: NSViewRepresentable {
 final class SidebarRowAgentView: SecondaryClickCatcher.CatcherView {
     weak var router: SidebarHoverRouter?
     var onHover: ((Bool) -> Void)?
+    /// See `SidebarRowAgent.activePostsChannelID`.
+    var activePostsChannelID: ChannelID?
     var takesClicks = true
     var takesHover: Bool { onHover != nil }
 
@@ -328,13 +358,20 @@ final class SidebarRowAgentView: SecondaryClickCatcher.CatcherView {
 /// the branch is not a change of identity.
 struct SidebarRowPointer: ViewModifier {
     var openMenu: ((CGRect) -> Void)?
+    /// The channel whose active posts the row offers — `ActivePostsFlyout`.
+    var activePostsChannelID: ChannelID? = nil
     var hover: (Bool) -> Void
 
     @Environment(\.sidebarHoverRouter) private var router
 
     func body(content: Content) -> some View {
         if let router {
-            content.overlay { SidebarRowAgent(router: router, onClick: openMenu, onHover: hover) }
+            content.overlay {
+                SidebarRowAgent(
+                    router: router, onClick: openMenu, onHover: hover,
+                    activePostsChannelID: activePostsChannelID
+                )
+            }
         } else {
             content
                 .background { SystemSelectionHighlightSuppressor().allowsHitTesting(false) }

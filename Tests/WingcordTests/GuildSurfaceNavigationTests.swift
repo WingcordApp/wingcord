@@ -426,6 +426,14 @@ struct GuildSurfaceNavigationTests {
 
     // MARK: The channel list follows the follows
 
+    /// The reader's own Show All Channels switch, turned off: what filters a
+    /// list in Discord (`OPT_IN_CHANNELS_ON`), and so here.
+    private func optIn(_ model: AppModel) {
+        model.guildUserSettings[guildID] = GuildUserSettings(
+            guildID: guildID, flags: GuildUserSettingsFlags.optInChannelsOn
+        )
+    }
+
     /// **The filter only ever narrows a server the reader demonstrably uses it
     /// on.** An account that has never opted into anything has an *unknown*
     /// state rather than an empty one, and filtering there would hide every
@@ -433,29 +441,81 @@ struct GuildSurfaceNavigationTests {
     @Test("A server the reader has never opted into shows every channel")
     func noFollowsMeansNoFiltering() throws {
         let model = model()
-        model.guildOnboardings[guildID] = GuildOnboarding(guildID: guildID, isEnabled: true)
+        optIn(model)
         #expect(!model.hidesUnfollowedChannels(inGuild: guildID))
         let channelRows = model.sidebarPresentation.rows.filter(\.isChannel)
         #expect(channelRows.count == 2)
     }
 
-    @Test("A server without onboarding is never filtered, whatever is followed")
-    func onboardingGatesTheFilter() {
+    /// **WC-6RZS, #8.** Discord opts members into a server's default channels
+    /// without turning the filter on, so a server with onboarding and a few
+    /// follows is still a whole server until the reader turns Show All Channels
+    /// off. Filtering on the onboarding showed Ubiquiti as one channel.
+    @Test("Onboarding and follows filter nothing while Show All Channels is on")
+    func followsAloneDoNotFilter() {
         let model = model()
+        model.guildOnboardings[guildID] = GuildOnboarding(guildID: guildID, isEnabled: true)
         model.followedChannelIDs = [ChannelID(rawValue: 2001)]
         #expect(!model.hidesUnfollowedChannels(inGuild: guildID))
+        let names = model.sidebarPresentation.rows.compactMap(\.channelName)
+        #expect(names.sorted() == ["faq", "general"])
+    }
+
+    /// The switch alone decides: the onboarding is loaded only when a server is
+    /// opened, and the list (and its server's light) must not change when it is.
+    @Test("Show All Channels off filters whether or not the onboarding is loaded")
+    func theSwitchDecides() {
+        let model = model()
+        optIn(model)
+        model.followedChannelIDs = [ChannelID(rawValue: 2001)]
+        #expect(model.hidesUnfollowedChannels(inGuild: guildID))
+        model.guildOnboardings[guildID] = GuildOnboarding(guildID: guildID, isEnabled: false)
+        #expect(model.hidesUnfollowedChannels(inGuild: guildID))
     }
 
     /// The whole point: an unfollowed channel leaves the list.
     @Test("An unfollowed channel is taken out of the channel list")
     func unfollowedChannelLeavesTheList() {
         let model = model()
-        model.guildOnboardings[guildID] = GuildOnboarding(guildID: guildID, isEnabled: true)
+        optIn(model)
         model.followedChannelIDs = [ChannelID(rawValue: 2001)]
         #expect(model.hidesUnfollowedChannels(inGuild: guildID))
 
         let names = model.sidebarPresentation.rows.compactMap(\.channelName)
         #expect(names == ["general"])
+    }
+
+    /// Discord keeps an unfollowed channel in an opted-in list while it
+    /// mentions the reader (`eN`), and its server keeps the light.
+    @Test("A channel that mentions the reader stays in an opted-in list")
+    func mentionKeepsAnUnfollowedChannel() {
+        let model = model()
+        optIn(model)
+        model.followedChannelIDs = [ChannelID(rawValue: 2001)]
+        model.readStates[ChannelID(rawValue: 2002)] = ReadState(mentionCount: 1)
+        let names = model.sidebarPresentation.rows.compactMap(\.channelName)
+        #expect(names.sorted() == ["faq", "general"])
+    }
+
+    /// **#16.** A channel the reader took out of their list cannot light its
+    /// server: the dot is a promise the list keeps.
+    @Test("A hidden channel's new messages do not light its server")
+    func hiddenChannelDoesNotLightTheServer() {
+        let model = model()
+        optIn(model)
+        model.followedChannelIDs = [ChannelID(rawValue: 2001)]
+        var index = model.channelIndex
+        index.upsert(Channel(
+            id: ChannelID(rawValue: 2002), kind: .text, guildID: guildID, name: "faq",
+            position: 1, lastMessageID: MessageID(rawValue: 9_000)
+        ))
+        model.channelIndex = index
+        model.readStates[ChannelID(rawValue: 2002)] = ReadState(lastAcknowledgedID: MessageID(rawValue: 1))
+        #expect(!model.guildBadge(for: guildID).unread)
+
+        // Show All Channels back on: the channel is in the list, and lights it.
+        model.guildUserSettings[guildID] = GuildUserSettings(guildID: guildID)
+        #expect(model.guildBadge(for: guildID).unread)
     }
 
     /// A followed category carries its channels here too — the list and the
@@ -480,7 +540,7 @@ struct GuildSurfaceNavigationTests {
             inGuild: guildID
         )
         model.channelIndex = index
-        model.guildOnboardings[guildID] = GuildOnboarding(guildID: guildID, isEnabled: true)
+        optIn(model)
         model.followedChannelIDs = [categoryID]
 
         let names = model.sidebarPresentation.rows.compactMap(\.channelName)
@@ -495,7 +555,7 @@ struct GuildSurfaceNavigationTests {
     @Test("The selected channel stays in the list even when unfollowed")
     func selectedChannelSurvivesTheFilter() {
         let model = model()
-        model.guildOnboardings[guildID] = GuildOnboarding(guildID: guildID, isEnabled: true)
+        optIn(model)
         model.followedChannelIDs = [ChannelID(rawValue: 2001)]
         model.selectChannel(ChannelID(rawValue: 2002))
 

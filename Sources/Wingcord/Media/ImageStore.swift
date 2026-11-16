@@ -41,6 +41,16 @@ import WingcordCore
 nonisolated final class ImageStore: @unchecked Sendable {
     static let shared = ImageStore()
 
+    /// Posted when pictures that failed are worth asking for again — the
+    /// gateway came back after a drop, so the network did. Every drawn surface
+    /// re-plans its pictures on it, and a re-plan asks only for what is not in
+    /// the cache, so a surface with every picture costs one walk of its rows.
+    ///
+    /// **Without it a failure was final until the viewport moved.** A dropped
+    /// connection during a roster's avatar burst left monograms that stayed
+    /// monograms for as long as the reader did not scroll.
+    static let picturesMayRetry = Notification.Name("WingcordPicturesMayRetry")
+
     private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Images")
 
     /// A decoded image plus the byte cost it actually occupies, so `NSCache`'s
@@ -284,6 +294,7 @@ nonisolated final class ImageStore: @unchecked Sendable {
             if let http = response as? HTTPURLResponse,
                !(200..<300).contains(http.statusCode)
             {
+                Self.noteFailure("HTTP \(http.statusCode)", bucket: bucket, url: url)
                 return http.statusCode >= 500 || http.statusCode == 429
                     ? .transientFailure
                     : .permanentFailure
@@ -293,6 +304,8 @@ nonisolated final class ImageStore: @unchecked Sendable {
             return .permanentFailure
         } catch {
             Self.log.debug("image load failed: \(key.url.absoluteString, privacy: .public)")
+            let code = (error as NSError).code
+            Self.noteFailure("no answer (\((error as NSError).domain) \(code))", bucket: bucket, url: url)
             return .transientFailure
         }
         // Only the decode waits for a place — see `decodeGate`.
@@ -300,6 +313,7 @@ nonisolated final class ImageStore: @unchecked Sendable {
         guard let image = await decodeGate.run({ Self.decode(data, maximumPixelSize: maximumPixelSize) }) else {
             // Bytes arrived and were not a picture. Asking again gets the
             // same bytes.
+            Self.noteFailure("not a picture (\(data.count) bytes)", bucket: bucket, url: url)
             return .permanentFailure
         }
         cache(for: bucket).setObject(
@@ -308,6 +322,42 @@ nonisolated final class ImageStore: @unchecked Sendable {
             cost: image.height * image.bytesPerRow
         )
         return .image(image)
+    }
+
+    // MARK: Failures, for the log a report carries
+
+    /// The last minute's failures of each kind, so a roster of deleted avatars
+    /// is one line rather than a hundred.
+    private static let failures = Mutex<[String: (count: Int, since: ContinuousClock.Instant)]>([:])
+
+    /// Writes why a picture did not come — once per kind per minute, with how
+    /// many more like it the minute before saw.
+    ///
+    /// **The first time this app could say.** A picture that failed was a
+    /// monogram or a blur and nothing else, so "I can't see the images"
+    /// (WC-E5V8) and "Couldn't load" (Image 8) arrived with logs that held
+    /// no trace of either. The host and the status are the store's own
+    /// vocabulary; the path, which names a channel and a file, is never written.
+    static func noteFailure(_ reason: String, bucket: Bucket, url: URL) {
+        let kind = "\(bucket) \(reason)"
+        let now = ContinuousClock.now
+        let earlier: Int? = failures.withLock { table in
+            if var entry = table[kind], now - entry.since < .seconds(60) {
+                entry.count += 1
+                table[kind] = entry
+                return nil
+            }
+            let previous = table[kind]?.count ?? 0
+            table[kind] = (1, now)
+            return previous
+        }
+        guard let earlier else { return }
+        let more: LogMessage = earlier > 1 ? ", \(earlier - 1) more like it before" : ""
+        Log.info(
+            .media,
+            "picture failed: \(public: reason) from \(public: url.host() ?? "this Mac") (\(public: String(describing: bucket)))"
+                + more
+        )
     }
 
     nonisolated static func isVideoFile(_ url: URL) -> Bool {

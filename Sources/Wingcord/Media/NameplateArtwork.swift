@@ -100,7 +100,10 @@ struct NameplateArtwork<Placeholder: View>: View {
             // A hundred milliseconds covers the jump entirely, and the two are
             // never both fully present: an asset with a soft alpha edge shows as
             // two offset copies of itself.
-            .opacity(isPlaying ? 0 : 1)
+            // Guarded on `playsFilm` as well: a playback report queued before
+            // the film went can land after `onChange` cleared the flag, and
+            // would hide the still under nothing (the rail's #9, the same race).
+            .opacity(isPlaying && playsFilm ? 0 : 1)
             .animation(motion.fadeQuick, value: isPlaying)
 
             if playsFilm, let animated {

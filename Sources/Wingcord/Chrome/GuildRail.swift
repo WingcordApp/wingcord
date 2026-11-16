@@ -36,6 +36,9 @@ struct GuildRail: View, Equatable {
     /// Show All Servers, at the rail's head — where the rack expands into the
     /// list (REDESIGN.md R10). Nil where there is no list to expand into.
     var showAllServers: (() -> Void)? = nil
+    /// Read All (#7, WC-VACZ). Nil hides it; it is offered only while some
+    /// server has something unread.
+    var readAll: (() -> Void)? = nil
 
     /// Compares **only** the value inputs.
     ///
@@ -51,6 +54,7 @@ struct GuildRail: View, Equatable {
             && lhs.homeMentionCount == rhs.homeMentionCount
             && lhs.homeHasUnread == rhs.homeHasUnread
             && (lhs.showAllServers == nil) == (rhs.showAllServers == nil)
+            && (lhs.readAll == nil) == (rhs.readAll == nil)
     }
 
     var selectHome: () -> Void = {}
@@ -118,6 +122,13 @@ struct GuildRail: View, Equatable {
                 }
 
                 RailDivider()
+
+                // Above the servers, as Vencord's button sits: the one way to
+                // clear every dot at once.
+                if let readAll {
+                    ReadAllCapsule(action: readAll)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
 
                 ForEach(items) { item in
                     switch item {
@@ -214,4 +225,36 @@ private struct AllServersRailButton: View {
 private nonisolated enum RailButtonInk {
     static let rest = Color.relative(dark: 0.06, light: 0.05)
     static let hover = Color.relative(dark: 0.12, light: 0.09)
+}
+
+/// Read All, in the rail and atop the Servers page: one small glass capsule,
+/// there only while some server has something unread.
+struct ReadAllCapsule: View {
+    var action: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("Read All")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(InkColor.primary)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, Spacing.base)
+                .frame(height: 22)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .scaleEffect(isHovering ? 1.04 : 1)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.hover, value: isHovering)
+        .help("Mark every server as read")
+        .accessibilityLabel(Text("Mark All Servers as Read"))
+    }
 }

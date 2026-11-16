@@ -522,10 +522,30 @@ struct WingcordCommands: Commands {
                 }
                 .disabled(model.menuContext.channelID == nil)
                 ShortcutMenuItem(shortcut: .markServerRead, model: model)
+                // Read All's menu twin (#7): every server at once.
+                Button("Mark All Servers as Read") { model.markAllServersRead() }
+                    .disabled(!model.hasUnreadServers)
                 ShortcutMenuItem(shortcut: .markTopInboxChannelRead, model: model)
                 ShortcutMenuItem(shortcut: .jumpToOldestUnread, model: model)
             }
             .disabled(!isWorkspace)
+            // The Server Hub's toolbar controls, here too — HIG, macOS: "Every
+            // toolbar item must also be a menu-bar command".
+            if model.openGuildSurface == .serverHub, let guildID = model.selectedGuildID, model.canEditServerHub(guildID) {
+                Divider()
+                if model.isEditingServerHub {
+                    Button("Add Widget\u{2026}") {
+                        let main = model.serverHubPresentation?.columns.first?.count ?? 0
+                        model.serverHub.sheet = .addWidget(column: 0, index: main)
+                    }
+                    Button("Save Server Hub") { model.saveServerHubEdit() }
+                        .disabled(model.serverHub.draft?.hasChanges != true || model.serverHub.draft?.isSaving == true)
+                    Button("Cancel Editing") { model.cancelServerHubEdit() }
+                } else {
+                    Button("Edit Server Hub") { model.beginServerHubEdit() }
+                    Button("Server Hub Settings\u{2026}") { model.openServerHubSettings() }
+                }
+            }
         }
 
         CommandMenu("Voice") {

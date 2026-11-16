@@ -407,6 +407,11 @@ struct EngagementPane: View {
     let store: ServerSettingsStore
     /// The server's size, which decides the Activity Feed's default.
     var memberCount: Int?
+    /// The server's Server Hub settings; nil where Discord hasn't given it one,
+    /// and the hub's section and its three messages are then not offered.
+    var serverHub: GuildSpaceSettings? = nil
+    var isServerHubSaving = false
+    var setServerHubEnabled: (Bool) -> Void = { _ in }
 
     var body: some View {
         LoadableContent(store.settings) { settings in
@@ -415,11 +420,35 @@ struct EngagementPane: View {
                 if settings.offersChannelSummaries {
                     channelSummaries(settings)
                 }
+                if let serverHub {
+                    serverHubSection(serverHub)
+                }
                 systemMessages(settings)
                 activityFeed(settings)
                 notifications(settings)
                 inactivity(settings)
                 widget(settings)
+            }
+        }
+    }
+
+    /// Discord's Server Hub section (`pq`): one switch, the hub's row in the
+    /// channel list — `PATCH /guilds/{id}/space/settings` with `enabled`.
+    private func serverHubSection(_ hub: GuildSpaceSettings) -> some View {
+        SettingsGroup("Server Hub") {
+            Text("Manage settings for your Server Hub.")
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .padding(.bottom, Spacing.snug)
+            SettingsCard {
+                SettingsToggle(
+                    title: "Show Server Hub tab in channel list",
+                    isOn: Binding(
+                        get: { hub.isEnabled ?? false },
+                        set: { setServerHubEnabled($0) }
+                    )
+                )
+                .disabled(isServerHubSaving)
             }
         }
     }
@@ -492,7 +521,8 @@ struct EngagementPane: View {
             SettingsCard {
                 let rows = SystemChannelFlags.engagementRows(
                     features: settings.features,
-                    flags: settings.systemChannelFlags
+                    flags: settings.systemChannelFlags,
+                    hasServerHub: serverHub != nil
                 )
                 ForEach(Array(rows.enumerated()), id: \.offset) { index, entry in
                     if index > 0 { CardDivider() }

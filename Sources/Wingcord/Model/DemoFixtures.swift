@@ -751,7 +751,26 @@ enum DemoFixtures {
         }
 
         if let channelID = model.selectedChannelID {
-            let box = transcript(in: channelID, users: users)
+            var box = transcript(in: channelID, users: users)
+            // **Forwards of every kind at the foot** (BETA2.md §5): words to
+            // select and copy, files and a GIF to open, a sticker, a link card,
+            // a spoiler, and the three breadcrumbs — a channel in this server,
+            // another server, and none.
+            let sibling = index.channelIDs(inGuild: first).first {
+                $0 != channelID && index[$0]?.kind == .text
+            }
+            let other = guilds.keys.sorted { $0.rawValue < $1.rawValue }.first { $0 != first }
+            box.messages.append(contentsOf: Self.forwards(
+                after: box.messages.last?.id,
+                in: channelID,
+                guildID: first,
+                siblingChannelID: sibling,
+                otherGuildID: other,
+                otherChannelID: other.flatMap { guild in
+                    index.channelIDs(inGuild: guild).first { index[$0]?.kind == .text }
+                },
+                authors: userIDs
+            ))
             model.setMessages(box, in: channelID)
             seedReactors(model, messages: box.messages, userIDs: userIDs)
             populateTopics(model, in: channelID, guildID: first)
@@ -792,6 +811,7 @@ enum DemoFixtures {
         let guideAuthor = userIDs[1]
         model.guilds[firstGuild]?.ownerID = guideAuthor
         populateGuildSurfaces(model, guildRoles: guildRoles, owner: guideAuthor)
+        populateServerHub(model)
         populateDiscovery(model)
         populateConnectedApps(model)
         populateBoard(model, owner: guideAuthor)
@@ -1418,6 +1438,12 @@ enum DemoFixtures {
             followed.insert(carried)
         }
         model.followedChannelIDs = followed
+        // **And the reader's own switch turned on** — Show All Channels off —
+        // which is what filters a list in Discord, and so here
+        // (`hidesUnfollowedChannels`). Following alone narrows nothing.
+        var settings = model.guildUserSettings[first] ?? GuildUserSettings(guildID: first)
+        settings.flags |= GuildUserSettingsFlags.optInChannelsOn
+        model.guildUserSettings[first] = settings
 
         model.memberVerifications[first] = MemberVerification(
             guildID: first,
@@ -1906,6 +1932,73 @@ enum DemoFixtures {
         return result
     }
 
+    /// Forwarded messages, one of each shape, after `last` (BETA2.md §5).
+    private static func forwards(
+        after last: MessageID?,
+        in channelID: ChannelID,
+        guildID: GuildID,
+        siblingChannelID: ChannelID?,
+        otherGuildID: GuildID?,
+        otherChannelID: ChannelID?,
+        authors: [UserID]
+    ) -> [Message] {
+        let base = (last?.rawValue ?? 0) + (1 << 22)
+        let original = MessageID(rawValue: base - (90 << 22) * 60_000)
+        let media = DemoMedia.attachments()
+        let snapshots: [(note: String, ForwardedMessage)] = [
+            // Words with no note: the forward's text is the row's — select it,
+            // copy it, follow its link.
+            ("", ForwardedMessage(
+                content: "**Release notes are up** for the nightly — see "
+                    + "https://example.com/nightly and tell us what broke. ||Tomorrow's build drops the old sidebar.||",
+                channelID: siblingChannelID,
+                guildID: guildID,
+                messageID: original,
+                timestamp: Date.now.addingTimeInterval(-26 * 3_600)
+            )),
+            // Files from another server: the picture, the loop, the clip.
+            ("", ForwardedMessage(
+                content: "",
+                attachments: media,
+                channelID: otherChannelID,
+                guildID: otherGuildID,
+                messageID: MessageID(rawValue: original.rawValue + 7)
+            )),
+            // A sticker and a card, with a note of the forwarder's own.
+            ("this is the one I meant", ForwardedMessage(
+                content: "Look at this",
+                embeds: [Embed(
+                    title: "Wingcord 1.0 Beta 2",
+                    kind: "rich",
+                    description: "Bug fixes, the forum flyout and Read All.",
+                    url: "https://example.com/beta-2",
+                    colorValue: 0xFF7B1C
+                )],
+                stickers: [StickerRef(id: 749_054_660_769_218_631, name: "Wave", format: .lottie)],
+                channelID: siblingChannelID,
+                guildID: guildID,
+                messageID: MessageID(rawValue: original.rawValue + 9)
+            )),
+            // From a conversation: no breadcrumb at all.
+            ("", ForwardedMessage(
+                content: "Sure, I'll send the logs tonight.",
+                channelID: ChannelID(rawValue: 4_000_000_000_000_000_001),
+                guildID: nil,
+                messageID: MessageID(rawValue: original.rawValue + 11)
+            )),
+        ]
+        return snapshots.enumerated().map { offset, entry in
+            Message(
+                id: MessageID(rawValue: base + UInt64(offset + 1) * (1 << 22) * 30_000),
+                channelID: channelID,
+                authorID: authors[(offset * 2) % max(authors.count, 1)],
+                content: entry.note,
+                kind: .default,
+                payload: MessagePayload(forwarded: entry.1)
+            )
+        }
+    }
+
     /// A transcript with runs, day gaps, replies and a system event, so the
     /// reducer's every branch is visible on screen rather than only in a test.
     private static func transcript(in channelID: ChannelID, users: [UserID: User]) -> MessageBox {
@@ -2278,7 +2371,8 @@ enum DemoFixtures {
             components: rare?.components ?? [],
             displayComponents: rare?.displayComponents ?? [],
             poll: rare?.poll,
-            reference: reference
+            reference: reference,
+            forwarded: rare?.forwarded
         )
     }
 

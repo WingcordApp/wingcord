@@ -113,6 +113,23 @@ public enum CDN {
         )
     }
 
+    /// A Server Hub's own banner — `/guild-space/{guild}/banner/{hash}`.
+    public static func guildSpaceBanner(guildID: GuildID, hash: String, width: CGFloat, scale: CGFloat = 2) -> URL? {
+        URL(string: "\(host)/guild-space/\(guildID.rawValue)/banner/\(hash).webp?size=\(rung(forSide: width, scale: scale))")
+    }
+
+    /// An Image + Text widget's picture —
+    /// `/guild-space/{guild}/image-text-widget/{widget}/{hash}`.
+    public static func guildSpaceWidgetImage(
+        guildID: GuildID,
+        widgetID: String,
+        hash: String,
+        width: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(string: "\(host)/guild-space/\(guildID.rawValue)/image-text-widget/\(widgetID)/\(hash).webp?size=\(rung(forSide: width, scale: scale))")
+    }
+
     /// The wide artwork a server puts on its discovery card.
     ///
     /// **A third path, not a variant of the other two.** A guild's `banner`

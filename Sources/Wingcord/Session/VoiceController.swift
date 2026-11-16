@@ -295,6 +295,13 @@ final class VoiceController {
         loadSoundboard(forGuild: guildID)
     }
 
+    /// Joins a direct-message call somebody is already in, ringing nobody —
+    /// with the camera, for Start Video Call on a running call.
+    func joinDirectCall(channelID: ChannelID, withCamera: Bool) {
+        join(channelID: channelID, guildID: nil)
+        startsWithCamera = withCamera
+    }
+
     /// Starts a direct-message call and rings the other side — with the
     /// camera, for Start Video Call.
     func startDirectCall(channelID: ChannelID, withCamera: Bool = false) {
@@ -325,6 +332,8 @@ final class VoiceController {
         teardownEngine()
         if let userID = model.currentUserID { model.voiceStates[userID] = nil }
         model.connectedVoiceChannelID = nil
+        model.isEchoCancellationOff = false
+        model.isMicSilent = false
         model.forgetVoiceClientFlags()
         model.speakingUserIDs = []
         model.liveVideoUserIDs = []
@@ -893,6 +902,11 @@ final class VoiceController {
         case .inputSilent(let isSilent):
             guard model.isMicSilent != isSilent else { return }
             model.isMicSilent = isSilent
+
+        case .echoCancellationUnavailable(let isOff):
+            guard model.isEchoCancellationOff != isOff else { return }
+            model.isEchoCancellationOff = isOff
+            if isOff { Log.info(.voice, "the call is running without echo cancellation") }
 
         case .clientFlags(let userID, let flags):
             model.noteVoiceClientFlags(VoiceStateFlags(rawValue: flags), for: UserID(rawValue: userID))

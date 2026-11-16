@@ -150,6 +150,8 @@ private struct PrimaryPane: View {
                 GameServersContainer()
             case .members:
                 MembersPageContainer()
+            case .serverHub:
+                ServerHubContainer()
             }
         case .joinGate:
             ServerJoinGateContainer()

@@ -390,6 +390,10 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     /// People currently in this voice channel, drawn beneath the row so you can
     /// see who is in a call without joining it.
     var voiceMembers: [VoiceMemberChip]
+    /// Whether resting on the row opens More Active Posts — every forum, and a
+    /// channel with active threads the list does not already show
+    /// (`ActivePostsFlyout`).
+    var offersActivePosts = false
     /// The label anybody in the room can put on it, already split into what the
     /// row draws.
     ///
@@ -576,6 +580,8 @@ enum GuildSurface: UInt64, Hashable, Sendable {
     case gameServers = 4
     /// The Members page — Discord's member-safety table, for moderators.
     case members = 5
+    /// The Server Hub — Discord's page of widgets (docs/BETA2.md, phase 9).
+    case serverHub = 6
 
     var title: String {
         switch self {
@@ -584,6 +590,7 @@ enum GuildSurface: UInt64, Hashable, Sendable {
         case .browseChannels: "Browse Channels"
         case .gameServers: "Game Servers"
         case .members: "Members"
+        case .serverHub: "Server Hub"
         }
     }
 
@@ -596,6 +603,7 @@ enum GuildSurface: UInt64, Hashable, Sendable {
         case .channelsAndRoles, .browseChannels: "square.grid.2x2"
         case .gameServers: "gamecontroller.fill"
         case .members: "person.2.fill"
+        case .serverHub: "house.fill"
         }
     }
 }

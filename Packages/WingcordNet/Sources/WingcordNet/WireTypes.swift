@@ -703,6 +703,8 @@ struct GuildDTO: Decodable, Sendable {
     var premium_subscription_count: Int?
     /// Whether the channel list shows the server's Boost progress bar.
     var premium_progress_bar_enabled: Bool?
+    /// The Server Hub's switch and publishing state — never throws.
+    var guild_space_settings: GuildSpaceSettingsField?
     var features: [String]?
     var member_count: Int?
     var rules_channel_id: ChannelID?
@@ -784,6 +786,8 @@ struct GuildDTO: Decodable, Sendable {
         /// level only, so on READY every server counted zero boosts.
         var premium_subscription_count: Int?
         var premium_progress_bar_enabled: Bool?
+        /// Nested here on READY with everything else — §5.9.
+        var guild_space_settings: GuildSpaceSettingsField?
         var features: [String]?
         var rules_channel_id: ChannelID?
         var public_updates_channel_id: ChannelID?
@@ -869,6 +873,7 @@ struct GuildDTO: Decodable, Sendable {
         )
         guild.premiumProgressBarEnabled = premium_progress_bar_enabled
             ?? properties?.premium_progress_bar_enabled ?? false
+        guild.spaceSettings = guild_space_settings?.settings ?? properties?.guild_space_settings?.settings
         return guild
     }
 }
@@ -1343,6 +1348,8 @@ struct MessageDTO: Decodable, Sendable {
     /// A timeline comment's moment — `{attachment_id, timestamp}`, plus the
     /// `message_id` Discord's own list adds.
     var media_mention: MediaMentionDTO?
+    /// What a Server Hub message (type 69) is about. Never throws.
+    var guild_space_data: GuildSpaceMessageDataField?
     var mentions: [UserDTO]?
     var mention_roles: [RoleID]?
     var mention_everyone: Bool?
@@ -1469,6 +1476,8 @@ struct MessageDTO: Decodable, Sendable {
             var content: String?
             var attachments: [AttachmentDTO]?
             var embeds: [EmbedDTO]?
+            var sticker_items: [StickerDTO]?
+            var timestamp: Date?
         }
     }
 
@@ -1519,7 +1528,8 @@ struct MessageDTO: Decodable, Sendable {
             applicationID: application_id,
             thread: thread.map(\.threadSummary),
             sharedTheme: shared_client_theme?.domain,
-            mediaMention: media_mention?.domain
+            mediaMention: media_mention?.domain,
+            guildSpaceData: guild_space_data?.data
         )
         return Message(
             id: id,
@@ -1602,7 +1612,11 @@ struct MessageDTO: Decodable, Sendable {
             content: body.content ?? "",
             attachments: body.attachments?.map(\.domain) ?? [],
             embeds: body.embeds?.map(\.domain) ?? [],
-            channelID: message_reference?.channel_id
+            stickers: body.sticker_items?.map(\.domain) ?? [],
+            channelID: message_reference?.channel_id,
+            guildID: message_reference?.guild_id,
+            messageID: message_reference?.message_id,
+            timestamp: body.timestamp
         )
     }
 

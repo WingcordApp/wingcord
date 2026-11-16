@@ -26,6 +26,11 @@ final class MediaSources {
         var attachmentIndex: Int
     }
 
+    /// Where a forward's own files are numbered from in a `Key`: far past any
+    /// message's own, so one index space holds both and the flight knows which
+    /// box to leave from.
+    static let forwardedIndexBase = 10_000
+
     /// A thumbnail on screen.
     struct Thumbnail {
         /// In window coordinates.

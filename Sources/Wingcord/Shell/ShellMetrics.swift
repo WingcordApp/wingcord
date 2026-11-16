@@ -121,18 +121,40 @@ nonisolated enum ShellMetrics {
         trafficLightsLeading(style) + trafficLightsSpan + 14
     }
 
+    /// Where a header row's content begins in full screen, where the lights
+    /// are not on the window: the row's own margin and nothing else.
+    static func fullScreenClearance(_ style: SidebarStyle) -> CGFloat {
+        (style == .floating ? floatingInset : 0) + Spacing.snug
+    }
+
+    /// The narrowest the sidebar header's server name may get before the
+    /// sidebar toggle folds into the + menu to make room (#17): about ten
+    /// characters, with the server's mark and the chevron.
+    static let minimumHeaderTitleWidth: CGFloat = 130
+
+    /// What the sidebar header's trailing controls take: the toggle, the
+    /// create menu, the gaps between them and the row's own trailing padding.
+    static let headerTrailingReserve: CGFloat = headerControl + 56 + Spacing.base * 2 + 10
+
+    /// What folding the toggle away gives back: its width and one gap.
+    static let foldedToggleSaving: CGFloat = headerControl + Spacing.base
+
     // MARK: The sidebar
 
-    /// How far a floating panel sits in from the window's leading edge and
-    /// its foot.
-    static let floatingInset: CGFloat = 8
-
-    /// How far a floating panel sits below the window's top edge. **Less than
-    /// the sides**: the traffic lights cannot go below 25 without leaving the
+    /// How far a floating panel sits in from the window's edges — the same on
+    /// every side.
+    ///
+    /// **One inset, so the corners can be concentric** (Alex, 2026-11-16: "the
+    /// whole top part has to be fixed"). The sides used to stand at 8 and the
+    /// top at 5 — the traffic lights cannot go below 25 without leaving the
     /// 32-point title bar, and a 34-point control centred there has to clear
-    /// the panel's top edge — Craft's panel sits closer to the top than to the
-    /// sides for the same reason.
-    static let floatingTopInset: CGFloat = 5
+    /// the panel's top edge — and no single rounded corner is concentric with
+    /// the window's across two different gaps. Now the sides come in to the
+    /// top's 5, and the corner is the window's own less that (`SidebarPanel`).
+    static let floatingInset: CGFloat = 5
+
+    /// How far a floating panel sits below the window's top edge.
+    static let floatingTopInset: CGFloat = floatingInset
 
     static let sidebarMinWidth: CGFloat = 260
     static let sidebarIdealWidth: CGFloat = 320
@@ -142,9 +164,13 @@ nonisolated enum ShellMetrics {
     /// traffic lights, nothing else.
     static let takeoverWidth: CGFloat = 92
 
-    /// A floating panel's corner. Measured against the window's own on macOS
-    /// 27 and settled by eye in the running app; see REDESIGN.md.
-    static let floatingPanelRadius: CGFloat = 18
+    /// The smallest corner a floating panel may have, where the system cannot
+    /// say what the window's is. The panel's corner is otherwise the window's
+    /// own less the inset (`ConcentricRectangle`): the window's corner is 16
+    /// on macOS 27.3 and was rounder before — a fixed 18, measured against
+    /// the older one, came out rounder than the window it sits in, with a
+    /// wedge of gap at every corner (Image 24).
+    static let floatingPanelMinimumRadius: CGFloat = 8
 
     static func clampedSidebarWidth(_ width: CGFloat) -> CGFloat {
         min(sidebarMaxWidth, max(sidebarMinWidth, width.rounded()))
@@ -173,6 +199,26 @@ nonisolated struct ShellLayout: Equatable, Sendable {
     var isSidebarShown: Bool
     /// A takeover (the join gate, discovery) narrows the panel to the rail.
     var isTakenOver: Bool = false
+    /// The window is in full screen, where the traffic lights are not on it
+    /// and their room goes to the header's own controls.
+    var isFullScreen: Bool = false
+
+    /// How far from the window's leading edge a header row's content may
+    /// begin: past the lights, or — in full screen, with no lights — at the
+    /// row's own margin.
+    var lightsClearance: CGFloat {
+        isFullScreen
+            ? ShellMetrics.fullScreenClearance(style)
+            : ShellMetrics.trafficLightsClearance(style)
+    }
+
+    /// Whether the sidebar toggle folds into the + menu, so the server's name
+    /// has room for about ten characters (#17). A 270-point sidebar left the
+    /// name 62 points: its mark, one letter and the chevron.
+    var foldsSidebarToggle: Bool {
+        let room = panelWidth - pageTitleLeading - ShellMetrics.headerTrailingReserve
+        return room < ShellMetrics.minimumHeaderTitleWidth
+    }
 
     /// How far the panel sits in from the window's leading edge and foot.
     var panelInset: CGFloat { style == .floating ? ShellMetrics.floatingInset : 0 }
@@ -204,12 +250,15 @@ nonisolated struct ShellLayout: Equatable, Sendable {
     /// How much room the detail header keeps at its leading edge for the traffic
     /// lights, which stay put when the sidebar goes.
     var detailHeaderLeadingClearance: CGFloat {
-        isSidebarShown ? 0 : ShellMetrics.trafficLightsClearance(style)
+        isSidebarShown ? 0 : lightsClearance
     }
 
     /// Where a page's header title starts when no rail stands between it and
-    /// the traffic lights: just past them, in the panel's own space.
+    /// the traffic lights: just past them, in the panel's own space — or, in
+    /// full screen, where the lights are not, at the row's own margin.
     var pageTitleLeading: CGFloat {
-        ShellMetrics.trafficLightsClearance(style) - panelInset + Spacing.tight
+        isFullScreen
+            ? Spacing.snug
+            : ShellMetrics.trafficLightsClearance(style) - panelInset + Spacing.tight
     }
 }

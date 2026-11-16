@@ -371,6 +371,10 @@ extension AppModel {
     /// is always there and takes the name the answer earns.
     func guildSurfaceRows(for guildID: GuildID) -> [GuildSurface] {
         var rows: [GuildSurface] = []
+        // **First**, as Discord puts it: the hub is the server's front page.
+        if offersServerHub(guildID) {
+            rows.append(.serverHub)
+        }
         if let guide = serverGuides[guildID], guide.isEnabled, !guide.isEmpty {
             rows.append(.serverGuide)
         }
@@ -925,16 +929,27 @@ extension AppModel {
     /// Whether this server's channel list is filtered by what the reader
     /// follows at all.
     ///
-    /// **Two conditions, and the second is the safety one.** A server without
-    /// onboarding has no opt-in channels, and an account that has never opted
-    /// into anything in a server that does has an *unknown* state rather than an
-    /// empty one — filtering there would hide every channel in it. So the list
-    /// is only ever narrowed for a server the reader demonstrably uses this on,
-    /// and every other server shows everything.
+    /// **The reader's own switch decides, as it does in Discord.** Its settings
+    /// store answers `isOptInEnabled` from one bit of the reader's guild
+    /// settings, `OPT_IN_CHANNELS_ON` — the bit the menu's *Show All Channels*
+    /// clears — and nothing about the server. This used to filter any server
+    /// with onboarding in which the reader followed anything, which is most
+    /// members of most onboarding servers: Discord opts members who joined
+    /// before onboarding into their default channels without turning the
+    /// filter on, so they saw one or two channels of a whole server (#8,
+    /// WC-6RZS), and an owner lost every private category. And it read the
+    /// onboarding, which is loaded only when a server is opened, so a hidden
+    /// channel lit its server's dot until then (#16). The bit comes with READY
+    /// for every server.
+    ///
+    /// **The second condition is the safety net.** A reader who turned the
+    /// filter on and follows nothing in the server has an unknown state rather
+    /// than an empty one — Discord onboards such a member into everything — so
+    /// the list is never narrowed to nothing.
     func hidesUnfollowedChannels(inGuild guildID: GuildID) -> Bool {
         Self.hidesUnfollowedChannels(
             inGuild: guildID,
-            onboardings: guildOnboardings,
+            settings: guildUserSettings,
             followed: followedChannelIDs,
             index: channelIndex
         )
@@ -942,11 +957,13 @@ extension AppModel {
 
     static func hidesUnfollowedChannels(
         inGuild guildID: GuildID,
-        onboardings: [GuildID: GuildOnboarding],
+        settings: [GuildID: GuildUserSettings],
         followed: Set<ChannelID>,
         index: ChannelIndex
     ) -> Bool {
-        guard onboardings[guildID]?.isEnabled == true else { return false }
+        guard let flags = settings[guildID]?.flags,
+              flags & GuildUserSettingsFlags.optInChannelsOn != 0
+        else { return false }
         guard !followed.isEmpty else { return false }
         return index.channelIDs(inGuild: guildID).contains { followed.contains($0) }
     }
@@ -956,19 +973,28 @@ extension AppModel {
     /// The selected one always does. Browse Channels can open a channel the
     /// reader has opted out of, and a list with nothing lit while its transcript
     /// is on screen reads as the selection having been lost.
+    ///
+    /// **And the ones Discord keeps in an opted-in list** (its channel list
+    /// store, `eN`): a channel that mentions the reader, and a voice channel
+    /// somebody is in — a room with people talking in it is not something the
+    /// reader opted out of knowing about.
     func isChannelInList(_ channel: Channel, filtered: Bool) -> Bool {
         guard filtered else { return true }
-        return isChannelFollowed(channel) || channel.id == selectedChannelID
+        if isChannelFollowed(channel) || channel.id == selectedChannelID { return true }
+        if (readStates[channel.id]?.mentionCount ?? 0) > 0 { return true }
+        guard channel.kind == .voice || channel.kind == .stage else { return false }
+        return voiceStates.values.contains { $0.channelID == channel.id }
     }
 
     static func isChannelInList(
         _ channel: Channel,
         filtered: Bool,
         followed: Set<ChannelID>,
-        selected: ChannelID?
+        selected: ChannelID?,
+        mentions: Int = 0
     ) -> Bool {
         guard filtered else { return true }
-        if followed.contains(channel.id) || channel.id == selected { return true }
+        if followed.contains(channel.id) || channel.id == selected || mentions > 0 { return true }
         guard let parentID = channel.parentID else { return false }
         return followed.contains(parentID)
     }

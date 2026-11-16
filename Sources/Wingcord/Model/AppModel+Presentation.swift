@@ -1058,7 +1058,8 @@ extension AppModel {
                 isUnread: state.unread,
                 mentionCount: state.mentions,
                 isMuted: state.muted,
-                voiceMembers: []
+                voiceMembers: [],
+                offersActivePosts: channel.isForumLike || hasUnlistedActiveThreads(in: channel.id)
             )
         }
         let info = voiceChannelInfo[channel.id]
@@ -1339,7 +1340,7 @@ struct GuildBadgeWalk {
     private let channelIndex: ChannelIndex
     private let readStates: [ChannelID: ReadState]
     private let followedChannelIDs: Set<ChannelID>
-    private let guildOnboardings: [GuildID: GuildOnboarding]
+    private let guildUserSettings: [GuildID: GuildUserSettings]
     private let countsBadges: Bool
 
     init(model: AppModel) {
@@ -1347,7 +1348,7 @@ struct GuildBadgeWalk {
         channelIndex = model.channelIndex
         readStates = model.readStates
         followedChannelIDs = model.followedChannelIDs
-        guildOnboardings = model.guildOnboardings
+        guildUserSettings = model.guildUserSettings
         countsBadges = AppSettings.shared.showsUnreadCounts
         model.permissionGate.beginWalk()
     }
@@ -1355,7 +1356,7 @@ struct GuildBadgeWalk {
     func badge(for guildID: GuildID) -> (mentions: Int, unread: Bool, muted: Bool) {
         let filtersByFollow = AppModel.hidesUnfollowedChannels(
             inGuild: guildID,
-            onboardings: guildOnboardings,
+            settings: guildUserSettings,
             followed: followedChannelIDs,
             index: channelIndex
         )
@@ -1375,9 +1376,12 @@ struct GuildBadgeWalk {
             // opted OUT of is exactly as absent from that list, so it is held to
             // the same rule.
             guard gate.canViewDuringWalk(channelID) else { continue }
+            // A mention keeps an unfollowed channel in the list (Discord's
+            // `eN`), so it keeps its light here too: one rule for both.
             guard AppModel.isChannelInList(
                 channel, filtered: filtersByFollow,
-                followed: followedChannelIDs, selected: selectedChannelID
+                followed: followedChannelIDs, selected: selectedChannelID,
+                mentions: readStates[channelID]?.mentionCount ?? 0
             ) else { continue }
             let state = AppModel.unreadState(of: channel, in: readStates)
             guard !state.muted else { continue }

@@ -268,6 +268,9 @@ final class TimelineCoordinator: NSObject {
     private var frameObserver: NSObjectProtocol?
     private var scrollBeganObserver: NSObjectProtocol?
     private var scrollEndedObserver: NSObjectProtocol?
+    /// `ImageStore.picturesMayRetry`: the connection is back, so the pictures
+    /// that failed while it was down are asked for again.
+    private var retryObserver: NSObjectProtocol?
     /// Fires the acknowledgement that was withheld while the app was behind
     /// another one. See `acknowledgeIfRead`.
     private var activationObserver: NSObjectProtocol?
@@ -626,6 +629,18 @@ final class TimelineCoordinator: NSObject {
                 posterURLs: urls
             )
         }
+        canvas.onOpenForwardedAttachment = { [weak self] messageID, index, widths, urls in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.openMedia(
+                messageID: messageID,
+                in: channelID,
+                attachmentIndex: index,
+                posterWidths: widths,
+                posterURLs: urls,
+                forwarded: true
+            )
+        }
+        canvas.onJumpToForwarded = { [weak self] jump in self?.model.jumpToForwarded(jump) }
 
         // The media viewer flies a picture out of its box here and back into
         // it, and leaves the box empty while the picture is out.
@@ -725,6 +740,13 @@ final class TimelineCoordinator: NSObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.setScrolling(false) }
         }
+        retryObserver = center.addObserver(
+            forName: ImageStore.picturesMayRetry,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.schedulePrefetch() }
+        }
         // **Reading is what marks a channel read, and reading needs the app to
         // be in front.** A channel left open behind another window is not being
         // read, so the acknowledgement waits — and the moment the reader comes
@@ -820,10 +842,11 @@ final class TimelineCoordinator: NSObject {
         let center = NotificationCenter.default
         for observer in [
             boundsObserver, frameObserver, scrollBeganObserver, scrollEndedObserver,
-            activationObserver, shedObserver, highlightObserver, lookUpObserver,
+            activationObserver, shedObserver, highlightObserver, lookUpObserver, retryObserver,
         ] {
             if let observer { center.removeObserver(observer) }
         }
+        retryObserver = nil
         boundsObserver = nil
         frameObserver = nil
         scrollBeganObserver = nil
@@ -848,6 +871,8 @@ final class TimelineCoordinator: NSObject {
         canvas?.onOpenEmoji = nil
         canvas?.onOpenSticker = nil
         canvas?.onOpenAttachment = nil
+        canvas?.onOpenForwardedAttachment = nil
+        canvas?.onJumpToForwarded = nil
         canvas?.onRevealAttachment = nil
         MediaSources.shared.unregister(self)
         canvas?.onToggleFavoriteGIF = nil
@@ -1478,6 +1503,7 @@ final class TimelineCoordinator: NSObject {
         reconcileUserCards()
         placeEmbedPlayer()
         schedulePrefetch()
+        if let channelID, !rows.isEmpty { LoadMarks.shared.mark(.painted, in: channelID) }
         // A page landing is the moment a channel's newest message becomes
         // known, so it is the moment the channel can be acknowledged at all.
         acknowledgeIfRead()
@@ -2069,6 +2095,7 @@ final class TimelineCoordinator: NSObject {
             playsAnimatedEmoji: AnimationClock.playsAnimatedEmoji,
             filmsOnLayers: true,
             revealedAttachments: { [weak canvas] in canvas?.revealedAttachmentIndexes(of: $0) ?? [] },
+            revealedForwardAttachments: { [weak canvas] in canvas?.revealedForwardAttachmentIndexes(of: $0) ?? [] },
             onActivityIcon: { [weak model] in model?.sessionController.deriveActivityAccent($0) }
         )
         // The head has no message to repaint, so a face it draws is owned by
@@ -2088,6 +2115,7 @@ final class TimelineCoordinator: NSObject {
         owners: [ImageStore.Key: [MessageID]]
     ) {
         guard !isTornDown, let canvas else { return }
+        if let channelID { LoadMarks.shared.mark(.faces, in: channelID) }
         var messages = Set<MessageID>()
         for request in landed {
             guard let ids = owners[request.key] else {

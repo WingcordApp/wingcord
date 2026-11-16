@@ -391,18 +391,29 @@ private struct MediaStatusOverlay: View {
     var body: some View {
         Group {
             if let message = playback.failure ?? stage.failure {
-                ContentUnavailableView(
-                    "Couldn’t open this",
-                    systemImage: "exclamationmark.triangle",
-                    description: Text(message)
-                )
+                ContentUnavailableView {
+                    Label("Couldn’t open this", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(message)
+                } actions: {
+                    // A picture's failure can be asked again; the player has
+                    // its own recovery.
+                    if playback.failure == nil {
+                        Button("Try Again") { stage.retry() }
+                            .buttonStyle(.plain)
+                            .font(.system(.body, weight: .semibold))
+                            .padding(.horizontal, Spacing.margin)
+                            .frame(height: Metrics.control)
+                            .glassEffect(.regular.interactive(), in: .capsule)
+                    }
+                }
                 .frame(maxWidth: 360)
             } else if stage.isLoading || playback.isBuffering {
                 ProgressView()
                     .controlSize(.large)
+                    .allowsHitTesting(false)
             }
         }
-        .allowsHitTesting(false)
     }
 }
 

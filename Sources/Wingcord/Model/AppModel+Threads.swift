@@ -367,6 +367,12 @@ extension AppModel {
         threadRevision &+= 1
     }
 
+    /// More Active Posts' way to the same first page — see
+    /// `AppModel.preloadActivePosts`.
+    func loadThreadListForFlyout(_ channelID: ChannelID) {
+        loadThreadList(channelID)
+    }
+
     /// The shared loader behind the board and the flyout.
     private func loadThreadList(_ channelID: ChannelID) {
         var board = forumBoard(for: channelID)

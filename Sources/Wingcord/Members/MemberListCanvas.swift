@@ -228,7 +228,12 @@ final class MemberListCanvas: NSView {
         // than left playing on whoever moved into that slot.
         updatePlatePlayback()
         needsDisplay = true
-        return layout.contentHeight
+        // **The whole list's height, the Activity section included.** The rows
+        // are drawn below it (`rowFrame`), and answering the rows' height alone
+        // made the document one section too short: the last rows — the Offline
+        // group, on most servers — sat past the end of the scroll and showed
+        // only while a fling stretched past it.
+        return contentHeight
     }
 
     /// What sits at a row, or nil past the end of the list.

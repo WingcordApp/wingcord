@@ -16,12 +16,15 @@ struct ServerList: View, Equatable {
     var previewedGuild: RailGuild? = nil
     var pendingApplications: [RailGuild] = []
     var selectedGuildID: GuildID?
+    /// Read All, while some server is unread — see `ReadAllCapsule`.
+    var readAll: (() -> Void)? = nil
 
     static func == (lhs: ServerList, rhs: ServerList) -> Bool {
         lhs.items == rhs.items
             && lhs.previewedGuild == rhs.previewedGuild
             && lhs.pendingApplications == rhs.pendingApplications
             && lhs.selectedGuildID == rhs.selectedGuildID
+            && (lhs.readAll == nil) == (rhs.readAll == nil)
     }
 
     var selectGuild: (GuildID) -> Void = { _ in }
@@ -37,6 +40,14 @@ struct ServerList: View, Equatable {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
+                if let readAll {
+                    HStack {
+                        Spacer(minLength: 0)
+                        ReadAllCapsule(action: readAll)
+                    }
+                    .padding(.horizontal, Spacing.snug)
+                    .padding(.bottom, Spacing.tight)
+                }
                 // Above the rule, as the rail has them: where the reader is
                 // looking without being a member.
                 if let previewedGuild {
@@ -69,7 +80,10 @@ struct ServerList: View, Equatable {
                 ServerListAction(title: "Add a Server", symbolName: "plus", action: addServer)
                 ServerListAction(title: "Explore Discoverable Servers", symbolName: "safari", action: openDiscovery)
             }
-            .padding(.horizontal, Spacing.base)
+            // **The page strip's inset, and the channel list's** (Image 6):
+            // at 8 the highlights ran two points past the strip above them on
+            // either side.
+            .padding(.horizontal, Spacing.base + Spacing.hair)
             .padding(.vertical, Spacing.base)
             .animation(motion.standard, value: items)
         }
@@ -124,8 +138,37 @@ struct ServerList: View, Equatable {
 
 nonisolated enum ServerListMetrics {
     static let icon: CGFloat = 36
+    static let iconCorner: CGFloat = 11
     static let rowHeight: CGFloat = 48
     static let folderIndent: CGFloat = 14
+}
+
+/// A server's icon in the list: the picture filling one rounded square, or
+/// its monogram on a tile of the same shape.
+///
+/// **One shape for both** (#15, Image 7). The picture used to be
+/// `GuildAvatar`, clipped to a circle, laid on a dark rounded-square tile, so
+/// the tile's four corners showed around every icon as a frame nobody drew.
+/// The tile is the monogram's ground and nothing else now; a picture covers the
+/// whole shape, and where its own artwork is transparent the row shows through.
+private struct ServerListIcon: View {
+    var url: URL?
+    var monogram: String
+
+    private var side: CGFloat { ServerListMetrics.icon }
+
+    var body: some View {
+        RemoteImage(url: url, side: side) {
+            Text(monogram)
+                .font(.system(size: side * 0.36, weight: .semibold))
+                .foregroundStyle(Ink.secondary)
+                .frame(width: side, height: side)
+                .background(ServerListInk.monogramTile)
+        }
+        .frame(width: side, height: side)
+        .clipShape(.rect(cornerRadius: ServerListMetrics.iconCorner, style: .continuous))
+        .accessibilityHidden(true)
+    }
 }
 
 /// One server: its icon, its name, and what is waiting in it.
@@ -142,11 +185,7 @@ private struct ServerListRow: View {
     var body: some View {
         Button(action: select) {
             HStack(spacing: Spacing.snug) {
-                GuildAvatar(url: guild.iconURL, name: guild.name, side: ServerListMetrics.icon)
-                    // A server with no icon is its monogram on a tile of its
-                    // own; a picture covers the tile.
-                    .background(ServerListInk.monogramTile)
-                    .clipShape(.rect(cornerRadius: 11, style: .continuous))
+                ServerListIcon(url: guild.iconURL, monogram: guild.monogram)
                     .overlay(alignment: .bottomTrailing) {
                         if let mark = guild.voiceMark {
                             Image(systemName: mark.symbolName)
@@ -226,7 +265,7 @@ private struct ServerListAction: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color(hex: 0x23A55A))
                     .frame(width: ServerListMetrics.icon, height: ServerListMetrics.icon)
-                    .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(ServerListInk.actionTile))
+                    .background(RoundedRectangle(cornerRadius: ServerListMetrics.iconCorner, style: .continuous).fill(ServerListInk.actionTile))
                 Text(title)
                     .font(.system(.body))
                     .foregroundStyle(Ink.secondary)

@@ -66,7 +66,14 @@ struct GuildRailTile: View {
                 // larger copy sitting behind the moving one. It is only there to
                 // cover the moment before the film lands, so it goes when the
                 // film arrives and comes back when the pointer leaves.
-                .opacity(isPlaying ? 0 : 1)
+                //
+                // **Only while the pointer is on it** (#9, WC-PHZX). The film
+                // reports from a task, and a report already queued when the
+                // pointer left lands after `isPlaying` was cleared and before
+                // the film is gone: the still stayed hidden under no film, a
+                // blank tile until the next hover. Off the tile, the still
+                // always shows, whatever a late report says.
+                .opacity(isPlaying && isHovering ? 0 : 1)
                 .frame(width: side, height: side)
                 // **Animated icons play under the pointer and nowhere else.**
                 //
@@ -157,8 +164,10 @@ struct GuildRailTile: View {
             guard isHovering != hovering else { return }
             isHovering = hovering
             // The animated layer leaves the tree with the hover, and it cannot
-            // report that it has stopped once it is gone.
-            if !hovering { isPlaying = false }
+            // report that it has stopped once it is gone. Cleared on the way
+            // in too: a late report from the last hover must not hide the
+            // still before this hover's film has a frame.
+            isPlaying = false
         }
         .animation(motion.hover, value: isHovering)
         .animation(motion.glassMorph, value: isSelected)

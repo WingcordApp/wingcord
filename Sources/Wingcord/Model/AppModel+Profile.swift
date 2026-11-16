@@ -34,6 +34,21 @@ extension AppModel {
         sessionController.loadProfile(of: userID, inGuild: nil)
     }
 
+    /// The server a profile with none of its own is read against: the
+    /// selected one, **but only while the reader is looking at it.**
+    ///
+    /// `selectedGuildID` still names the last server opened while the reader
+    /// is in a conversation (the Servers page keeps it), so a conversation's
+    /// profile — the pane beside a DM, a name clicked in one — came out wearing
+    /// that server's roles, nickname and avatar (#10). A conversation has no
+    /// server in it, and its profiles are the account's.
+    var profileFallbackGuildID: GuildID? {
+        if let selectedChannelID, let channel = channelIndex[selectedChannelID], channel.guildID == nil {
+            return nil
+        }
+        return selectedGuildID
+    }
+
     /// Resolves everything a profile surface draws.
     ///
     /// One resolver for both the card and the full profile. Two resolvers is how
@@ -45,11 +60,12 @@ extension AppModel {
         // the nickname: the roles, the per-server avatar and the join date all
         // belong to the membership, and a main profile showing a server's roles
         // is the hybrid this used to draw.
-        let guildID = request.showsMainProfile ? nil : (request.guildID ?? selectedGuildID)
+        let fallbackGuildID = profileFallbackGuildID
+        let guildID = request.showsMainProfile ? nil : (request.guildID ?? fallbackGuildID)
         let member = guildID.flatMap { members[$0]?[request.userID] }
         // Whether there is a per-server profile to switch *to*, which the menu
         // needs even while the main one is showing.
-        let homeGuildID = request.guildID ?? selectedGuildID
+        let homeGuildID = request.guildID ?? fallbackGuildID
         let homeMember = homeGuildID.flatMap { members[$0]?[request.userID] }
         let guildRoles = guildID.flatMap { roles[$0] } ?? [:]
         let presence = presences[request.userID]

@@ -37,12 +37,17 @@ extension AppModel {
         attachmentIndex: Int,
         posterWidths: [CGFloat],
         posterURLs: [URL?] = [],
-        origin: MediaViewerRequest.Origin = .transcript
+        origin: MediaViewerRequest.Origin = .transcript,
+        forwarded: Bool = false
     ) {
         // The transcript's copy, or the inspector's — see `knownMessage`.
         guard let message = knownMessage(messageID, in: channelID) else { return }
 
-        let attachments = message.attachments
+        // **A forward's files are a gallery of their own**, the forwarded
+        // message's, numbered from `MediaSources.forwardedIndexBase` so the
+        // flight finds their boxes rather than the message's own.
+        let attachments = forwarded ? (message.forwarded?.attachments ?? []) : message.attachments
+        let indexBase = forwarded ? MediaSources.forwardedIndexBase : 0
         guard attachments.indices.contains(attachmentIndex) else { return }
 
         // **A file nothing here can show is downloaded — whatever sits beside
@@ -62,8 +67,9 @@ extension AppModel {
                 ? posterWidths[position]
                 : Metrics.attachmentThumbnail
             let poster = posterURLs.indices.contains(position) ? posterURLs[position] : nil
-            guard let item = MediaItem(attachment, posterWidth: width, posterURL: poster, attachmentIndex: position)
-            else { continue }
+            guard let item = MediaItem(
+                attachment, posterWidth: width, posterURL: poster, attachmentIndex: indexBase + position
+            ) else { continue }
             if position == attachmentIndex { index = items.count }
             items.append(item)
         }
@@ -76,6 +82,28 @@ extension AppModel {
             origin: origin,
             authorName: authorName(of: message, in: channelID),
             sentAt: message.sentAt
+        )
+    }
+
+    /// Follows a forward's breadcrumb to the original — in a server the reader
+    /// is in, a jump; in one they are not, a preview of it first, as Discord's
+    /// breadcrumb lurks; in a conversation, the conversation.
+    func jumpToForwarded(_ jump: ForwardJump) {
+        guard let guildID = jump.guildID else {
+            openLink("https://discord.com/channels/@me/\(jump.channelID.rawValue)/\(jump.messageID.rawValue)")
+            return
+        }
+        guard guilds[guildID] == nil else {
+            openLink("https://discord.com/channels/\(guildID.rawValue)/\(jump.channelID.rawValue)/\(jump.messageID.rawValue)")
+            return
+        }
+        sessionController.previewGuild(
+            guildID,
+            channelID: jump.channelID,
+            messageID: jump.messageID,
+            origin: .forwardBreadcrumb,
+            location: "Forward Breadcrumb",
+            source: nil
         )
     }
 

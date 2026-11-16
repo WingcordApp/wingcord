@@ -524,6 +524,10 @@ extension AppModel {
             discovery?.openAppID == nil && discovery?.openStoreID == nil
         case .guildSurface(_, .channelsAndRoles), .guildSurface(_, .browseChannels):
             channelsAndRolesPresentation != nil
+        case .guildSurface(_, .serverHub):
+            // The hub's row carries its Edit and Settings, and in an edit Add
+            // Widget, Cancel and Save — `ServerHubBar`.
+            serverHubPresentation != nil
         case .guildSurface(_, .members):
             // The Members page, once its store is this server's: search, Sort
             // and Prune are on the row. While it loads, the ordinary row.

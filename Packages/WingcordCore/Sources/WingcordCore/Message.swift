@@ -238,6 +238,8 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var referencedMessageID: MessageID? { payload?.reference?.messageID }
     /// The message this one carries, when it is a forward.
     public var forwarded: ForwardedMessage? { payload?.forwarded }
+    /// What a Server Hub message is about. Nil for everything else.
+    public var guildSpaceData: GuildSpaceMessageData? { payload?.guildSpaceData }
     public var mentionedUserIDs: [UserID] { payload?.mentionedUserIDs ?? [] }
     /// The roles this message pinged. On the payload already — this is the
     /// accessor that was missing beside its two neighbours, which is why
@@ -371,6 +373,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     /// A reply at a moment of a clip — `media_mention`, Discord's timeline
     /// comment. Nil for everything else.
     public let mediaMention: MediaMention?
+    /// What a Server Hub message (type 69) is about — `guild_space_data`. Nil
+    /// for everything else.
+    public let guildSpaceData: GuildSpaceMessageData?
 
     public init(
         attachments: [Attachment] = [],
@@ -393,7 +398,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         applicationID: ApplicationID? = nil,
         thread: MessageThread? = nil,
         sharedTheme: SharedClientTheme? = nil,
-        mediaMention: MediaMention? = nil
+        mediaMention: MediaMention? = nil,
+        guildSpaceData: GuildSpaceMessageData? = nil
     ) {
         self.activityInvite = activityInvite
         self.listenAlong = listenAlong
@@ -416,6 +422,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         self.thread = thread
         self.sharedTheme = sharedTheme
         self.mediaMention = mediaMention
+        self.guildSpaceData = guildSpaceData
     }
 
     /// The same box with one array replaced.
@@ -450,7 +457,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             applicationID: applicationID,
             thread: thread,
             sharedTheme: sharedTheme,
-            mediaMention: mediaMention
+            mediaMention: mediaMention,
+            guildSpaceData: guildSpaceData
         )
     }
 
@@ -477,7 +485,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             applicationID: applicationID,
             thread: thread,
             sharedTheme: sharedTheme,
-            mediaMention: mediaMention
+            mediaMention: mediaMention,
+            guildSpaceData: guildSpaceData
         )
     }
 
@@ -504,7 +513,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             applicationID: applicationID,
             thread: thread,
             sharedTheme: sharedTheme,
-            mediaMention: mediaMention
+            mediaMention: mediaMention,
+            guildSpaceData: guildSpaceData
         )
     }
 
@@ -531,7 +541,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             applicationID: applicationID,
             thread: thread,
             sharedTheme: sharedTheme,
-            mediaMention: mediaMention
+            mediaMention: mediaMention,
+            guildSpaceData: guildSpaceData
         )
     }
 
@@ -544,7 +555,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             && mentionedRoleIDs.isEmpty && !mentionsEveryone
             && reference == nil && forwarded == nil && webhookID == nil && nonce == nil
             && activityInvite == nil && listenAlong == nil && interaction == nil && thread == nil
-            && sharedTheme == nil && mediaMention == nil
+            && sharedTheme == nil && mediaMention == nil && guildSpaceData == nil
     }
 
     public static func == (lhs: MessagePayload, rhs: MessagePayload) -> Bool {
@@ -570,7 +581,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
                 && lhs.interaction == rhs.interaction
                 && lhs.thread == rhs.thread
                 && lhs.sharedTheme == rhs.sharedTheme
-                && lhs.mediaMention == rhs.mediaMention)
+                && lhs.mediaMention == rhs.mediaMention
+                && lhs.guildSpaceData == rhs.guildSpaceData)
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -616,6 +628,9 @@ public enum MessageKind: Int, Hashable, Sendable, Codable {
     /// draws an author line over a blank row, which is what a closed poll looked
     /// like in this app.
     case pollResult = 46
+    /// A Server Hub event: the whiteboard is busy, the leaderboard turned over,
+    /// the music has a new top (`guild_space_data`).
+    case guildSpace = 69
     case unknown = -1
 
     public init(rawValue: Int) {
@@ -645,6 +660,7 @@ public enum MessageKind: Int, Hashable, Sendable, Codable {
         case 30: .stageRaiseHand
         case 31: .stageTopic
         case 46: .pollResult
+        case 69: .guildSpace
         default: .unknown
         }
     }
@@ -1075,9 +1091,19 @@ public struct ForwardedMessage: Hashable, Sendable, Codable {
     /// empty space, which is what a forward looked like in this app.
     public var attachments: [Attachment]
     public var embeds: [Embed]
+    /// The snapshot's stickers — `sticker_items`, as on any message.
+    public var stickers: [StickerRef]
     /// Where it was forwarded from, when the reference named it. Only ever used
     /// to say "from #channel"; never to attribute the message to anybody.
     public var channelID: ChannelID?
+    /// The original's server and id, from the reference: what Discord's
+    /// footer jumps to (its forward breadcrumb), previewing the server first
+    /// when the reader is not in it.
+    public var guildID: GuildID?
+    public var messageID: MessageID?
+    /// When the original was sent — the snapshot's own `timestamp`, else the
+    /// referenced id's moment, as Discord's footer reads it.
+    public var timestamp: Date?
 
     public var attachmentCount: Int { attachments.count }
     public var hasEmbed: Bool { !embeds.isEmpty }
@@ -1086,19 +1112,49 @@ public struct ForwardedMessage: Hashable, Sendable, Codable {
     /// empty snapshot is a real state — a message that has since been deleted —
     /// and the block still draws its label rather than a bare rule.
     public var isEmpty: Bool {
-        content.isEmpty && attachments.isEmpty && embeds.isEmpty
+        content.isEmpty && attachments.isEmpty && embeds.isEmpty && stickers.isEmpty
     }
+
+    /// The moment the footer shows: the snapshot's, else the one the original's
+    /// id encodes.
+    public var sentAt: Date? { timestamp ?? messageID?.timestamp }
 
     public init(
         content: String,
         attachments: [Attachment] = [],
         embeds: [Embed] = [],
-        channelID: ChannelID? = nil
+        stickers: [StickerRef] = [],
+        channelID: ChannelID? = nil,
+        guildID: GuildID? = nil,
+        messageID: MessageID? = nil,
+        timestamp: Date? = nil
     ) {
         self.content = content
         self.attachments = attachments
         self.embeds = embeds
+        self.stickers = stickers
         self.channelID = channelID
+        self.guildID = guildID
+        self.messageID = messageID
+        self.timestamp = timestamp
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case content, attachments, embeds, stickers, channelID, guildID, messageID, timestamp
+    }
+
+    /// **Every field after the first three is read if present**: a forward
+    /// written to the message cache before they existed still reads back.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        content = try container.decode(String.self, forKey: .content)
+        attachments = try container.decodeIfPresent([Attachment].self, forKey: .attachments) ?? []
+        embeds = try container.decodeIfPresent([Embed].self, forKey: .embeds) ?? []
+        stickers = try container.decodeIfPresent([StickerRef].self, forKey: .stickers) ?? []
+        channelID = try container.decodeIfPresent(ChannelID.self, forKey: .channelID)
+        guildID = try container.decodeIfPresent(GuildID.self, forKey: .guildID)
+        messageID = try container.decodeIfPresent(MessageID.self, forKey: .messageID)
+        timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp)
     }
 }
 

@@ -9,10 +9,34 @@ struct FriendsPage: View {
     @Environment(\.motion) private var motion
     @State private var tab = FriendsTab.online
     @State private var query = ""
+    /// The page's width, which decides whether Active Now has room beside it.
+    @State private var width: CGFloat = 0
+
+    /// Wide enough for the list and the column side by side, as Discord lays
+    /// them; under it the list has the page to itself.
+    private static let activeNowThreshold: CGFloat = 900
 
     var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            friends
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            if width >= Self.activeNowThreshold {
+                Divider()
+                    .padding(.vertical, Spacing.base)
+                ActiveNowColumn(
+                    cards: model.activeNowCards(),
+                    open: { model.messagePerson($0) }
+                )
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .animation(motion.standard, value: width >= Self.activeNowThreshold)
+    }
+
+    private var friends: some View {
         let rows = rows(for: tab)
-        VStack(alignment: .leading, spacing: Spacing.base * 1.5) {
+        return VStack(alignment: .leading, spacing: Spacing.base * 1.5) {
             HStack(spacing: Spacing.base) {
                 // The system's capsule tab strip, as the inbox's — see
                 // `SegmentedPicker`.
@@ -304,5 +328,160 @@ private extension PresenceStatus {
         case .doNotDisturb: "Do Not Disturb"
         case .invisible, .offline, .unknown: "Offline"
         }
+    }
+}
+
+// MARK: - Active Now
+
+/// The Friends page's right-hand column (#18): every friend doing something,
+/// as Discord's own Friends page has it.
+///
+/// **Cards on a standard material, not Liquid Glass**: this is the page's
+/// content, and the HIG keeps glass for the controls floating over it
+/// ("Don't use Liquid Glass in the content layer").
+struct ActiveNowColumn: View {
+    var cards: [ActiveNowCard]
+    /// A card clicked: the conversation with them.
+    var open: (UserID) -> Void
+
+    @Environment(\.motion) private var motion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.snug) {
+            Text("Active Now")
+                .font(.system(.title3, weight: .bold))
+                .foregroundStyle(Ink.primary)
+                .accessibilityAddTraits(.isHeader)
+            if cards.isEmpty {
+                quiet
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: Spacing.base) {
+                        ForEach(cards) { card in
+                            ActiveNowCardView(card: card, open: { open(card.id) })
+                        }
+                    }
+                    .padding(.bottom, Spacing.margin)
+                }
+                .scrollIndicators(.never)
+            }
+        }
+        .padding(.horizontal, Spacing.margin)
+        .padding(.top, Spacing.tight)
+        .frame(width: 330)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .animation(motion.standard, value: cards.map(\.id))
+    }
+
+    /// Discord's own words for an empty column.
+    private var quiet: some View {
+        VStack(alignment: .center, spacing: Spacing.base) {
+            Text("It\u{2019}s quiet for now\u{2026}")
+                .font(.system(.headline))
+                .foregroundStyle(Ink.primary)
+            Text("When a friend starts an activity, like playing a game or hanging out in voice, it\u{2019}ll show up here.")
+                .font(.system(.callout))
+                .foregroundStyle(Ink.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(Spacing.margin)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.glass, style: .continuous))
+    }
+}
+
+private struct ActiveNowCardView: View {
+    var card: ActiveNowCard
+    var open: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: Spacing.base) {
+                HStack(spacing: Spacing.snug) {
+                    AvatarView(url: card.avatarURL, monogram: card.monogram, side: 36)
+                        .overlay(alignment: .bottomTrailing) {
+                            PresenceDot(status: card.status, side: 12, client: card.client)
+                                .offset(x: 2, y: 2)
+                        }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(card.name)
+                            .font(.system(.body, weight: .semibold))
+                            .foregroundStyle(Ink.primary)
+                        Text(card.headline)
+                            .font(.system(.subheadline, weight: .medium))
+                            .foregroundStyle(Ink.primary.opacity(0.85))
+                        if !card.detail.isEmpty {
+                            Text(card.detail)
+                                .font(.system(.caption))
+                                .foregroundStyle(Ink.secondary)
+                        }
+                    }
+                    .lineLimit(1)
+                    Spacer(minLength: 0)
+                    art
+                }
+                if card.roomCount > 1 {
+                    HStack(spacing: Spacing.tight) {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Ink.secondary)
+                        HStack(spacing: -5) {
+                            ForEach(Array(card.roomFaces.enumerated()), id: \.offset) { _, face in
+                                AvatarView(url: face.url, monogram: face.monogram, side: 18)
+                                    .overlay(Circle().strokeBorder(.black.opacity(0.25), lineWidth: 1))
+                            }
+                        }
+                        Text("\(card.roomCount) in voice")
+                            .font(.system(.caption, weight: .medium))
+                            .foregroundStyle(Ink.secondary)
+                    }
+                    .padding(.leading, 48)
+                }
+            }
+            .padding(Spacing.snug)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.glass, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
+                    .strokeBorder(Ink.primary.opacity(isHovered ? 0.18 : 0.06), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: Radius.glass, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isHovered ? 1.01 : 1)
+        .onHover { hovering in
+            guard isHovered != hovering else { return }
+            isHovered = hovering
+        }
+        .animation(motion.hover, value: isHovered)
+        .help("Message \(card.name)")
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var art: some View {
+        Group {
+            if let url = card.artURL {
+                RemoteImage(url: url, side: 40) {
+                    Image(systemName: card.artSymbol)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Ink.secondary)
+                        .frame(width: 40, height: 40)
+                        .background(Palette.surfaceRaised)
+                }
+            } else {
+                Image(systemName: card.artSymbol)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Ink.secondary)
+                    .frame(width: 40, height: 40)
+                    .background(Palette.surfaceRaised)
+            }
+        }
+        .frame(width: 40, height: 40)
+        .clipShape(.rect(cornerRadius: 9, style: .continuous))
+        .accessibilityHidden(true)
     }
 }

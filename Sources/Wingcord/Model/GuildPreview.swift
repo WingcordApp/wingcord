@@ -43,6 +43,9 @@ struct GuildPreview: Hashable, Sendable {
         /// Opened from a server tag's card — Discord's `LURK_DISCOVERABLE`
         /// Join, for a discoverable server with no invite in hand.
         case guildProfile
+        /// Opened from a forwarded message's breadcrumb — Discord's
+        /// `FORWARD_BREADCRUMB`, which lurks the original's server first.
+        case forwardBreadcrumb
     }
 
     /// The game to return to, where there is one.

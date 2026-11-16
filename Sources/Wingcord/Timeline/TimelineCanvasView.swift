@@ -308,6 +308,8 @@ final class TimelineCanvasView: NSView {
     /// Which spoilered attachments have been uncovered, keyed the same way and
     /// deliberately in a separate table — see `TimelineRowPainter.State`.
     private var revealedAttachments: [MessageID: Set<Int>] = [:]
+    /// A forward's uncovered files, by message — a list of their own.
+    private var revealedForwardAttachments: [MessageID: Set<Int>] = [:]
     /// The picture the media viewer has out of its box — on stage, or flying
     /// there or back — whose box is left empty, so the picture is never in two
     /// places (REDESIGN.md D8). See `MediaSources`.
@@ -403,6 +405,15 @@ final class TimelineCanvasView: NSView {
     func revealedAttachmentIndexes(of messageID: MessageID) -> Set<Int> {
         revealedAttachments[messageID] ?? []
     }
+    /// The same among a forward's own files.
+    func revealedForwardAttachmentIndexes(of messageID: MessageID) -> Set<Int> {
+        revealedForwardAttachments[messageID] ?? []
+    }
+    /// A forward's picture clicked: the message, its place among the forward's
+    /// files, and each one's drawn width and URL, as `onOpenAttachment`.
+    var onOpenForwardedAttachment: ((MessageID, Int, [CGFloat], [URL?]) -> Void)?
+    /// A forward's breadcrumb clicked: the original.
+    var onJumpToForwarded: ((ForwardJump) -> Void)?
     /// A file card's Download, by message and attachment.
     var onDownloadAttachment: ((MessageID, Int) -> Void)?
     /// Stars or un-stars a GIF in the transcript.
@@ -1161,6 +1172,62 @@ final class TimelineCanvasView: NSView {
                 ))
             }
         }
+        // **A forward's moving pictures, on layers like the message's own.**
+        // The transcript's request pass leaves every moving picture to these
+        // layers (`filmsOnLayers`), so a forwarded GIF, sticker or looping
+        // card that no layer was asked for had no picture at all. Numbered
+        // past the message's own (`MediaSources.forwardedIndexBase`) so the
+        // two never share a slot.
+        if let forward = row.forwarded {
+            let base = MediaSources.forwardedIndexBase
+            for (offset, slot) in forward.stickers.enumerated() where slot.isAnimated {
+                guard let url = slot.url else { continue }
+                requests.append(.init(
+                    slot: FilmSlot(messageID: row.id, kind: .sticker, index: base + offset),
+                    source: slot.isVector
+                        ? .vector(url)
+                        : .film(key(url, side: max(slot.rect.width, slot.rect.height))),
+                    frame: slot.rect.offsetBy(dx: origin.x, dy: origin.y)
+                ))
+            }
+            let shownFiles = revealedForwardAttachments[row.id] ?? []
+            for (offset, slot) in forward.attachments.enumerated() where slot.isAnimated && loadsArtwork {
+                guard let url = slot.url, !slot.isSpoiler || shownFiles.contains(offset) else { continue }
+                requests.append(.init(
+                    slot: FilmSlot(messageID: row.id, kind: .attachment, index: base + offset),
+                    source: .film(key(url, side: max(slot.decodeWidth, slot.rect.width, slot.rect.height))),
+                    frame: slot.rect.offsetBy(dx: origin.x, dy: origin.y),
+                    gravity: slot.cropsToFill ? .resizeAspectFill : .resize,
+                    cornerRadius: 8,
+                    placeholder: ThemeInk.current.surfaceRaised,
+                    placeholderImage: PlaceholderImages.shared.image(slot.placeholder)
+                ))
+            }
+            var forwardImage = 0
+            for embed in forward.embeds {
+                for image in embed.images {
+                    defer { forwardImage += 1 }
+                    guard loadsArtwork else { continue }
+                    let source: TranscriptFilms.Request.Source
+                    if case .loop(let video) = image.video {
+                        source = .video(video)
+                    } else if image.isAnimated, let url = image.url {
+                        source = .film(key(url, side: max(image.decodeWidth, image.rect.width, image.rect.height)))
+                    } else {
+                        continue
+                    }
+                    requests.append(.init(
+                        slot: FilmSlot(messageID: row.id, kind: .embed, index: base + forwardImage),
+                        source: source,
+                        frame: image.rect.offsetBy(dx: origin.x, dy: origin.y),
+                        gravity: image.cropsToFill ? .resizeAspectFill : .resize,
+                        cornerRadius: image.isCircle ? image.rect.width / 2 : image.corner,
+                        placeholder: ThemeInk.current.placeholderFill,
+                        placeholderImage: PlaceholderImages.shared.image(image.placeholder)
+                    ))
+                }
+            }
+        }
         guard playsEmoji else { return }
         // A bubble in flight carries its words, emoji and all, until it lands.
         if let block = row.textBlock, !isFlying(row.id) {
@@ -1306,10 +1373,15 @@ final class TimelineCanvasView: NSView {
     /// is not laid out or the box is out of sight.
     func attachmentThumbnail(_ key: MediaSources.Key) -> MediaSources.Thumbnail? {
         guard let index = rows.firstIndex(where: { $0.messageID == key.messageID }),
-              case .message(let message) = rows[index].kind,
-              message.attachments.indices.contains(key.attachmentIndex)
+              case .message(let message) = rows[index].kind
         else { return nil }
-        let slot = message.attachments[key.attachmentIndex]
+        // A forward's own files are numbered past the message's — see
+        // `MediaSources.forwardedIndexBase`.
+        let isForwarded = key.attachmentIndex >= MediaSources.forwardedIndexBase
+        let slots = isForwarded ? (message.forwarded?.attachments ?? []) : message.attachments
+        let position = isForwarded ? key.attachmentIndex - MediaSources.forwardedIndexBase : key.attachmentIndex
+        guard slots.indices.contains(position) else { return nil }
+        let slot = slots[position]
         guard slot.kind == .image || slot.kind == .video else { return nil }
         let row = rowFrame(at: index)
         let frame = slot.rect.offsetBy(dx: row.minX, dy: row.minY)
@@ -1678,6 +1750,7 @@ final class TimelineCanvasView: NSView {
                     state.canAddReaction = canAddReactions
                     state.revealedSpoilers = revealedSpoilers[messageID] ?? []
                     state.revealedAttachments = revealedAttachments[messageID] ?? []
+                    state.revealedForwardAttachments = revealedForwardAttachments[messageID] ?? []
                     if case .message(let message) = row.kind, let card = message.sharedTheme {
                         state.isPreviewingSharedTheme = isThemePreviewing?(card.theme) == true
                         state.isSharedThemeSaved = isThemeSaved?(card.theme) == true
@@ -2202,6 +2275,20 @@ final class TimelineCanvasView: NSView {
                 return
             }
             onOpenAttachment?(row.id, attachmentIndex, row.attachments.map(\.decodeWidth), row.attachments.map(\.url))
+        case .forwardedAttachment(let attachmentIndex, let isHidden):
+            guard let forward = row.forwarded else { return }
+            guard !isHidden else {
+                revealedForwardAttachments[row.id, default: []].insert(attachmentIndex)
+                invalidateRow(index)
+                reconcileFilms()
+                onRevealAttachment?()
+                return
+            }
+            onOpenForwardedAttachment?(
+                row.id, attachmentIndex, forward.attachments.map(\.decodeWidth), forward.attachments.map(\.url)
+            )
+        case .forwardJump(let jump):
+            onJumpToForwarded?(jump)
         case .downloadAttachment(let attachmentIndex, _):
             onDownloadAttachment?(row.id, attachmentIndex)
         case .favoriteGIF(let attachmentIndex):
@@ -2566,6 +2653,10 @@ final class TimelineCanvasView: NSView {
         case spoiler(Int)
         /// A picture, a GIF or a video, and whether it is still covered.
         case attachment(index: Int, isHidden: Bool)
+        /// The same, among a forward's own files.
+        case forwardedAttachment(index: Int, isHidden: Bool)
+        /// A forward's breadcrumb: the way to the original.
+        case forwardJump(ForwardJump)
         /// The star on a GIF. Ahead of the picture in the hit test, because it
         /// sits inside it and the picture would otherwise swallow every press.
         case favoriteGIF(index: Int)
@@ -2924,6 +3015,44 @@ final class TimelineCanvasView: NSView {
             return .attachment(index: attachmentIndex, isHidden: isHidden)
         }
 
+        // **A forward's own content, which the hit test used to stop short
+        // of**: its files open the viewer, its spoilers lift, its stickers and
+        // its cards' links answer, and its breadcrumb goes to the original.
+        // Its words, when they are the row's own text, were answered above.
+        if let forward = row.forwarded, forward.rect.contains(local) {
+            if let jump = forward.jump, forward.footerRect.insetBy(dx: -4, dy: -2).contains(local) {
+                return .forwardJump(jump)
+            }
+            for slot in forward.stickers where slot.rect.contains(local) {
+                return .sticker(slot.sticker, slot.rect.offsetBy(dx: frame.minX, dy: frame.minY))
+            }
+            let revealed = revealedForwardAttachments[row.id] ?? []
+            for (index, slot) in forward.attachments.enumerated()
+            where slot.kind != .textPreview && slot.rect.contains(local) {
+                return .forwardedAttachment(index: index, isHidden: slot.isSpoiler && !revealed.contains(index))
+            }
+            for slot in forward.embeds {
+                for image in slot.images {
+                    guard let controls = image.controls, let video = image.video, video.isPlayable else { continue }
+                    if controls.play.contains(local) { return .playVideo(video, image.rect) }
+                    if controls.open.contains(local) {
+                        return .link(.url(controls.page.absoluteString), controls.open)
+                    }
+                }
+            }
+            for text in forward.embeds.lazy.flatMap(\.texts) {
+                let inBlock = CGPoint(x: local.x - text.origin.x, y: local.y - text.origin.y)
+                guard inBlock.x >= 0, inBlock.y >= 0,
+                      inBlock.x <= text.block.size.width, inBlock.y <= text.block.size.height,
+                      let hit = text.block.link(at: inBlock)
+                else { continue }
+                return .link(
+                    hit.target,
+                    hit.rect.offsetBy(dx: text.origin.x, dy: text.origin.y).offsetBy(dx: frame.minX, dy: frame.minY)
+                )
+            }
+        }
+
         if let chip = row.threadChip, chip.rect.contains(local) {
             return .threadChip(chip.targetID, origin: chip.rect.origin)
         }
@@ -3163,6 +3292,10 @@ final class TimelineCanvasView: NSView {
                 component = rect.origin
                 cursor = .pointingHand
             case .favoriteEmbedGIF, .previewClip, .openMusicPlayer, .playVideo:
+                cursor = .pointingHand
+            case .forwardJump:
+                // The breadcrumb's origin, which the painter lights.
+                component = row.forwarded?.footerRect.origin
                 cursor = .pointingHand
             case .spoiler(let index):
                 spoiler = index

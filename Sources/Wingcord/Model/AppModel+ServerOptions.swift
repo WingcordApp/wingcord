@@ -1,5 +1,6 @@
 import SwiftUI
 import WingcordCore
+import WingcordNet
 
 // MARK: - What a server's menu offers, and what happens when it is used
 //
@@ -456,6 +457,43 @@ extension AppModel {
     /// the menu's job here is the same act the reader would do by clicking
     /// through the list, and the channels that are already read are skipped so
     /// a quiet server costs nothing.
+    /// Marks every server read — Read All (#7, WC-VACZ; Vencord's
+    /// readAllNotificationsButton): every channel with something unread, and
+    /// every thread the reader follows, in every server, acknowledged up to
+    /// its newest message in Discord's bulk ack, a hundred to a request.
+    ///
+    /// **Muted channels too**, as the plugin does: a muted channel's dot is
+    /// already hidden, but its unread still counts in the inbox and on a phone.
+    /// Conversations are left alone — Read All is about the servers.
+    func markAllServersRead() {
+        var updates: [ReadStateUpdate] = []
+        for guildID in guilds.keys {
+            for channelID in channelIndex.channelIDs(inGuild: guildID) {
+                guard let channel = channelIndex[channelID],
+                      channel.kind.isConversation || channel.kind.isThread,
+                      permissionGate.canView(channelID)
+                else { continue }
+                if channel.kind.isThread, threadMemberships[channelID] == nil { continue }
+                guard unreadState(of: channel).unread || (readStates[channelID]?.mentionCount ?? 0) > 0,
+                      let newest = channel.lastMessageID
+                else { continue }
+                updates.append(ReadStateUpdate(channelID: channelID, messageID: newest))
+            }
+        }
+        guard !updates.isEmpty else { return }
+        sessionController.acknowledgeServers(updates)
+    }
+
+    /// Whether any server has something unread — what shows Read All.
+    var hasUnreadServers: Bool {
+        railItems.contains { item in
+            switch item {
+            case .guild(let guild): guild.hasUnread || guild.mentionCount > 0
+            case .folder(let folder): folder.hasUnread || folder.mentionCount > 0
+            }
+        }
+    }
+
     func markGuildRead(_ guildID: GuildID) {
         for channelID in channelIndex.channelIDs(inGuild: guildID) {
             guard let channel = channelIndex[channelID], channel.kind.isConversation else {

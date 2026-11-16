@@ -505,6 +505,37 @@ private struct AppearancePane: View {
             }
         }
 
+        // **The channel list's own spacing, with a live preview** (Alex,
+        // 2026-11-16). The preview draws the list's own rows at the values
+        // being chosen, and the sidebar itself follows as the sliders move.
+        SettingsGroup("Channel list") {
+            SettingsCard {
+                ChannelSpacingPreview(
+                    spacing: SidebarListSpacing(
+                        channel: settings.channelSpacing, category: settings.categorySpacing
+                    )
+                )
+                CardDivider()
+                SettingsSliderRow(
+                    title: "Space between channels",
+                    help: "Less packs more channels into the list; more gives each one room.",
+                    value: $settings.channelSpacing,
+                    range: AppSettings.channelSpacingRange,
+                    step: 2,
+                    format: { $0 == 0 ? "Default" : "\($0 > 0 ? "+" : "")\(Int($0)) pt" }
+                )
+                CardDivider()
+                SettingsSliderRow(
+                    title: "Space above categories",
+                    help: "The gap that sets each category apart from the channels above it.",
+                    value: $settings.categorySpacing,
+                    range: AppSettings.categorySpacingRange,
+                    step: 2,
+                    format: { $0 == 0 ? "Default" : "\($0 > 0 ? "+" : "")\(Int($0)) pt" }
+                )
+            }
+        }
+
         SettingsGroup("Timestamps") {
             SettingsCard {
                 CardHeaderRow(title: "Clock", help: "12-hour or 24-hour times.")

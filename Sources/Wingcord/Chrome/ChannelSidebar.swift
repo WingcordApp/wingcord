@@ -67,6 +67,9 @@ struct ChannelSidebar: View, Equatable {
     @Environment(\.sidebarTitleLeading) private var titleLeading
     @Environment(\.sidebarHeaderBand) private var headerBand
     @Environment(\.sidebarBarsInset) private var barsInset
+    /// The window's arrangement, for whether the header's toggle has folded
+    /// into the + menu and given the name its room (#17).
+    @Environment(\.shellLayout) private var shellLayout
     /// How far the list has been scrolled — see `SidebarScroll`.
     @State private var scroll = SidebarScroll()
     /// Whether the pointer is over the banner — see `SidebarBannerPointer`.
@@ -137,7 +140,8 @@ struct ChannelSidebar: View, Equatable {
     /// height on a server that had none.
     private var layout: SidebarBannerLayout {
         SidebarBannerLayout(
-            hasBanner: hasBanner, chromeInset: topInset, columnWidth: columnWidth, titleLeading: titleLeading
+            hasBanner: hasBanner, chromeInset: topInset, columnWidth: columnWidth, titleLeading: titleLeading,
+            foldsSidebarToggle: shellLayout?.foldsSidebarToggle ?? false
         )
     }
 
@@ -472,6 +476,16 @@ struct ChannelSidebar: View, Equatable {
         // size of it; the rows find the router in the environment.
         .environment(\.sidebarHoverRouter, hoverRouter)
         .background { SidebarHoverSurface(router: hoverRouter) }
+        // The reader's spacing (Settings › Appearance › Channel list). With a
+        // denser setting the system's minimum row height steps aside, so rows
+        // can come under it; at the default nothing changes.
+        .environment(\.sidebarListSpacing, SidebarListSpacing(
+            channel: settings.channelSpacing, category: settings.categorySpacing
+        ))
+        .environment(
+            \.defaultMinListRowHeight,
+            settings.channelSpacing < 0 ? 0 : Metrics.sidebarRowContent + Metrics.sidebarRowInset * 2
+        )
         // The column's own ground shows through: the theme, the wallpaper's
         // vibrancy, and the banner the list scrolls over.
         .scrollContentBackground(.hidden)
@@ -840,10 +854,20 @@ private struct ServerTitleItem: View, Equatable {
         .accessibilityLabel(Text(name))
     }
 
+    /// Whether the server's mark is drawn. **It goes before the name is cut**
+    /// (#17): the mark repeats what the rail already says, the name is the
+    /// only thing that says which server this is.
+    private var showsMark: Bool {
+        mark != nil && maxWidth >= Self.roomForMark
+    }
+
+    /// The width under which the mark gives its room to the name.
+    private static let roomForMark: CGFloat = 170
+
     /// The banner pill's label, at the header's size.
     private func label(opensMenu: Bool) -> some View {
         HStack(spacing: Spacing.tight) {
-            if let mark {
+            if let mark, showsMark {
                 GuildMarkBadge(mark: mark, side: Self.markSide)
                     .padding(.trailing, Spacing.hair)
             }
@@ -860,7 +884,7 @@ private struct ServerTitleItem: View, Equatable {
             }
         }
         // The capsule's ends are half its height away; a heading has none.
-        .padding(.leading, opensMenu ? (mark == nil ? 14 : 10) : 0)
+        .padding(.leading, opensMenu ? (showsMark ? 10 : 14) : 0)
         .padding(.trailing, opensMenu ? 12 : 0)
         .frame(height: ShellMetrics.headerControl)
         .contentShape(.capsule)

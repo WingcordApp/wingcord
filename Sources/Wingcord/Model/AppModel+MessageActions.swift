@@ -395,7 +395,10 @@ extension AppModel {
         guard let message = message(messageID, in: channelID),
               permissionGate.actions(for: message).contains(.copyText)
         else { return }
-        Self.copy(message.content)
+        // **A forward copies what it forwards** when it carries no words of
+        // its own — the text on screen. Its content is empty, and Copy Text
+        // used to put nothing on the pasteboard.
+        Self.copy(message.content.isEmpty ? (message.forwarded?.content ?? "") : message.content)
     }
 
     func copyLink(to messageID: MessageID, in channelID: ChannelID) {

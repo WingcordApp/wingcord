@@ -141,6 +141,9 @@ nonisolated enum TimelineMetrics {
     static let forwardTopPadding: CGFloat = 4
     static let forwardLineGap: CGFloat = 4
     static let forwardGlyphSide: CGFloat = 11
+    /// The server icon before a forward's breadcrumb, for an original in
+    /// another server — Discord's 16.
+    static let forwardFooterIconSide: CGFloat = 16
     /// The star that keeps a GIF, on the picture it belongs to.
     static let favoriteBadgeSide: CGFloat = 30
     static let favoriteBadgeInset: CGFloat = 8

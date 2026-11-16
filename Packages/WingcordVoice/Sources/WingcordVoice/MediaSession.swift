@@ -155,6 +155,12 @@ public actor MediaSession {
         /// Discord's "isn't detecting any input from your mic": nothing but
         /// digital silence, unmuted, for five seconds — and its end.
         case inputSilent(Bool)
+        /// Whether the call is running without the echo canceller although
+        /// the reader asked for one: Apple's voice processor would not come up
+        /// on this Mac, or cost it its microphone and was given up. Speakers
+        /// then feed the other side's voices back to them (#14), and the reader
+        /// should hear about it rather than discover it.
+        case echoCancellationUnavailable(Bool)
         /// Which kind of client somebody in the call is on — opcode 20.
         case platform(userID: UInt64, platform: Int)
         /// What somebody's client says about clips — opcode 18's flags. See
@@ -1379,6 +1385,7 @@ public actor MediaSession {
         }
         audio.isInputMuted = isMuted && !isRecordingVoiceNote
         audioSend.isMuted = isMuted
+        reportEchoCancellation(audio)
 
         // **Announced before the first packet, and silently fatal to miss.**
         // The server learns our SSRC from this; without it every packet we send
@@ -1386,6 +1393,15 @@ public actor MediaSession {
         await gateway?.setSpeaking(.microphone, ssrc: ourSSRC)
         startMixPump(audio)
         return true
+    }
+
+    /// Tells the app whether the call came up without the canceller the
+    /// reader asked for — see `Event.echoCancellationUnavailable`. A reader who
+    /// turned Echo Cancellation off is not told: that is their choice.
+    private func reportEchoCancellation(_ audio: VoiceAudioEngine) {
+        let wanted = preferences.processing.echoCancellation
+        let running = audio.isVoiceProcessing
+        emit(.echoCancellationUnavailable(wanted && !running))
     }
 
     // MARK: A voice message, during the call
@@ -1764,7 +1780,10 @@ public actor MediaSession {
             if !captureWatch.hasAbandonedVoiceProcessing {
                 captureWatch.hasAbandonedVoiceProcessing = true
                 captureWatch.lastCaptured = 0
-                Task { @MainActor [audio] in _ = audio.abandonVoiceProcessing() }
+                Task { @MainActor [audio, weak self] in
+                    _ = audio.abandonVoiceProcessing()
+                    await self?.reportEchoCancellation(audio)
+                }
                 return
             }
             guard !captureWatch.hasReportedSilence else { return }

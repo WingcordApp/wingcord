@@ -507,6 +507,10 @@ final class AppModel {
     /// True while the microphone gives nothing but silence, unmuted — what
     /// Discord's "isn't detecting any input from your mic" is about.
     var isMicSilent = false
+    /// The call came up without the echo canceller the reader asked for —
+    /// see `MediaSession.Event.echoCancellationUnavailable`. The call's HUD
+    /// says so and suggests headphones (#14).
+    var isEchoCancellationOff = false
     /// Direct-message calls, by conversation. A call exists here before anybody
     /// has joined it — that is what ringing is.
     var directCalls: [ChannelID: DirectCall] = [:]
@@ -1222,6 +1226,9 @@ final class AppModel {
     @ObservationIgnored var demoInviteArt: [String: DemoInviteArt] = [:]
     var memberVerifications: [GuildID: MemberVerification] = [:]
     var gameServers: [GuildID: [GameServer]] = [:]
+    /// Every server's Server Hub this session has asked about, and the edit in
+    /// progress — `ServerHubStore`.
+    let serverHub = ServerHubStore()
     /// Connection instructions, by SKU rather than by instance: two servers on
     /// one plan share an answer.
     var gameServerProducts: [String: GameServerProduct] = [:]
@@ -2025,7 +2032,21 @@ final class AppModel {
     /// Seeded from READY's `user_guild_settings` and kept current by
     /// `USER_GUILD_SETTINGS_UPDATE`, which fires for this client's own writes
     /// and for one made on a phone.
-    var guildUserSettings: [GuildID: GuildUserSettings] = [:]
+    var guildUserSettings: [GuildID: GuildUserSettings] = [:] {
+        didSet {
+            // **The opt-in bit decides which channels exist in a list** and
+            // which can light a server (`hidesUnfollowedChannels`), so flipping
+            // Show All Channels — here or on a phone — has to rebuild both. Only
+            // that bit: a mute or a level changing touches neither memo.
+            let bit = GuildUserSettingsFlags.optInChannelsOn
+            let changed = Set(oldValue.keys).union(guildUserSettings.keys).contains { guildID in
+                (oldValue[guildID]?.flags ?? 0) & bit != (guildUserSettings[guildID]?.flags ?? 0) & bit
+            }
+            guard changed else { return }
+            followRevision &+= 1
+            railRevision &+= 1
+        }
+    }
 
     /// Guilds the account has muted. Their unread never reaches the rail.
     var mutedGuildIDs: Set<GuildID> = []

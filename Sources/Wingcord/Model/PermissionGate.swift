@@ -343,7 +343,8 @@ final class PermissionGate {
                 isAuthor: message.authorID == model.currentUserID,
                 isTimedOut: isTimedOut(in: guildID),
                 isSystemEvent: message.isSystemEvent,
-                hasText: !message.content.isEmpty,
+                // A forward with no note of its own copies what it forwards.
+                hasText: !message.content.isEmpty || !(message.forwarded?.content.isEmpty ?? true),
                 isPinned: message.isPinned,
                 isDirectMessage: channel?.kind.isPrivate ?? false,
                 isPreviewing: guildID != nil && guildID == model.guildPreview?.guildID,

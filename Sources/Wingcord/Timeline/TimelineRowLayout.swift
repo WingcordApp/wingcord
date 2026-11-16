@@ -332,11 +332,37 @@ nonisolated struct ForwardedSlot: Sendable {
     var bodyOrigin: CGPoint
     var attachments: [AttachmentSlot]
     var embeds: [EmbedSlot]
-    /// "#general · 4 Aug 2026", when the source channel is one this account can
-    /// name. Nil otherwise — inventing a name for a channel the reader has no
-    /// access to is a claim the client cannot support.
+    /// The snapshot's stickers, drawn as the message's own are.
+    var stickers: [StickerSlot] = []
+    /// Discord's breadcrumb: "#general  •  Today at 13:15 ›", or the server's
+    /// name with its icon when the original is in another server. Nil where
+    /// the reader cannot see where it came from — inventing a name for a
+    /// channel the reader has no access to is a claim the client cannot make.
     var footer: TimelineTextBlock?
     var footerOrigin: CGPoint
+    /// The whole breadcrumb, icon and chevron included: what a click jumps
+    /// to the original from. Zero without a footer.
+    var footerRect: CGRect = .zero
+    /// The server's icon before its name, for an original in another server.
+    var footerIconURL: URL?
+    var footerIconRect: CGRect = .zero
+    /// The chevron after the time.
+    var footerChevronRect: CGRect = .zero
+    /// Where the breadcrumb goes — nil when there is nowhere to go.
+    var jump: ForwardJump?
+    /// **Whether the body is the row's own text** (`MessageRow.textBlock`).
+    /// A forward with no words of its own around it hands its text to the row,
+    /// so selecting, copying, links, mentions, emoji and spoilers in it all
+    /// work as they do in any message — they used to stop at the quote's edge.
+    /// The row draws it then, and this slot does not.
+    var bodyIsRowText = false
+}
+
+/// Where a forward's breadcrumb goes: the original message.
+nonisolated struct ForwardJump: Sendable, Equatable {
+    var guildID: GuildID?
+    var channelID: ChannelID
+    var messageID: MessageID
 }
 
 /// What a forum post's bar needs to know — Discord's `rg`, under the opening
@@ -1079,6 +1105,8 @@ private nonisolated struct MessageContent {
     var textOrigin: CGPoint
     var editedFoot: EditedFootSlot?
     var forwarded: ForwardedSlot?
+    /// A forward's words, standing in for the message's own when it has none.
+    var forwardText: TimelineTextBlock?
     var stickers: [StickerSlot] = []
     var attachments: [AttachmentSlot] = []
     var upload: UploadCardSlot?
@@ -2019,13 +2047,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             // order every client draws it in.
             if let snapshot = message.forwarded {
                 y += inset
-                let slot = Self.layoutForward(
+                var slot = Self.layoutForward(
                     snapshot,
                     origin: CGPoint(x: cardX, y: y),
                     availableWidth: cardWidth,
                     input: input,
                     parser: parser
                 )
+                // **The forward's words are the row's words when it has none
+                // of its own** — see `ForwardedSlot.bodyIsRowText`.
+                if words == nil, let body = slot.body {
+                    slot.bodyIsRowText = true
+                    content.forwardText = body
+                    content.textOrigin = slot.bodyOrigin
+                }
                 content.forwarded = slot
                 holds(slot.rect)
                 y = slot.rect.maxY + gap
@@ -2615,7 +2650,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             roleEmoji: hasAuthorLine ? author?.roleEmoji : nil,
             roleIconRect: roleIconRect,
             forwarded: content.forwarded,
-            textBlock: words?.block,
+            textBlock: words?.block ?? content.forwardText,
             textOrigin: content.textOrigin,
             editedFoot: content.editedFoot,
             attachments: content.attachments,
@@ -2720,14 +2755,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         input: Input
     ) -> MessageRow {
         let message = item.message
-        let author = input.authors[message.authorID]
+        // A Server Hub line is about somebody other than its author — the
+        // leader, the top listener — and draws that person's name in their
+        // colour, clicking through to them.
+        let namedID = message.kind == .guildSpace
+            ? message.guildSpaceData?.subjectUserID ?? message.authorID
+            : message.authorID
+        let author = input.authors[namedID]
         let name = author?.name ?? "Someone"
-        let sentence = SystemMessageText.sentence(for: message, name: name)
+        let sentence = SystemMessageText.sentence(for: message, name: name, nameOf: { input.authors[$0]?.name })
         let y = input.settings.runSpacing
 
         let text = Self.systemText(
             sentence,
-            authorID: message.authorID,
+            authorID: namedID,
             colorValue: author?.colorValue,
             nameFace: author?.nameFace,
             nameTracking: author?.nameTracking ?? 0,
@@ -3585,6 +3626,23 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y += block.size.height
         }
 
+        // Stickers above the files, as on the message itself: a sticker IS the
+        // message, and one under a screenshot reads as a caption on it.
+        var stickers: [StickerSlot] = []
+        for sticker in snapshot.stickers {
+            y += TimelineMetrics.attachmentGap
+            let side = min(Metrics.stickerInline, contentWidth)
+            let rect = CGRect(x: contentX, y: y, width: side, height: side)
+            stickers.append(StickerSlot(
+                rect: rect,
+                sticker: sticker,
+                url: CDN.sticker(id: sticker.id, format: sticker.format),
+                isVector: sticker.format == .lottie,
+                isAnimated: sticker.format.isAnimated
+            ))
+            y = rect.maxY
+        }
+
         let attachments = attachmentSlots(
             snapshot.attachments,
             origin: CGPoint(x: contentX, y: y),
@@ -3612,28 +3670,59 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             }
         }
 
-        // Where it came from. **Only when this account can name the channel** —
-        // a forward out of a server the reader is not in has a snowflake and no
-        // name, and inventing one is a claim the client cannot support.
+        // **Discord's breadcrumb** (its forward footer, read 2026-11-16): the
+        // original's channel when it is in this message's server and the
+        // reader may see it, else that server's icon and name; then the time
+        // it was sent; then a chevron, because the whole line jumps to it. An
+        // original in a conversation, or in a server this account knows
+        // nothing of, has no line: inventing a name for a place the reader
+        // cannot see is a claim the client cannot make.
+        let footerParts = Self.forwardOrigin(of: snapshot, in: input)
         var footer: TimelineTextBlock?
         var footerOrigin = CGPoint.zero
-        if let channelID = snapshot.channelID,
-           let channel = input.mentions.channels[channelID]
-        {
+        var footerRect = CGRect.zero
+        var footerIconRect = CGRect.zero
+        var footerChevronRect = CGRect.zero
+        if let footerParts {
             y += TimelineMetrics.forwardLineGap
-            footer = TimelineTextBlock(
-                text: .plain(NSAttributedString(
-                    string: (channel.isConversation ? "@" : "#") + channel.name,
-                    attributes: [
-                        .font: style.metadataFont,
-                        .foregroundColor: style.tertiaryColor,
-                    ]
-                )),
-                width: contentWidth,
+            let time = snapshot.sentAt.map { input.settings.timestampLabel($0, calendar: input.calendar) }
+            let words = [footerParts.label, time].compactMap(\.self).joined(separator: "  \u{2022}  ")
+            let iconSide = TimelineMetrics.forwardFooterIconSide
+            let chevronSide = TimelineMetrics.forwardGlyphSide - 2
+            let iconRoom = footerParts.iconURL == nil ? 0 : iconSide + Spacing.tight
+            let attributed = NSAttributedString(
+                string: words,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .medium),
+                    .foregroundColor: style.tertiaryColor,
+                ]
+            )
+            // **The words' own width**, so the chevron follows the time rather
+            // than standing at the far edge of the block.
+            let room = max(40, contentWidth - iconRoom - chevronSide - Spacing.tight)
+            let block = TimelineTextBlock(
+                text: .plain(attributed),
+                width: min(room, attributed.size().width.rounded(.up) + 1),
                 style: style
             )
-            footerOrigin = CGPoint(x: contentX, y: y)
-            y += footer?.size.height ?? 0
+            footer = block
+            footerOrigin = CGPoint(x: contentX + iconRoom, y: y)
+            if footerParts.iconURL != nil {
+                footerIconRect = CGRect(
+                    x: contentX, y: y + (block.size.height - iconSide) / 2, width: iconSide, height: iconSide
+                )
+            }
+            footerChevronRect = CGRect(
+                x: footerOrigin.x + block.size.width + Spacing.tight,
+                y: y + (block.size.height - chevronSide) / 2,
+                width: chevronSide,
+                height: chevronSide
+            )
+            footerRect = CGRect(
+                x: contentX, y: y,
+                width: footerChevronRect.maxX - contentX, height: block.size.height
+            )
+            y += block.size.height
         }
 
         let height = y + TimelineMetrics.forwardTopPadding - origin.y
@@ -3652,9 +3741,48 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             bodyOrigin: bodyOrigin,
             attachments: attachments,
             embeds: embeds,
+            stickers: stickers,
             footer: footer,
-            footerOrigin: footerOrigin
+            footerOrigin: footerOrigin,
+            footerRect: footerRect,
+            footerIconURL: footerParts?.iconURL,
+            footerIconRect: footerIconRect,
+            footerChevronRect: footerChevronRect,
+            jump: footerParts == nil ? nil : snapshot.channelID.flatMap { channelID in
+                snapshot.messageID.map {
+                    ForwardJump(guildID: snapshot.guildID, channelID: channelID, messageID: $0)
+                }
+            }
         )
+    }
+
+    /// What a forward's breadcrumb names, and the server icon before it —
+    /// Discord's `getForwardInfo`. Nil where it names nothing.
+    static func forwardOrigin(
+        of snapshot: ForwardedMessage,
+        in input: Input
+    ) -> (label: String, iconURL: URL?)? {
+        let mentions = input.mentions
+        func server(_ guildID: GuildID) -> (label: String, iconURL: URL?)? {
+            guard let name = mentions.guildNames[guildID] else { return nil }
+            let icon = mentions.guildIconHashes[guildID].flatMap {
+                CDN.guildIcon(guildID: guildID, hash: $0, side: TimelineMetrics.forwardFooterIconSide)
+            }
+            return (name, icon)
+        }
+        // In this message's own server: the channel, when the reader may see
+        // it; the server, when the channel is one this account does not know.
+        if let guildID = snapshot.guildID, guildID == mentions.currentGuildID {
+            guard let channelID = snapshot.channelID, let channel = mentions.channels[channelID] else {
+                return server(guildID)
+            }
+            guard channel.canView else { return nil }
+            return ((channel.kind == .directMessage || channel.kind == .groupDirectMessage ? "@" : "#")
+                + channel.name, nil)
+        }
+        // Another server's: its name and icon, when this account knows it.
+        if let guildID = snapshot.guildID { return server(guildID) }
+        return nil
     }
 
     // MARK: A forum post's bar

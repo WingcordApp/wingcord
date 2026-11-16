@@ -72,6 +72,11 @@ final class MediaStageController {
     func jump(to item: MediaItem, direction: Int) { jumpHandler?(item, direction) }
     @ObservationIgnored fileprivate var jumpHandler: ((MediaItem, Int) -> Void)?
 
+    /// Asks for the picture on stage again, after a failure — the error's Try
+    /// Again. A dropped connection is the usual reason, and it is usually back.
+    func retry() { retryHandler?() }
+    @ObservationIgnored fileprivate var retryHandler: (() -> Void)?
+
     /// Flies the picture home, into `home` where it is on screen, and calls
     /// `onClosed` when it has landed. A second call while it flies is ignored.
     func close(home: MediaSources.Thumbnail?, velocity: CGPoint = .zero) {
@@ -241,6 +246,7 @@ struct MediaStage: NSViewRepresentable {
             view.onClosed = { [weak self] in self?.controller.onClosed?() }
             view.onPage = { [weak self] direction in self?.onPage(direction) }
             controller.jumpHandler = { [weak self] item, direction in self?.jump(to: item, direction: direction) }
+            controller.retryHandler = { [weak self] in self?.retry() }
         }
 
         /// Lays `item` on the side it is coming from and turns the page to it.
@@ -288,7 +294,7 @@ struct MediaStage: NSViewRepresentable {
                     hasVisibleContent = poster != nil
                 }
                 controller.report(loading: !hasVisibleContent, failure: nil)
-                load(item, pixels: MediaStage.openingPixels)
+                load(item, pixels: openingPixels)
             }
 
             if !hasOpened {
@@ -335,15 +341,39 @@ struct MediaStage: NSViewRepresentable {
             )
         }
 
+        /// The rendition the stage opens at: 2048 pixels, or the stage's own
+        /// width in pixels where that is more — a full-screen viewer on a large
+        /// display is five thousand pixels wide, and a 2048 copy stretched over
+        /// it is the "trash quality because it's upscaled" picture.
+        private var openingPixels: Int {
+            guard let view else { return MediaStage.openingPixels }
+            let scale = view.window?.backingScaleFactor ?? 2
+            let stage = Int((max(view.bounds.width, view.bounds.height) * scale).rounded(.up))
+            return min(MediaStage.closeUpPixels, max(MediaStage.openingPixels, stage))
+        }
+
         /// A closer look, once, when the reader has actually asked for one.
+        ///
+        /// **Asked again when the opening rendition lands** (`load`): a zoom
+        /// made while it was still on its way found nothing loaded to escalate
+        /// from and gave up, and the picture stayed stretched until the next
+        /// zoom. And a picture whose size Discord did not send is assumed to be
+        /// worth the close-up rather than never escalated.
         private func escalateIfNeeded(_ scale: CGFloat) {
             guard scale >= MediaStage.closeUpThreshold,
-                  loadedPixels == MediaStage.openingPixels,
+                  loadedPixels > 0, loadedPixels < MediaStage.closeUpPixels,
                   let itemID,
                   let item = pendingItem, item.id == itemID, item.kind == .image,
-                  (item.pixelWidth ?? 0) > MediaStage.openingPixels
+                  (item.pixelWidth ?? .max) > loadedPixels
             else { return }
             load(item, pixels: MediaStage.closeUpPixels)
+        }
+
+        /// Try Again: the item on stage, from the top.
+        private func retry() {
+            guard let item = pendingItem, item.id == itemID else { return }
+            controller.report(loading: true, failure: nil)
+            load(item, pixels: openingPixels)
         }
 
         private func load(_ item: MediaItem, pixels: Int) {
@@ -369,6 +399,8 @@ struct MediaStage: NSViewRepresentable {
                     }
                     self.hasVisibleContent = true
                     self.controller.report(loading: false, failure: nil)
+                    // A zoom made while this was on its way.
+                    if pixels < MediaStage.closeUpPixels { self.escalateIfNeeded(self.controller.zoomScale) }
                 case .failed:
                     // A poster on screen is a better answer than an error over
                     // it — the reader can see the picture.
@@ -406,6 +438,16 @@ struct MediaStage: NSViewRepresentable {
             // a close-up (`ImageStore.Bucket`).
             if let image = await ImageStore.shared.image(for: key, bucket: .stage) {
                 return .still(image)
+            }
+            // **Then the file itself.** The proxy's rendition can refuse what
+            // the upload answers (Image 8, "Couldn't load kkh56z2.png"): a
+            // format it will not transcode, a size it will not scale. The
+            // original is what was uploaded, so it is the last word.
+            if url != item.sourceURL {
+                let original = ImageStore.Key(url: item.sourceURL, maximumPixelSize: pixels)
+                if let image = await ImageStore.shared.image(for: original, bucket: .stage) {
+                    return .still(image)
+                }
             }
             return .failed
         }

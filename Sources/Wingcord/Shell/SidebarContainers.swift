@@ -100,6 +100,7 @@ struct GuildRailContainer: View {
             homeMentionCount: 0,
             homeHasUnread: false,
             showAllServers: showsAllServersButton ? { SidebarPager.shared.toggleAllServers() } : nil,
+            readAll: model.hasUnreadServers ? { model.markAllServersRead() } : nil,
             selectHome: { model.selectGuild(nil) },
             selectGuild: { model.selectGuild($0) },
             openGuildMenu: { model.openServerOptions($0, anchor: $1) },
@@ -126,6 +127,8 @@ struct ChannelSidebarContainer: View {
 
     var body: some View {
         list
+            // More Active Posts reads the store it opens from.
+            .onAppear { ActivePostsFlyout.shared.model = model }
             // The conversations' preview lines, asked for once the list and
             // the connection are both there — and again only for
             // conversations that arrive later.
@@ -206,6 +209,7 @@ struct ServerListContainer: View {
             previewedGuild: model.previewRailGuild,
             pendingApplications: model.pendingApplicationsRail?.guilds ?? [],
             selectedGuildID: model.selectedGuildID,
+            readAll: model.hasUnreadServers ? { model.markAllServersRead() } : nil,
             selectGuild: { guildID in
                 model.selectGuild(guildID)
                 // Picking the server already open is going back to it too.

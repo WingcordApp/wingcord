@@ -22,6 +22,9 @@ struct VoiceHUD: View {
     var presentation: VoicePresentation
     /// Discord's silent-mic warning, under the controls.
     var isMicSilent = false
+    /// The call is running without echo cancellation although the reader
+    /// asked for it (#14): speakers would feed everybody's voice back to them.
+    var isEchoCancellationOff = false
 
     var toggleMute: () -> Void = {}
     var toggleDeafen: () -> Void = {}
@@ -60,6 +63,23 @@ struct VoiceHUD: View {
                     Text("Discord isn\u{2019}t detecting any input from your mic.")
                 } icon: {
                     Image(systemName: "mic.badge.xmark")
+                }
+                .font(.system(.caption, weight: .medium))
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .transition(.opacity)
+            }
+
+            // **Said, rather than discovered through an echo.** The engine
+            // falls back to a call without the canceller where Apple's voice
+            // processor will not come up on a Mac, because a call beats no
+            // call — and the people on it hear themselves through the
+            // speakers. Headphones are the cure that needs nothing from us.
+            if isEchoCancellationOff {
+                Label {
+                    Text("Echo cancellation is off on this Mac. Use headphones so others don\u{2019}t hear themselves.")
+                } icon: {
+                    Image(systemName: "headphones")
                 }
                 .font(.system(.caption, weight: .medium))
                 .foregroundStyle(.orange)
@@ -146,6 +166,7 @@ struct VoiceHUDContainer: View {
                     // about it — Discord's own setting, on by default.
                     isMicSilent: model.isMicSilent && !presentation.isMuted
                         && AppSettings.shared.showsSilentMicWarning,
+                    isEchoCancellationOff: model.isEchoCancellationOff,
                     toggleMute: model.toggleVoiceMute,
                     toggleDeafen: model.toggleVoiceDeafen,
                     toggleCamera: model.toggleCamera,

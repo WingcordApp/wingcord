@@ -545,6 +545,7 @@ private struct MembersBar: View {
     var prune: (() -> Void)?
 
     private static let searchWidth: CGFloat = 240
+    private static let searchMinimumWidth: CGFloat = 150
 
     var body: some View {
         PageHeaderBar {
@@ -562,14 +563,19 @@ private struct MembersBar: View {
             if store.tab == .members {
                 GlassEffectContainer(spacing: Spacing.base) {
                     HStack(spacing: Spacing.base) {
+                        // **The field gives way, never the buttons' words.** A
+                        // fixed 240 left the labels to absorb a narrow window,
+                        // and "Sort" broke over two lines (Image 20).
                         SearchField(prompt: "Search by username or ID", text: $text)
-                            .frame(width: Self.searchWidth)
+                            .frame(minWidth: Self.searchMinimumWidth, idealWidth: Self.searchWidth, maxWidth: Self.searchWidth)
                         MembersSortButton(store: store)
                         if let prune {
                             Button(action: prune) {
                                 Text("Prune")
                                     .font(.system(.subheadline, weight: .semibold))
                                     .foregroundStyle(Ink.primary)
+                                    .lineLimit(1)
+                                    .fixedSize()
                                     .padding(.horizontal, Spacing.margin)
                                     .frame(height: SearchField.height)
                                     .contentShape(.capsule)
@@ -608,7 +614,9 @@ private struct MembersSortButton: View {
                     .font(.system(size: 11, weight: .semibold))
                 Text("Sort")
                     .font(.system(.subheadline, weight: .semibold))
+                    .lineLimit(1)
             }
+            .fixedSize()
             .padding(.horizontal, Spacing.margin)
             .frame(height: SearchField.height)
             .contentShape(.capsule)

@@ -200,6 +200,33 @@ struct InviteSheetTests {
 /// A slide is a deliberate act: it's the whole point of asking for one.
 @Suite("Slide to confirm")
 struct SlideRuleTests {
+
+    /// **#6, WC-4AC1.** However far the pointer goes, the knob stops at the end
+    /// of the bar; it used to stretch a quarter of the track past it.
+    @Test("A drag never takes the knob past the end of the bar")
+    func dragStopsAtTheEnd() {
+        let travel: CGFloat = 300
+        #expect(SlideRule.dragPosition(wanted: travel, travel: travel) == travel)
+        #expect(SlideRule.dragPosition(wanted: travel + 200, travel: travel) == travel)
+        #expect(SlideRule.dragPosition(wanted: 10_000, travel: travel) == travel)
+        #expect(SlideRule.dragPosition(wanted: 150, travel: travel) == 150)
+    }
+
+    @Test("A pull the wrong way gives a little, and only a little")
+    func homeGivesALittle() {
+        let pulled = SlideRule.dragPosition(wanted: -500, travel: 300)
+        #expect(pulled < 0)
+        #expect(pulled >= -SlideRule.homeGive)
+    }
+
+    @Test("A settle is quick for a fling and never crawls")
+    func settleDurationIsBounded() {
+        #expect(SlideRule.settleDuration(distance: 300, velocity: 50_000) == 0.12)
+        #expect(SlideRule.settleDuration(distance: 300, velocity: 0) == 0.32)
+        let middle = SlideRule.settleDuration(distance: 100, velocity: 1_000)
+        #expect(middle > 0.12 && middle < 0.32)
+    }
+
     private let travel: CGFloat = 300
 
     @Test("At the end, it's done, with a couple of points' grace")

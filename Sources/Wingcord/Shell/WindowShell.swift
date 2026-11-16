@@ -31,13 +31,17 @@ struct WindowShell: View {
     @State private var laidLeading: CGFloat?
     /// How far the conversation is pushed from where it is laid out.
     @State private var slide = ConversationSlide()
+    /// The window is in full screen, where the traffic lights are not on it —
+    /// so the headers take their room (`ShellLayout.lightsClearance`).
+    @State private var isFullScreen = false
 
     var body: some View {
         let layout = ShellLayout(
             style: settings.sidebarStyle,
             sidebarWidth: settings.sidebarWidth,
             isSidebarShown: settings.isSidebarShown,
-            isTakenOver: model.isColumnTakenOver
+            isTakenOver: model.isColumnTakenOver,
+            isFullScreen: isFullScreen
         )
         ZStack(alignment: .topLeading) {
             DetailColumn(layout: layout)
@@ -73,6 +77,10 @@ struct WindowShell: View {
                 centerY: ShellMetrics.trafficLightsCenterY
             )
             .frame(width: 0, height: 0)
+        }
+        .background {
+            FullScreenProbe { isFullScreen = $0 }
+                .frame(width: 0, height: 0)
         }
         .capsWindowMinimumSize()
         // The wallpaper follows the conversation on screen — a conversation
@@ -316,7 +324,23 @@ private struct SidebarPanel: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let shape = PanelShape(style: layout.style)
+        switch layout.style {
+        case .floating:
+            // **The window's own corner less the inset**, which the system
+            // knows and this file does not: concentric on whichever macOS
+            // draws whichever corner (Image 24).
+            panel(shape: ConcentricRectangle(
+                corners: .concentric(minimum: .fixed(ShellMetrics.floatingPanelMinimumRadius)),
+                isUniform: true
+            ))
+        case .docked:
+            panel(shape: Rectangle())
+        }
+    }
+
+    /// The panel in one silhouette. Generic rather than a type-erased shape,
+    /// so a concentric corner is resolved against the window it sits in.
+    private func panel<PanelOutline: Shape>(shape: PanelOutline) -> some View {
         SidebarColumnContent(isTakenOver: layout.isTakenOver)
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
@@ -379,25 +403,10 @@ private struct SidebarPanel: View {
     }
 }
 
-/// The panel's silhouette: concentric with the window's corners when it floats,
-/// a plain column when it is docked.
-private nonisolated struct PanelShape: Shape {
-    var style: SidebarStyle
-
-    func path(in rect: CGRect) -> Path {
-        switch style {
-        case .floating:
-            Path(roundedRect: rect, cornerRadius: ShellMetrics.floatingPanelRadius, style: .continuous)
-        case .docked:
-            Path(rect)
-        }
-    }
-}
-
 /// The panel's material: Liquid Glass (the HIG's sidebar), with a veil under the
 /// rows so a bright picture behind the window cannot wash their text out.
-private struct PanelGround: View {
-    var shape: PanelShape
+private struct PanelGround<PanelOutline: Shape>: View {
+    var shape: PanelOutline
     var style: SidebarStyle
 
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -484,13 +493,19 @@ private struct PanelHeaderRow: View {
             // The lights are the window's, positioned in window space; this is
             // only the room they take inside the panel.
             Color.clear
-                .frame(width: ShellMetrics.trafficLightsClearance(layout.style) - layout.panelInset)
+                .frame(width: max(0, layout.lightsClearance - layout.panelInset))
             Spacer(minLength: 0)
             if !layout.isTakenOver {
-                HeaderCircleButton(systemImage: "sidebar.leading", label: "Hide Sidebar") {
-                    ShellActions.toggleSidebar()
+                // **The name gets the room first** (#17): where it would be cut
+                // to a letter or two, the toggle goes into the + menu, which
+                // carries Hide Sidebar then — and ⌃⌘S and View › Hide Sidebar
+                // stay where they always are.
+                if !layout.foldsSidebarToggle {
+                    HeaderCircleButton(systemImage: "sidebar.leading", label: "Hide Sidebar") {
+                        ShellActions.toggleSidebar()
+                    }
                 }
-                CreateMenu()
+                CreateMenu(includesHideSidebar: layout.foldsSidebarToggle)
             }
         }
         .padding(.trailing, 10)
@@ -505,10 +520,20 @@ private struct PanelHeaderRow: View {
 
 /// What the `+⌄` makes.
 struct CreateMenu: View {
+    /// Whether the menu carries Hide Sidebar, for a header too narrow for the
+    /// toggle beside it (`ShellLayout.foldsSidebarToggle`).
+    var includesHideSidebar = false
+
     @Environment(AppModel.self) private var model
 
     var body: some View {
         HeaderCreateMenu(label: "Create") {
+            if includesHideSidebar {
+                Button("Hide Sidebar", systemImage: "sidebar.leading") {
+                    ShellActions.toggleSidebar()
+                }
+                Divider()
+            }
             Button("New Message…", systemImage: "square.and.pencil") {
                 NewMessageRequest.shared.isShown = true
             }
@@ -551,5 +576,74 @@ private struct DetailColumn: View {
             )) {
                 ChannelTopicSheet()
             }
+    }
+}
+
+// MARK: - Full screen
+
+/// Tells the shell when its window goes into full screen and comes out.
+///
+/// **On the way in and on the way out, not after.** The headers give the
+/// lights' room back as the window grows to fill the screen, so the move is
+/// part of the transition rather than a jump once it has landed.
+struct FullScreenProbe: NSViewRepresentable {
+    var report: (Bool) -> Void
+
+    func makeNSView(context: Context) -> FullScreenProbeView {
+        let view = FullScreenProbeView()
+        view.report = report
+        return view
+    }
+
+    func updateNSView(_ view: FullScreenProbeView, context: Context) {
+        view.report = report
+    }
+
+    static func dismantleNSView(_ view: FullScreenProbeView, coordinator: ()) {
+        view.stopObserving()
+    }
+}
+
+final class FullScreenProbeView: NSView {
+    var report: ((Bool) -> Void)?
+    private var observers: [NSObjectProtocol] = []
+    private var reported: Bool?
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stopObserving()
+        guard let window else { return }
+        let changes: [(Notification.Name, Bool)] = [
+            (NSWindow.willEnterFullScreenNotification, true),
+            (NSWindow.didEnterFullScreenNotification, true),
+            (NSWindow.willExitFullScreenNotification, false),
+            (NSWindow.didExitFullScreenNotification, false),
+        ]
+        for (name, isFullScreen) in changes {
+            observers.append(NotificationCenter.default.addObserver(
+                forName: name, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.send(isFullScreen) }
+            })
+        }
+        send(window.styleMask.contains(.fullScreen))
+    }
+
+    func stopObserving() {
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers.removeAll()
+    }
+
+    /// Once per change: a report of the same answer would still invalidate
+    /// the shell.
+    private func send(_ isFullScreen: Bool) {
+        guard reported != isFullScreen else { return }
+        reported = isFullScreen
+        // Out of the current update: this can arrive inside AppKit's own
+        // layout pass, and a state write there is undefined (`INVARIANTS.md`
+        // §1, a representable never reports from an update).
+        DispatchQueue.main.async { [weak self] in self?.report?(isFullScreen) }
     }
 }

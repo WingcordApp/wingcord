@@ -155,7 +155,16 @@ private struct ServerSettingsPaneContent: View {
         case .profile: ServerProfilePane(store: store, model: model)
         case .tag: ServerTagPane(store: store)
         case .serverTheme: ServerThemePane(store: store, model: model)
-        case .engagement: EngagementPane(store: store, memberCount: model.guilds[store.guildID]?.memberCount)
+        case .engagement:
+            EngagementPane(
+                store: store,
+                memberCount: model.guilds[store.guildID]?.memberCount,
+                serverHub: model.guilds[store.guildID]?.spaceSettings,
+                isServerHubSaving: model.serverHub.settingsInFlight.contains(store.guildID),
+                setServerHubEnabled: { [guildID = store.guildID] isOn in
+                    model.sessionController.setServerHubEnabled(guildID, isOn: isOn)
+                }
+            )
         case .boostPerks: BoostPerksPane(store: store, model: model)
         case .emoji: EmojiPane(store: store, model: model)
         case .stickers: StickersPane(store: store, model: model)

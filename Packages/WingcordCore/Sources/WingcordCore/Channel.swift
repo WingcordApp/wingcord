@@ -19,6 +19,8 @@ public enum ChannelKind: Int, Hashable, Sendable, Codable {
     case directory = 14
     case forum = 15
     case media = 16
+    /// The hidden channel a Server Hub's whiteboard runs in. Never listed.
+    case guildSpace = 20
     /// Anything Discord adds after this file was written.
     case unknown = -1
 
@@ -37,6 +39,7 @@ public enum ChannelKind: Int, Hashable, Sendable, Codable {
         case 14: .directory
         case 15: .forum
         case 16: .media
+        case 20: .guildSpace
         default: .unknown
         }
     }
@@ -47,7 +50,7 @@ public enum ChannelKind: Int, Hashable, Sendable, Codable {
         case .text, .directMessage, .groupDirectMessage, .announcement,
              .announcementThread, .publicThread, .privateThread, .voice:
             true
-        case .category, .stage, .directory, .forum, .media, .unknown:
+        case .category, .stage, .directory, .forum, .media, .guildSpace, .unknown:
             false
         }
     }
@@ -75,6 +78,7 @@ public enum ChannelKind: Int, Hashable, Sendable, Codable {
         case .forum: "list.bullet.rectangle"
         case .media: "photo.on.rectangle"
         case .directory: "signpost.right.fill"
+        case .guildSpace: "house.fill"
         // Discord's own glyphs, which the app ships as custom symbols — see
         // `DiscordGlyph`. A private thread wears the lock Discord gives it.
         case .announcementThread, .publicThread: "discord.thread"

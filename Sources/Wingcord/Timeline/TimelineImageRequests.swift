@@ -118,6 +118,8 @@ nonisolated enum TimelineImageRequests {
         /// The spoilered attachments the reader has uncovered, by message — a
         /// spoiler's picture is fetched only once it is drawn.
         revealedAttachments: (MessageID) -> Set<Int> = { _ in [] },
+        /// The same for a forward's own files.
+        revealedForwardAttachments: (MessageID) -> Set<Int> = { _ in [] },
         onActivityIcon: ((ActivityInvite) -> Void)? = nil
     ) -> [Request] {
         var requests: [Request] = []
@@ -414,6 +416,75 @@ nonisolated enum TimelineImageRequests {
                 }
             }
 
+            // **A forward's own pictures, which nothing asked for** (Alex,
+            // 2026-11-16: "media from forwarded messages doesn't even load").
+            // The painter peeks them like everything else, so a forwarded
+            // photograph, sticker or link card stayed a grey plate unless some
+            // other surface had happened to fetch the same bytes. Keyed exactly
+            // as `drawForward` peeks.
+            if let forward = row.forwarded {
+                for slot in forward.stickers {
+                    guard let url = slot.url else { continue }
+                    let key = ImageStore.Key(url: url, maximumPixelSize: Int((slot.rect.width * scale).rounded(.up)))
+                    guard seen.insert(key).inserted else { continue }
+                    if slot.isAnimated {
+                        guard !filmsOnLayers else { continue }
+                        if let request = moving(key, still: slot.isVector ? nil : .artwork) { requests.append(request) }
+                    } else if ImageStore.shared.cached(key, bucket: .artwork) == nil {
+                        requests.append(Request(key: key, source: .still(.artwork)))
+                    }
+                }
+                let revealed = forward.attachments.contains(where: \.isSpoiler)
+                    ? revealedForwardAttachments(row.id) : []
+                for (index, slot) in forward.attachments.enumerated()
+                where slot.carriesArtwork && (!slot.isSpoiler || revealed.contains(index)) {
+                    guard loadsArtwork, let url = slot.url else { continue }
+                    let key = ImageStore.Key(url: url, maximumPixelSize: Int((slot.decodeWidth * scale).rounded(.up)))
+                    guard seen.insert(key).inserted else { continue }
+                    if slot.isAnimated {
+                        guard !filmsOnLayers else { continue }
+                        if let request = moving(key, still: .attachment) { requests.append(request) }
+                    } else if ImageStore.shared.cached(key, bucket: .attachment) == nil {
+                        requests.append(Request(key: key, source: .still(.attachment)))
+                    }
+                }
+                for image in forward.embeds.lazy.flatMap(\.images) {
+                    guard loadsArtwork, !image.isSpoiler, let url = image.url else { continue }
+                    let bucket: ImageStore.Bucket = image.isArtwork ? .artwork : .thumbnail
+                    let key = ImageStore.Key(url: url, maximumPixelSize: Int((image.decodeWidth * scale).rounded(.up)))
+                    guard seen.insert(key).inserted else { continue }
+                    if image.isAnimated {
+                        guard !filmsOnLayers else { continue }
+                        if let request = moving(key, still: bucket) { requests.append(request) }
+                    } else if ImageStore.shared.cached(key, bucket: bucket) == nil {
+                        requests.append(Request(key: key, source: .still(bucket)))
+                    }
+                }
+                // The words' custom emoji when they are not the row's own text
+                // — the row's own are asked for below.
+                let texts = forward.embeds.flatMap(\.texts).map(\.block)
+                    + (forward.bodyIsRowText ? [] : [forward.body].compactMap(\.self))
+                for block in texts {
+                    for entry in block.emojiRects {
+                        guard let id = entry.emoji.id,
+                              let url = CDN.emoji(id: id, animated: entry.emoji.isAnimated, side: entry.rect.width)
+                        else { continue }
+                        let key = ImageStore.Key(url: url, maximumPixelSize: Int((entry.rect.width * scale).rounded(.up)))
+                        if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                            requests.append(Request(key: key, source: .still(.thumbnail)))
+                        }
+                    }
+                }
+                if let url = forward.footerIconURL {
+                    let key = ImageStore.Key(
+                        url: url, maximumPixelSize: Int((forward.footerIconRect.width * scale).rounded(.up))
+                    )
+                    if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                        requests.append(Request(key: key, source: .still(.thumbnail)))
+                    }
+                }
+            }
+
             if let block = row.textBlock {
                 for entry in block.emojiRects {
                     guard let id = entry.emoji.id,
@@ -461,6 +532,7 @@ nonisolated enum TimelineImageRequests {
         playsAnimatedEmoji: Bool = true,
         filmsOnLayers: Bool = false,
         revealedAttachments: (MessageID) -> Set<Int> = { _ in [] },
+        revealedForwardAttachments: (MessageID) -> Set<Int> = { _ in [] },
         onActivityIcon: ((ActivityInvite) -> Void)? = nil
     ) -> (requests: [Request], owners: [ImageStore.Key: [MessageID]]) {
         var requests: [Request] = []
@@ -473,6 +545,7 @@ nonisolated enum TimelineImageRequests {
                 playsAnimatedEmoji: playsAnimatedEmoji,
                 filmsOnLayers: filmsOnLayers,
                 revealedAttachments: revealedAttachments,
+                revealedForwardAttachments: revealedForwardAttachments,
                 onActivityIcon: onActivityIcon
             )
             for request in asked {

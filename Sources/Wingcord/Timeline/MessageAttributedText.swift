@@ -321,6 +321,8 @@ nonisolated struct MentionContext: Sendable {
     var channels: [ChannelID: LinkChannel] = [:]
     /// Server names, for a chip pointing into another server.
     var guildNames: [GuildID: String] = [:]
+    /// Server icons' hashes, for a forward's breadcrumb into another server.
+    var guildIconHashes: [GuildID: String] = [:]
     /// The server the text is drawn in. A chip into any other names its
     /// server first — Discord's rule.
     var currentGuildID: GuildID?

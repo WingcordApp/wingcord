@@ -43,6 +43,7 @@ enum ActivityFrame {
         instance: ActivityInstanceID,
         proxyTicket: String,
         channelID: ChannelID,
+        isServerHubChannel: Bool = false,
         frameID: UUID = UUID()
     ) -> URL? {
         var components = URLComponents()
@@ -88,6 +89,11 @@ enum ActivityFrame {
             URLQueryItem(name: "frame_id", value: frameID.uuidString.lowercased()),
             URLQueryItem(name: "platform", value: "desktop"),
         ]
+        // An activity in a Server Hub's own channel — the whiteboard — is told
+        // so: Discord's `surface=5` (`51250`, `GUILD_SPACE` in its surface list).
+        if isServerHubChannel {
+            components.queryItems?.append(URLQueryItem(name: "surface", value: "5"))
+        }
         return components.url
     }
 

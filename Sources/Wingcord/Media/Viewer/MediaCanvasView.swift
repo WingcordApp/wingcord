@@ -288,6 +288,8 @@ final class MediaCanvasView: NSView {
     /// the same shape, so its fitted frame — and every zoom measured from it —
     /// is unchanged; only the ceiling the pixel count sets moves.
     func sharpen(_ image: CGImage) {
+        // A film on stage is the moving picture itself; a still arriving for
+        // it is a stale answer.
         guard film == nil else { return }
         shownImage = image
         CATransaction.begin()

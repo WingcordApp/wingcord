@@ -157,6 +157,20 @@ extension SessionController {
         }
     }
 
+    /// Marks many servers' channels read — Read All. The read states move on
+    /// the socket's `MESSAGE_ACK`s, as for every other ack; a refusal is said.
+    func acknowledgeServers(_ updates: [ReadStateUpdate]) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.bulkAcknowledge(updates)
+            } catch {
+                Self.trace("read all failed: \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
     /// Takes a bookmark or reminder off, from the inbox rather than the menu.
     func unsaveMessage(_ messageID: MessageID, in channelID: ChannelID) {
         Task { [weak self] in

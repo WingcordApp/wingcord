@@ -67,6 +67,9 @@ nonisolated enum TimelineRowPainter {
         /// into their own list, and sharing one set would have revealing the
         /// first hidden word uncover the second photograph.
         var revealedAttachments: Set<Int> = []
+        /// The same for a forward's own files — a list of its own, so lifting
+        /// the message's first spoiler does not uncover the forward's first.
+        var revealedForwardAttachments: Set<Int> = []
         /// The invite cards the reader is already settled into: in the
         /// server, in the group, friends with the person.
         var settledInviteCodes: Set<String> = []
@@ -663,7 +666,10 @@ nonisolated enum TimelineRowPainter {
                 style: style,
                 images: images,
                 scale: scale,
-                clock: state.animationTime
+                clock: state.animationTime,
+                revealedAttachments: state.revealedForwardAttachments,
+                isFooterHovered: state.hoveredComponent != nil
+                    && state.hoveredComponent == forwarded.footerRect.origin
             )
         }
 
@@ -3576,7 +3582,9 @@ nonisolated enum TimelineRowPainter {
         style: MessageTextStyle,
         images: ImageStore,
         scale: CGFloat,
-        clock: Double
+        clock: Double,
+        revealedAttachments: Set<Int> = [],
+        isFooterHovered: Bool = false
     ) {
         let rule = slot.ruleRect.offsetBy(dx: offset.x, dy: offset.y)
         context.addPath(CGPath(
@@ -3601,10 +3609,13 @@ nonisolated enum TimelineRowPainter {
             images: images,
             scale: scale
         )
-        if let body = slot.body {
+        // **The row draws the body when it is the row's own text**
+        // (`ForwardedSlot.bodyIsRowText`), with its selection, its revealed
+        // spoilers and its lit mentions; drawn here as well it would be twice.
+        if let body = slot.body, !slot.bodyIsRowText {
             // The body's own painter, so a forwarded message keeps its quotes,
-            // code and mentions. Its spoilers stay covered, as its attachments
-            // do: the hit test does not descend into a quote.
+            // code and mentions. Its spoilers stay covered: beside words of its
+            // own, a forward's text is not the row's and takes no click.
             drawTextBlock(
                 body,
                 at: CGPoint(x: offset.x + slot.bodyOrigin.x, y: offset.y + slot.bodyOrigin.y),
@@ -3616,7 +3627,18 @@ nonisolated enum TimelineRowPainter {
                 state: TextState(revealedSpoilers: [])
             )
         }
-        for attachment in slot.attachments {
+        for sticker in slot.stickers {
+            drawSticker(
+                sticker,
+                in: sticker.rect.offsetBy(dx: offset.x, dy: offset.y),
+                context: context,
+                style: style,
+                images: images,
+                scale: scale,
+                time: clock
+            )
+        }
+        for (index, attachment) in slot.attachments.enumerated() {
             drawAttachment(
                 attachment,
                 in: attachment.rect.offsetBy(dx: offset.x, dy: offset.y),
@@ -3624,14 +3646,11 @@ nonisolated enum TimelineRowPainter {
                 style: style,
                 images: images,
                 scale: scale,
-                // A spoiler inside a forward stays covered: the block is a
-                // quote of somebody else's message, and there is nothing here to
-                // click that would reveal it.
-                isRevealed: false,
+                // Lifted by a click, as on the message's own files.
+                isRevealed: revealedAttachments.contains(index),
                 clock: clock,
-                // And nothing in a quote is a control. A star on somebody else's
-                // forwarded GIF would be a control that cannot be pointed at,
-                // because the hit test does not descend into the block.
+                // No star: favouriting somebody else's forwarded GIF is the
+                // message menu's to offer.
                 favorite: nil
             )
         }
@@ -3647,6 +3666,35 @@ nonisolated enum TimelineRowPainter {
             )
         }
         if let footer = slot.footer {
+            // The breadcrumb lights under the pointer, as Discord's does: the
+            // whole line is the way to the original.
+            if isFooterHovered, slot.jump != nil {
+                let plate = slot.footerRect.offsetBy(dx: offset.x, dy: offset.y).insetBy(dx: -4, dy: -2)
+                context.addPath(CGPath(
+                    roundedRect: plate, cornerWidth: plate.height / 2, cornerHeight: plate.height / 2, transform: nil
+                ))
+                context.setFillColor(style.tertiaryColor.withAlphaComponent(0.14).cgColor)
+                context.fillPath()
+            }
+            if let url = slot.footerIconURL {
+                let box = slot.footerIconRect.offsetBy(dx: offset.x, dy: offset.y)
+                let key = ImageStore.Key(url: url, maximumPixelSize: Int((box.width * scale).rounded(.up)))
+                if let icon = images.cached(key, bucket: .thumbnail) {
+                    context.saveGState()
+                    context.addPath(CGPath(
+                        roundedRect: box, cornerWidth: box.width * 0.3, cornerHeight: box.width * 0.3, transform: nil
+                    ))
+                    context.clip()
+                    drawFlipped(icon, in: box, context: context)
+                    context.restoreGState()
+                } else {
+                    context.addPath(CGPath(
+                        roundedRect: box, cornerWidth: box.width * 0.3, cornerHeight: box.width * 0.3, transform: nil
+                    ))
+                    context.setFillColor(ThemeInk.current.placeholderFill)
+                    context.fillPath()
+                }
+            }
             drawTextFrame(
                 footer,
                 at: CGPoint(x: offset.x + slot.footerOrigin.x, y: offset.y + slot.footerOrigin.y),
@@ -3654,6 +3702,14 @@ nonisolated enum TimelineRowPainter {
                 images: images,
                 scale: scale
             )
+            if slot.jump != nil {
+                drawSymbol(
+                    "chevron.right",
+                    tint: style.tertiaryColor,
+                    in: slot.footerChevronRect.offsetBy(dx: offset.x, dy: offset.y),
+                    context: context
+                )
+            }
         }
     }
 

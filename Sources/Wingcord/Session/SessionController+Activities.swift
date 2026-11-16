@@ -304,7 +304,8 @@ extension SessionController {
             application: app.id,
             instance: id,
             proxyTicket: ticket,
-            channelID: channelID
+            channelID: channelID,
+            isServerHubChannel: model.channelIndex[channelID]?.kind == .guildSpace
         ) else {
             model.reportActionFailure("Could not open \(app.name).")
             return
