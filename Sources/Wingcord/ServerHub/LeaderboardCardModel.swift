@@ -4,7 +4,11 @@ import WingcordCore
 /// A leaderboard, resolved for drawing: names, faces, games and values.
 struct LeaderboardCardModel: Equatable {
     var stat: GuildSpaceLeaderboard.Stat
-    /// The top twenty, then the reader where they rank below them.
+    /// From the competition's last day on, the top three on their podium
+    /// (Discord's "podium" state, decision 19), in rank order. Empty otherwise.
+    var podium: [Row] = []
+    /// The top twenty (from 4th when there's a podium), then the reader where
+    /// they rank below them.
     var rows: [Row]
     /// The reader, when they aren't on the board at all.
     var unranked: Unranked?
@@ -16,6 +20,8 @@ struct LeaderboardCardModel: Equatable {
         var name: String
         var nameColor: UInt32?
         var avatarURL: URL?
+        /// The face at the podium's size, for the top three.
+        var largeAvatarURL: URL?
         var monogram: String
         /// "Last played Fortnite".
         var lastPlayed: String?
@@ -29,6 +35,9 @@ struct LeaderboardCardModel: Equatable {
         var isReader: Bool
         /// Blocked or ignored: drawn without a face or a game.
         var isHidden: Bool
+        /// "Played Honkai: Star Rail, ROBLOX and Fortnite": a podium pillar's
+        /// tooltip.
+        var playedSummary: String?
     }
 
     struct Game: Equatable, Identifiable {

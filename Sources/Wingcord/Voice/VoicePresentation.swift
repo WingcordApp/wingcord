@@ -132,6 +132,8 @@ struct VoiceQuality: Hashable, Sendable {
     var jitterMilliseconds: Double
     var isConnected: Bool
     var encryption: Encryption = .transportOnly
+    /// The call dropped and is connecting again on its own (decision 10).
+    var isReconnecting = false
 
     /// Who, besides the people in the call, could hear it.
     ///
@@ -170,7 +172,8 @@ struct VoiceQuality: Hashable, Sendable {
 
     var label: String {
         switch grade {
-        case .connecting: "Connecting"
+        // Discord's words while its RTC connection is coming back.
+        case .connecting: isReconnecting ? "Reconnecting" : "Connecting"
         case .good: "Voice Connected"
         case .fair: "Connection unstable"
         case .poor: "Poor connection"

@@ -1497,6 +1497,27 @@ final class AppModel {
     @ObservationIgnored var activityRuntime: ActivityRuntime?
     /// The activity currently on screen, if one is running.
     var runningActivity: RunningActivity?
+    /// Every activity running where this account can see, from Discord's own
+    /// events. See `ActivityInstances`.
+    let activityInstances = ActivityInstances()
+    /// A launch or join on its way, so its button can say so and the call can
+    /// show the app starting before the frame opens.
+    var activityStarting: ActivityStarting?
+    /// The running activity is in its own window (Pop Out).
+    var isActivityPoppedOut = false
+    /// Discord's Nitro Emoji Packs this account may see, and the ones added to
+    /// the picker (decision 16). Empty where Discord answered 404.
+    var emojiPacks: [EmojiPack] = []
+    var pinnedEmojiPackIDs: [UInt64] = []
+    /// A running activity's Invite, Share Link or Share Moment (decision 7).
+    var activityShareRequest: ActivityShareRequest?
+    /// Joining found the activity gone: Discord's "Activity has ended. Start
+    /// a new one?" (decision 8).
+    var activityEndedPrompt: ActivityEndedPrompt?
+    /// The call's numbers for the connection panel (decision 11).
+    var callDiagnostics = CallDiagnostics.idle
+    /// Send a GIF on a Friend Anniversaries row.
+    var celebrateGIFRequest: CelebrateGIFRequest?
     // MARK: Slash commands
     //
     // The `/` flyout's data. Fetched once per scope by `SessionController`; the

@@ -74,6 +74,16 @@ struct ProfileTabTests {
         #expect(tabs == [.board, .activity, .mutuals])
     }
 
+    /// Your own profile has nothing "in common" with you: no Mutuals tab.
+    @Test("Your own profile draws no Mutuals tab")
+    func ownProfile() {
+        var own = profile()
+        own.isSelf = true
+        let tabs = ProfileTab.available(profile: own, board: nil, activity: recent)
+        #expect(!tabs.contains(.mutuals))
+        #expect(tabs.contains(.activity))
+    }
+
     /// **An empty board is not a Board tab.** The presentation exists — the
     /// widgets route answered — and it answered with nothing on it.
     @Test("An empty board draws no Board tab")

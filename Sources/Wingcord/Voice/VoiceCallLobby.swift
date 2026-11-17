@@ -26,6 +26,10 @@ import SwiftUI
 //   a call's worth of CPU on a panel nobody has stepped into.
 struct VoiceCallLobby: View {
     var participants: [VoiceParticipant]
+    /// An activity running in the call, joinable from here (joining it joins
+    /// the call first).
+    var activity: CallActivityPresentation? = nil
+    var joinActivity: (CallActivityPresentation) -> Void = { _ in }
     var join: () -> Void
 
     @Environment(\.motion) private var motion
@@ -56,12 +60,18 @@ struct VoiceCallLobby: View {
             // the whole panel one enormous button with a decoy inside it.
             .allowsHitTesting(false)
 
-            joinButton
-                .padding(.vertical, Spacing.snug)
+            // The activity is a second way in, beside the call's: the tiles
+            // above take no clicks, so a Join Activity drawn on them was a
+            // button nobody could press.
+            HStack(spacing: Spacing.base) {
+                joinButton
+                if let activity { activityButton(activity) }
+            }
+            .padding(.vertical, Spacing.snug)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Palette.surface)
-        .overlay(alignment: .bottom) { Divider() }
+        // Transparent, as the call band is (Alex, 2026-11-17).
+        .overlay(alignment: .bottom) { Divider().opacity(0.6) }
     }
 
     private var joinButton: some View {
@@ -96,6 +106,27 @@ struct VoiceCallLobby: View {
         .animation(motion.hover, value: isHovering)
         .accessibilityLabel(Text(title))
         .accessibilityHint(Text(hint))
+    }
+
+    /// "Join Wordle": joins the call, then the game (decision 2's order).
+    private func activityButton(_ activity: CallActivityPresentation) -> some View {
+        Button { joinActivity(activity) } label: {
+            HStack(spacing: Spacing.tight) {
+                RemoteImage(url: activity.iconURL, side: 18) { Color.clear }
+                    .frame(width: 18, height: 18)
+                    .clipShape(.rect(cornerRadius: 5, style: .continuous))
+                Text(activity.isStarting ? "Joining\u{2026}" : "Join \(activity.name)")
+                    .lineLimit(1)
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .padding(.horizontal, Spacing.snug)
+            .padding(.vertical, Spacing.base)
+        }
+        .buttonStyle(.glassProminent)
+        .buttonBorderShape(.capsule)
+        .tint(Palette.accent)
+        .disabled(activity.isStarting)
+        .help(activity.hostName.map { "\($0) is playing \(activity.name)" } ?? activity.name)
     }
 
     private var title: String {

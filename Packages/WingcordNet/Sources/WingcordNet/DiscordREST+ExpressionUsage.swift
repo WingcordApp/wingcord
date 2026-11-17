@@ -74,7 +74,8 @@ extension DiscordREST {
         stickers: [(id: UInt64, at: Date)],
         now: Date = .now
     ) async throws -> ExpressionUsage {
-        let blob = try await frecencySettings()
+        let blob = try await fetchFrecencySettings()
+        frecencyBlob = nil // a write starts fresh and leaves no stale copy
         var usage = Self.expressionUsage(base64: blob, now: now)
         for use in emojis { usage.emojis.track(use.key, at: use.at) }
         for use in reactions { usage.reactions.track(use.key, at: use.at) }
@@ -96,7 +97,8 @@ extension DiscordREST {
     // MARK: Plumbing
 
     private func frecencyData() async throws -> Data {
-        let blob = try await frecencySettings()
+        let blob = try await fetchFrecencySettings()
+        frecencyBlob = nil // a write starts fresh and leaves no stale copy
         return Data(base64Encoded: blob, options: .ignoreUnknownCharacters) ?? Data()
     }
 

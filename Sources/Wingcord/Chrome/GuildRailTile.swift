@@ -203,17 +203,12 @@ struct HomeRailTile: View {
             ZStack(alignment: .leading) {
                 RailIndicator(isSelected: isSelected, hasUnread: hasUnread)
 
-                // Wingcord's own mark: the three feathers off the app icon,
-                // where a pair of chat bubbles used to say "a chat app".
-                WingsShape()
-                    .fill(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(Ink.secondary))
-                    .frame(width: side * 0.58, height: side * 0.58)
-                    .frame(width: side, height: side)
-                    .background(Palette.surfaceRaised)
-                    .clipShape(.rect(
-                        cornerRadius: isSelected ? 14 : (isHovering ? 17 : side / 2),
-                        style: .continuous
-                    ))
+                // Wingcord's own icon, as the Dock shows it, in its squircle
+                // (Alex, 2026-11-17). It keeps its shape in every state: the
+                // pill beside it says selected, and a hover lifts it a touch.
+                RailAppIcon(side: side)
+                    .brightness(isHovering && !isSelected ? 0.06 : 0)
+                    .scaleEffect(isHovering ? 1.04 : 1)
                     .overlay(alignment: .bottomTrailing) {
                         if mentionCount > 0 {
                             UnreadBadge(count: mentionCount, isMuted: false)

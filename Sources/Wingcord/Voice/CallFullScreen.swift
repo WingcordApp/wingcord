@@ -94,7 +94,9 @@ private struct CallFullScreenView: View {
                 selfUserID: model.currentUserID,
                 attachVideo: model.attachVideo,
                 watch: model.toggleWatchingStream,
-                spotlight: model.spotlight
+                spotlight: model.spotlight,
+                activity: model.callActivity(in: presentation.channelID),
+                joinActivity: model.joinCallActivity
             )
             .environment(\.isCallIdle, isIdle)
             controls

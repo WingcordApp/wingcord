@@ -35,6 +35,8 @@ struct MediaViewer: View {
     /// The strip's pick while the page slides to it.
     @State private var jumpTarget: Int?
     @FocusState private var isFocused: Bool
+    @State private var settings = AppSettings.shared
+    @Environment(\.accessibilityReduceTransparency) private var reducesTransparency
 
     var body: some View {
         ZStack {
@@ -50,7 +52,11 @@ struct MediaViewer: View {
                     home: thumbnail,
                     onRequestClose: { close(velocity: $0) },
                     onPage: paged,
-                    onContentClick: playback.togglePlayback
+                    onContentClick: playback.togglePlayback,
+                    usesSystemPlayer: item.usesSystemPlayer,
+                    // A frosted room has no light to spill into it.
+                    cinema: settings.viewerCinemaMode && !reducesTransparency,
+                    liveText: stage.isLiveTextOn
                 )
                 // **The stage runs to the window's edges, every kind.** A
                 // video keeps clear of the chrome inside the canvas
@@ -91,7 +97,10 @@ struct MediaViewer: View {
         }
         // The picture on stage is out of its box; the one paged away from goes
         // back into its own.
-        .onChange(of: request.index) { lift() }
+        .onChange(of: request.index) {
+            lift()
+            stage.isLiveTextOn = false
+        }
         // Loading is keyed on the item, so stepping swaps what the player
         // holds instead of building a second one.
         .task(id: request.current?.id) {
@@ -99,8 +108,14 @@ struct MediaViewer: View {
             playback.load(
                 url: item?.isVideo == true ? item?.sourceURL : nil,
                 identity: item?.id.rawValue,
-                autoplay: true
+                autoplay: true,
+                // A GIF's MP4 plays as a GIF: silent, round and round.
+                asGIF: item?.loopsSilently == true
             )
+            // Picked up where the chat's player was.
+            if let start = request.startsAt, start.item == item?.id, start.seconds > 0.5 {
+                playback.start(at: start.seconds)
+            }
         }
         // Only the player. A save in flight is left to finish — see
         // `MediaActions.save`.
@@ -297,7 +312,17 @@ private struct MediaViewerChrome: View {
                             sentAt: request.sentAt,
                             actions: actions,
                             canCopyImage: !item.isVideo,
-                            copyImage: copyImage
+                            copyImage: copyImage,
+                            cinema: Bindable(AppSettings.shared).viewerCinemaMode,
+                            liveText: !item.isVideo && stage.frameCount <= 1 && ViewerLiveText.isSupported
+                                ? Bindable(stage).isLiveTextOn : nil,
+                            loop: item.usesSystemPlayer ? Bindable(playback).isLooping : nil,
+                            favorite: item.favoriteGIF.map { gif in
+                                (
+                                    isOn: model.favoriteGIFs.contains { $0.url == gif.url },
+                                    toggle: { model.sessionController.toggleFavorite(gif) }
+                                )
+                            }
                         )
                     }
                     Spacer(minLength: 0)
@@ -329,7 +354,10 @@ private struct MediaViewerChrome: View {
     @ViewBuilder
     private func bottomBar(for item: MediaItem, clip: ClipInViewer?) -> some View {
         let bar = Group {
-            if item.isVideo {
+            if item.usesSystemPlayer {
+                // AVKit's own controls float over the picture.
+                EmptyView()
+            } else if item.isVideo {
                 MediaVideoControls(
                     playback: playback,
                     clip: clip.map { clip in
@@ -352,13 +380,17 @@ private struct MediaViewerChrome: View {
                 MediaZoomControls(stage: stage)
             }
         }
-        bar
-            .padding(.horizontal, Spacing.snug)
-            .padding(.vertical, Spacing.base)
-            .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass, style: .continuous))
-            // A video's bar is not a picture's: the honest change between them
-            // is a cross-fade, keyed on the kind.
-            .transition(.materialize(from: .bottom))
+        // A GIF has nothing to scrub, and AVKit's player brings its own: no
+        // bar at all, not an empty one.
+        if !item.loopsSilently, !item.usesSystemPlayer {
+            bar
+                .padding(.horizontal, Spacing.snug)
+                .padding(.vertical, Spacing.base)
+                .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass, style: .continuous))
+                // A video's bar is not a picture's: the honest change between
+                // them is a cross-fade, keyed on the kind.
+                .transition(.materialize(from: .bottom))
+        }
     }
 
     /// The two chevrons. The position is said in their labels and in the

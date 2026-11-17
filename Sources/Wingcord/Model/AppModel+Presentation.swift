@@ -84,6 +84,9 @@ struct SidebarMemoKey: Hashable, Sendable {
     /// case. Carrying the selection unconditionally would rebuild the whole
     /// channel list on every click in it, for an answer that did not change.
     var hiddenSelection: ChannelID?
+    /// Activities running under voice rows: their store's revision, in a
+    /// server's list only.
+    var activityInstanceRevision: UInt64 = 0
     /// The rows above the first category. In the KEY because they arrive on
     /// their own routes after the list has already been built once — a memo
     /// that did not carry them would keep answering with the list from before
@@ -207,6 +210,7 @@ extension AppModel {
             speakingIDs: guildID != nil && guildID == connectedVoiceChannelID.flatMap { channelIndex.guildID(of: $0) }
                 ? speakingUserIDs : [],
             hiddenSelection: hiddenSelectedChannelID,
+            activityInstanceRevision: guildID == nil ? 0 : activityInstances.revision,
             surfaceRows: guildID.map(guildSurfaceRows(for:)) ?? [],
             presenceRevision: guildID == nil ? directMessagePresenceRevision : 0,
             typingRevision: guildID == nil ? directMessageTypingRevision : 0,
@@ -1075,7 +1079,15 @@ extension AppModel {
             // Nil and zero both mean "no limit" on the wire, and the row draws
             // no counter for either — see `SidebarChannel.voiceLimit`.
             voiceLimit: channel.userLimit ?? 0,
-            voiceStartedAt: info?.sessionStartedAt
+            voiceStartedAt: info?.sessionStartedAt,
+            activities: activityInstances.instances(in: channel.id).map { instance in
+                SidebarChannelActivity(
+                    applicationID: instance.applicationID,
+                    name: activityApp(instance.applicationID)?.name ?? "Activity",
+                    iconURL: applicationIconURL(instance.applicationID, side: 16),
+                    playerCount: instance.userIDs.count
+                )
+            }
         )
     }
 

@@ -90,6 +90,8 @@ final class ExpressionGridCanvas: NSView {
         self.sections = sections
         layout = ExpressionGridLayout(sections: sections, metrics: metrics)
         if let hovered, !isValid(hovered) { self.hovered = nil }
+        // New contents: positions moved, so every film is placed afresh.
+        removeAllFilms()
         needsDisplay = true
         return layout.contentHeight
     }
@@ -136,7 +138,10 @@ final class ExpressionGridCanvas: NSView {
         // One timestamp for the whole pass, so every cell shows the same
         // moment — read from the app's single clock rather than from `now`,
         // which would drift each cell against the others.
-        let time = animates ? AnimationClock.shared.time : nil
+        // **Stills only.** A moving cell is a layer of its own that the render
+        // server plays at the asset's own timing (`syncFilms`, decision 13);
+        // this pass never redraws to animate.
+        let time: Double? = nil
 
         for index in layout.rowRange(in: dirtyRect) {
             let row = layout.rows[index]
@@ -170,7 +175,8 @@ final class ExpressionGridCanvas: NSView {
                     images: images,
                     scale: scale,
                     time: time,
-                    context: context
+                    context: context,
+                    drawsArt: !filmsShowing.contains(Self.filmKey(section: row.section, item: firstItem + column))
                 )
             }
         }
@@ -290,21 +296,79 @@ final class ExpressionGridCanvas: NSView {
     /// down when its last subscriber leaves, so a picker showing Unicode emoji
     /// costs nothing at all.
     private func updateClock() {
-        let token = ObjectIdentifier(self)
-        guard animates, hasAnimatedCellsVisible, window != nil else {
-            AnimationClock.shared.unsubscribe(token)
+        // No clock any more: the films play on the render server.
+        AnimationClock.shared.unsubscribe(ObjectIdentifier(self))
+        syncFilms()
+    }
+
+    // MARK: The films
+
+    /// The animated cells on screen, each a `FilmPlayer` layer placed over its
+    /// cell: every frame at the asset's own rate, played by the render server,
+    /// nothing redrawn while it moves or while the grid scrolls (decision 13).
+    /// The canvas draws the still under each until its film has frames.
+    private var films: [String: FilmPlayer] = [:]
+    private(set) var filmsShowing: Set<String> = []
+
+    static func filmKey(section: Int, item: Int) -> String { "\(section):\(item)" }
+
+    /// Adds layers for animated cells that came on screen and drops the ones
+    /// that left. Called when the viewport moves or the contents change.
+    func syncFilms() {
+        guard animates, let window, let host = layer else {
+            removeAllFilms()
             return
         }
-        // Through the scroll: these cells are the thing being chosen, and a
-        // grid that freezes the moment you flick it reads as broken. A popover
-        // of 32pt cells is a bitmap swap each — see `AnimationClock.subscribe`.
-        AnimationClock.shared.subscribe(token, throughScroll: true) { [weak self] in
-            // One invalidation for the visible rect rather than one per cell:
-            // in a section of animated emoji nearly every cell is moving, so
-            // forty rects a frame would be forty times the bookkeeping for the
-            // same repaint.
-            self?.needsDisplay = true
+        let scale = window.backingScaleFactor
+        var wanted: Set<String> = []
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for index in visibleRowRange() {
+            let row = layout.rows[index]
+            guard let first = row.firstItem else { continue }
+            let section = sections[row.section]
+            let items = section.items
+            for column in 0..<row.count {
+                // A locked one stays a dimmed still, as the painter draws it:
+                // a film over it would play at full strength.
+                guard !section.isLocked, !items[first + column].isLocked,
+                      case .image(let url?, true) = items[first + column].art else { continue }
+                let key = Self.filmKey(section: row.section, item: first + column)
+                let cell = layout.itemFrame(row: index, column: column)
+                wanted.insert(key)
+                let player: FilmPlayer
+                if let existing = films[key] {
+                    player = existing
+                } else {
+                    player = FilmPlayer(key: .init(url: url, maximumPixelSize: Int((cell.width * scale).rounded(.up))))
+                    player.layer.contentsGravity = .resizeAspect
+                    player.onPlayback = { [weak self] isPlaying in
+                        guard let self else { return }
+                        if isPlaying { filmsShowing.insert(key) } else { filmsShowing.remove(key) }
+                        setNeedsDisplay(cell)
+                    }
+                    host.addSublayer(player.layer)
+                    films[key] = player
+                }
+                player.layer.frame = cell
+            }
         }
+        for (key, player) in films where !wanted.contains(key) {
+            player.tearDown()
+            player.layer.removeFromSuperlayer()
+            films[key] = nil
+            filmsShowing.remove(key)
+        }
+        CATransaction.commit()
+    }
+
+    private func removeAllFilms() {
+        for player in films.values {
+            player.tearDown()
+            player.layer.removeFromSuperlayer()
+        }
+        films = [:]
+        filmsShowing = []
     }
 
     /// Recomputed when the viewport moves. Walks the visible rows only.
@@ -321,8 +385,9 @@ final class ExpressionGridCanvas: NSView {
                 }
             }
         }
-        guard found != hasAnimatedCellsVisible else { return }
         hasAnimatedCellsVisible = found
+        // Every viewport move: cells scrolled in get films, cells scrolled out
+        // let theirs go.
         updateClock()
     }
 
@@ -341,6 +406,7 @@ final class ExpressionGridCanvas: NSView {
     func stopAnimating() {
         hasAnimatedCellsVisible = false
         AnimationClock.shared.unsubscribe(ObjectIdentifier(self))
+        removeAllFilms()
     }
 
     /// Repaints one cell, plus the pad its highlight bleeds into.

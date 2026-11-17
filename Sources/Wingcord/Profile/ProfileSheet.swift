@@ -521,7 +521,8 @@ struct ProfileSheet: View {
                         platesItself: false,
                         traits: activity.ongoing.first { $0.records(current) }?.traits ?? [],
                         isOwn: profile.isSelf,
-                        listenAlong: model.listenAlongOffer(for: profile.userID, activity: current)
+                        listenAlong: model.listenAlongOffer(for: profile.userID, activity: current),
+                        joinActivity: model.activityJoinOffer(for: profile.userID, activity: current)
                     )
                 }
             }
@@ -738,7 +739,8 @@ enum ProfileTab: Hashable, CaseIterable, Sendable {
         var tabs: [ProfileTab] = []
         if isEditing || board?.tiles.isEmpty == false { tabs.append(.board) }
         tabs.append(.activity)
-        tabs.append(.mutuals)
+        // Not on your own: there's nobody to have anything in common with.
+        if !profile.isSelf { tabs.append(.mutuals) }
         return tabs
     }
 }

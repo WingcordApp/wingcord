@@ -1074,6 +1074,12 @@ final class AppSettings {
         didSet { defaults.set(loopsVideo, forKey: Key.loopsVideo) }
     }
 
+    /// The viewer's cinema mode: light from the picture glowing around it
+    /// (docs/ACTIVITIES-CALLS-PICKER.md, decision 25). On until turned off.
+    var viewerCinemaMode = true {
+        didSet { defaults.set(viewerCinemaMode, forKey: Key.viewerCinemaMode) }
+    }
+
     // MARK: Voice and video
     //
     // Devices are stored by their **manufacturer id**, never by the numeric
@@ -1157,6 +1163,16 @@ final class AppSettings {
         didSet {
             guard echoCancellation != oldValue else { return }
             defaults.set(echoCancellation, forKey: Key.echoCancellation)
+        }
+    }
+
+    /// Speech stretched by a pitch period to absorb delay changes inside a
+    /// sentence (NetEQ's accelerate and expand; docs/ACTIVITIES-CALLS-PICKER.md,
+    /// decision 11). **Off by default until it has been heard in real calls.**
+    var adaptivePlayout = false {
+        didSet {
+            guard adaptivePlayout != oldValue else { return }
+            defaults.set(adaptivePlayout, forKey: Key.adaptivePlayout)
         }
     }
 
@@ -1719,6 +1735,7 @@ final class AppSettings {
         inputProfile = (defaults.object(forKey: Key.inputProfile) as? String)
             .flatMap(InputProfile.init(rawValue:)) ?? .custom
         echoCancellation = defaults.object(forKey: Key.echoCancellation) as? Bool ?? true
+        adaptivePlayout = defaults.bool(forKey: Key.adaptivePlayout)
         automaticGainControl = defaults.object(forKey: Key.automaticGainControl) as? Bool ?? true
         inputMode = (defaults.object(forKey: Key.inputMode) as? String)
             .flatMap(VoiceInputMode.init(rawValue:)) ?? .voiceActivity
@@ -1787,6 +1804,7 @@ final class AppSettings {
         playsCallSounds = defaults.object(forKey: Key.callSounds) as? Bool ?? true
         mutesMedia = defaults.object(forKey: Key.mutesMedia) as? Bool ?? false
         loopsVideo = defaults.object(forKey: Key.loopsVideo) as? Bool ?? false
+        viewerCinemaMode = defaults.object(forKey: Key.viewerCinemaMode) as? Bool ?? true
         // The pair from before accounts each had their own, read and never written.
         let legacyChannel = (defaults.object(forKey: Key.lastChannel) as? NSNumber)?.uint64Value
         legacyLastPlace = legacyChannel.map {
@@ -1939,6 +1957,7 @@ final class AppSettings {
         static let mediaVolume = "media.volume"
         static let mutesMedia = "media.muted"
         static let loopsVideo = "media.loopsVideo"
+        static let viewerCinemaMode = "media.viewerCinemaMode"
         static let voiceInput = "voice.inputDevice"
         static let voiceOutput = "voice.outputDevice"
         static let camera = "voice.cameraDevice"
@@ -1951,6 +1970,7 @@ final class AppSettings {
         static let automaticSensitivity = "voice.automaticInputSensitivity"
         static let inputProfile = "voice.inputProfile"
         static let echoCancellation = "voice.echoCancellation"
+        static let adaptivePlayout = "voice.adaptivePlayout"
         static let automaticGainControl = "voice.automaticGainControl"
         static let pushToTalk = "voice.pushToTalkKey"
         /// Share Audio, under the key the old toggle used, so a reader's

@@ -72,6 +72,9 @@ public actor VoiceGateway {
         /// to be recorded, 4 allows any viewer to clip their stream).
         case clientFlags(userID: UInt64, flags: Int)
         case resumed
+        /// A heartbeat came back: the round trip to the voice server, which is
+        /// Discord's "ping" (decision 11's connection panel).
+        case heartbeatAcknowledged(roundTripMilliseconds: Int)
         /// - Parameter code: the websocket close code. §"Never log a close code
         ///   without its reason" is about the reader; a caller that recovers
         ///   from one refusal and not another needs the number too.
@@ -374,7 +377,14 @@ public actor VoiceGateway {
             ))
 
         case 6:
-            break   // heartbeat ack
+            // The nonce is the send time in milliseconds, echoed back.
+            if let payload = decode(HeartbeatAckPayload.self, from: data), let sent = payload.d.t {
+                let now = Int(Date().timeIntervalSince1970 * 1_000)
+                let roundTrip = now - sent
+                if roundTrip >= 0, roundTrip < 60_000 {
+                    continuation?.yield(.heartbeatAcknowledged(roundTripMilliseconds: roundTrip))
+                }
+            }
 
         case 8:
             guard let payload = decode(HelloPayload.self, from: data) else {
@@ -1083,6 +1093,11 @@ private struct EpochPayload: Decodable {
         var epoch: UInt64
         var protocol_version: UInt16?
     }
+}
+
+private struct HeartbeatAckPayload: Decodable {
+    var d: Body
+    struct Body: Decodable { var t: Int? }
 }
 
 private struct SpeakingPayload: Decodable {

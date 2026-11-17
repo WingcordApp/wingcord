@@ -19,7 +19,7 @@ extension AppModel {
         } else if store.missing.contains(guildID) {
             canEdit ? .ready : .missing
         } else if store.failed.contains(guildID) {
-            .failed
+            .failed(isOffline: store.offline.contains(guildID))
         } else {
             .loading
         }
@@ -106,7 +106,9 @@ extension AppModel {
                     item.accessoryHelp = "\(board.stat.question) This competition ends \(board.endsAt.formatted(date: .abbreviated, time: .shortened))."
                 } else {
                     item.accessory = "Ended"
-                    item.accessoryHelp = "This competition ended. The next one is \(board.nextStat.name)."
+                    item.accessoryIsMuted = true
+                    item.accessoryHelp = "This competition ended \(Self.endedPhrase(board.endsAt)). "
+                        + "The next competition is \(board.nextStat.name)."
                 }
                 if board.hasEnoughEntries {
                     item.content = .leaderboard(leaderboardModel(board, guildID: guildID))
@@ -187,7 +189,7 @@ extension AppModel {
 
     private func leaderboardModel(_ board: GuildSpaceLeaderboard, guildID: GuildID) -> LeaderboardCardModel {
         let reader = currentUserID
-        let rows = board.visibleEntries(limit: 20, reader: reader).map { entry in
+        let all = board.visibleEntries(limit: 20, reader: reader).map { entry in
             let user = users[entry.userID]
             let isHidden = relationships[entry.userID] == .blocked
             let shownGames = entry.applicationCount > 3 ? 2 : 3
@@ -200,6 +202,7 @@ extension AppModel {
                 name: isHidden ? "Blocked User" : voiceName(of: entry.userID, inGuild: guildID),
                 nameColor: isHidden ? nil : voiceNameColor(of: entry.userID, inGuild: guildID),
                 avatarURL: isHidden ? nil : user.flatMap { avatarURL(for: $0, side: 32) },
+                largeAvatarURL: isHidden || entry.rank > 3 ? nil : user.flatMap { avatarURL(for: $0, side: 72) },
                 monogram: user?.monogram ?? "?",
                 lastPlayed: isHidden ? nil : entry.applicationIDs.first.map { "Last played \(serverHubGameName($0))" },
                 value: GuildSpaceFormat.value(entry.value, stat: board.stat),
@@ -210,9 +213,15 @@ extension AppModel {
                 games: Array(games),
                 moreGames: isHidden ? 0 : max(0, entry.applicationCount - games.count),
                 isReader: entry.userID == reader,
-                isHidden: isHidden
+                isHidden: isHidden,
+                playedSummary: isHidden || entry.applicationIDs.isEmpty ? nil : "Played "
+                    + entry.applicationIDs.prefix(3).map(serverHubGameName).formatted(.list(type: .and))
             )
         }
+        // Discord's podium: from the last day on, once three are on the board.
+        let isPodium = board.isFinalDay && all.count >= 3 && all.prefix(3).allSatisfy { $0.rank <= 3 }
+        let podium = isPodium ? Array(all.prefix(3)) : []
+        let rows = isPodium ? Array(all.dropFirst(3)) : all
         var unranked: LeaderboardCardModel.Unranked?
         if let reader, board.entry(for: reader) == nil, let user = users[reader] {
             unranked = .init(
@@ -224,7 +233,19 @@ extension AppModel {
                     : "Play some games to join the leaderboard! Progress will be shown starting tomorrow."
             )
         }
-        return LeaderboardCardModel(stat: board.stat, rows: rows, unranked: unranked, lastUpdated: board.computedAt)
+        return LeaderboardCardModel(
+            stat: board.stat, podium: podium, rows: rows, unranked: unranked, lastUpdated: board.computedAt
+        )
+    }
+
+    /// Discord's tooltip date (`V.mk` within two days, "L LT" beyond): "today
+    /// at 5:00 PM", "yesterday at 5:00 PM", or the date and time.
+    static func endedPhrase(_ date: Date, now: Date = .now) -> String {
+        let calendar = Calendar.current
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if calendar.isDateInToday(date) { return "today at \(time)" }
+        if calendar.isDateInYesterday(date) { return "yesterday at \(time)" }
+        return "on " + date.formatted(date: .numeric, time: .shortened)
     }
 
     static func leaderboardSymbol(_ stat: GuildSpaceLeaderboard.Stat) -> String {
@@ -362,12 +383,24 @@ extension AppModel {
         } else {
             .unavailable
         }
+        let instance = channelID.flatMap { activityInstances.instance(of: Self.whiteboardApplicationID, in: $0) }
+        let people = instance?.userIDs ?? []
         return WhiteboardCardModel(
             channelID: channelID,
             access: access,
             isRunning: channelID != nil && runningActivity?.instance.location.channelID == channelID,
             isLaunching: serverHub.launchingWhiteboard == guildID,
-            isEditing: isEditing
+            isEditing: isEditing,
+            drawing: people.prefix(5).map { userID in
+                let user = users[userID]
+                return WhiteboardCardModel.Face(
+                    id: userID,
+                    url: user.flatMap { avatarURL(for: $0, side: 24) },
+                    monogram: user?.monogram ?? "?"
+                )
+            },
+            drawingCount: people.count,
+            opensByItself: authorizedApps?.contains { $0.applicationID == Self.whiteboardApplicationID } == true
         )
     }
 

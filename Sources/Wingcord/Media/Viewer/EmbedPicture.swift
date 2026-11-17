@@ -11,6 +11,8 @@ nonisolated struct EmbedPicture: Sendable {
     var sourceIndex: Int
     var posterWidth: CGFloat
     var posterURL: URL?
+    /// The GIF this picture is, as its star keys it, where it is one.
+    var favorite: GIF? = nil
 
     /// The picture as a file, which is what the viewer shows: the embed's own
     /// full-size link and its proxy, its size, and a type read off its name
@@ -19,6 +21,10 @@ nonisolated struct EmbedPicture: Sendable {
         let filename = URL(string: media.url)?.lastPathComponent ?? "image"
         let ext = (filename as NSString).pathExtension.lowercased()
         let type = switch ext {
+        // A `gifv`'s MP4 (Tenor, Giphy): the viewer plays it as a GIF.
+        case "mp4", "m4v": "video/mp4"
+        case "mov": "video/quicktime"
+        case "webm": "video/webm"
         case "gif": "image/gif"
         case "jpg", "jpeg": "image/jpeg"
         case "webp": "image/webp"

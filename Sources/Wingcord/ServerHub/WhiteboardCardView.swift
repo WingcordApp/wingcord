@@ -23,6 +23,9 @@ struct WhiteboardCardView: View {
                         .font(.system(size: 34, weight: .medium))
                         .foregroundStyle(Ink.secondary)
                         .symbolEffect(.bounce, value: board.isLaunching)
+                    if board.drawingCount > 0, !board.isEditing {
+                        WhiteboardDrawingNow(faces: board.drawing, count: board.drawingCount)
+                    }
                     switch board.access {
                     case .allowed where !board.isEditing:
                         Button(action: launch) {
@@ -61,6 +64,18 @@ struct WhiteboardCardView: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 260)
+            // Discord's widget opens the board by itself for a reader who has
+            // authorized the app before (`useEffect` → `im(n)`): joining the
+            // one running here, or starting one.
+            .task(id: board.channelID) {
+                model.sessionController.loadAuthorizedApps()
+            }
+            .onChange(of: board.opensByItself, initial: true) { _, opens in
+                guard opens, board.access == .allowed, !board.isEditing, !board.isRunning,
+                      !board.isLaunching
+                else { return }
+                launch()
+            }
         }
     }
 

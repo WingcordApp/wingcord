@@ -9,6 +9,9 @@ import SwiftUI
 struct ActivitySectionView: View {
     var section: ActivitySection
     var onOpen: (ActivityRow) -> Void
+    /// Starts an app in the call straight from its card (decision 5); nil in
+    /// the composer, where a card opens the app's page.
+    var onStart: ((ActivityRow) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.base) {
@@ -53,13 +56,25 @@ struct ActivitySectionView: View {
     /// recognised, and the strip would cost three rows instead of one.
     private var recents: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: Spacing.base) {
+            HStack(alignment: .top, spacing: Spacing.snug) {
                 ForEach(section.rows) { row in
-                    Button { onOpen(row) } label: {
-                        ActivityIcon(row: row, side: Metrics.activityRecentIcon)
+                    Button {
+                        if let onStart, row.isLaunchable { onStart(row) } else { onOpen(row) }
+                    } label: {
+                        VStack(spacing: 4) {
+                            ActivityIcon(row: row, side: Self.recentSide)
+                            // A name under each now that the strip is the
+                            // launcher's second row and a game's icon alone
+                            // isn't always its name (decision 5).
+                            Text(row.name)
+                                .font(.system(.caption, weight: .medium))
+                                .foregroundStyle(Ink.secondary)
+                                .lineLimit(1)
+                                .frame(width: Self.recentSide + Spacing.snug)
+                        }
                     }
                     .buttonStyle(.plain)
-                    .help(row.name)
+                    .help(onStart == nil ? row.name : "Start \(row.name)")
                     .accessibilityLabel(row.name)
                 }
             }
@@ -71,18 +86,35 @@ struct ActivitySectionView: View {
 
     // MARK: Featured
 
+    private static let recentSide: CGFloat = 52
+
+    /// Discord's featured shelf as cover cards (decision 5): the first across
+    /// the panel, the rest two by two, each playing its preview on hover.
     private var featured: some View {
-        LazyVGrid(
-            columns: [
-                GridItem(.flexible(), spacing: Spacing.base),
-                GridItem(.flexible(), spacing: Spacing.base),
-            ],
-            spacing: Spacing.base
-        ) {
-            ForEach(section.rows) { row in
-                ActivityTile(row: row, onOpen: { onOpen(row) })
+        VStack(spacing: Spacing.snug) {
+            if let hero = section.rows.first {
+                ActivityFeatureCard(
+                    row: hero, isHero: true, onOpen: { onOpen(hero) },
+                    onStart: start(hero)
+                )
+            }
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: Spacing.snug),
+                    GridItem(.flexible(), spacing: Spacing.snug),
+                ],
+                spacing: Spacing.snug
+            ) {
+                ForEach(section.rows.dropFirst()) { row in
+                    ActivityFeatureCard(row: row, onOpen: { onOpen(row) }, onStart: start(row))
+                }
             }
         }
+    }
+
+    private func start(_ row: ActivityRow) -> (() -> Void)? {
+        guard let onStart, row.isLaunchable else { return nil }
+        return { onStart(row) }
     }
 
     // MARK: List
@@ -117,92 +149,6 @@ struct ActivityIcon: View {
         }
         .frame(width: side, height: side)
         .clipShape(.rect(cornerRadius: side * 0.28, style: .continuous))
-    }
-}
-
-// MARK: - A featured tile
-
-/// Artwork over a name, two across.
-///
-/// **Not interactive glass.** A tile lives in a scroll view, and interactive
-/// glass warps toward the cursor — on a surface that slides under a stationary
-/// pointer the displacement is recomputed every frame and the card visibly
-/// wobbles. `Glass.swift` says so in as many words. The press feedback is a
-/// scale instead, which is the same instant response without the warp.
-private struct ActivityTile: View {
-    var row: ActivityRow
-    var onOpen: () -> Void
-
-    @Environment(\.motion) private var motion
-    @State private var isHovered = false
-
-    var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: Spacing.base) {
-                art
-                HStack(spacing: Spacing.base) {
-                    ActivityIcon(row: row, side: 26)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(row.name)
-                            .font(.system(.subheadline, weight: .semibold))
-                            .foregroundStyle(Ink.primary)
-                            .lineLimit(1)
-                        Text(row.subtitle)
-                            .font(Typeface.rowSubtitle)
-                            .foregroundStyle(Ink.tertiary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, Spacing.base)
-                .padding(.bottom, Spacing.base)
-            }
-            .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.chip, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                    .strokeBorder(Palette.hoverFill, lineWidth: isHovered ? 1 : 0)
-            }
-            .contentShape(.rect(cornerRadius: Radius.chip, style: .continuous))
-            .scaleEffect(isHovered ? 1.012 : 1)
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-        .animation(motion.hover, value: isHovered)
-        .accessibilityLabel(row.name)
-        .accessibilityHint(row.subtitle)
-    }
-
-    /// 16:9 — the shape every `embedded_cover` in the captured shelf is drawn
-    /// at, and the reason the tile's height is derived rather than chosen.
-    private var art: some View {
-        Color.clear
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .overlay {
-                RemoteImage(
-                    url: row.tileURL,
-                    side: Metrics.activityTileWidth,
-                    // Four tiles, large each, re-shown on every open — which
-                    // is exactly what the artwork bucket is sized for. The
-                    // attachment bucket would evict them behind one fling
-                    // through an image channel.
-                    bucket: .artwork
-                ) {
-                    // No artwork: the icon on the app's own ground, rather than
-                    // a grey block. Every app in the captured shelf has a tile,
-                    // so this is the search-result case.
-                    ActivityIcon(row: row, side: Metrics.activityRowIcon)
-                }
-                .aspectRatio(contentMode: .fill)
-            }
-            .clipShape(
-                .rect(
-                    topLeadingRadius: Radius.chip,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: Radius.chip,
-                    style: .continuous
-                )
-            )
     }
 }
 

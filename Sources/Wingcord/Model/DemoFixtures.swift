@@ -938,6 +938,17 @@ enum DemoFixtures {
         }
         model.relationships = relationships
 
+        // Two friendships that turn a year older this week, so Friend
+        // Anniversaries has rows: six years in two days, three years four
+        // days ago.
+        let calendar = Calendar.current
+        if let six = calendar.date(byAdding: DateComponents(year: -6, day: 2), to: .now) {
+            model.relationshipFacts[friends[friends.startIndex], default: RelationshipFacts()].since = six
+        }
+        if friends.count > 1, let three = calendar.date(byAdding: DateComponents(year: -3, day: -4), to: .now) {
+            model.relationshipFacts[friends[friends.startIndex + 1], default: RelationshipFacts()].since = three
+        }
+
         // A nickname on one of them, because the reader's own name for somebody
         // is supposed to beat the one they chose — and a fixture where the two
         // are never different proves nothing about that.
@@ -1250,6 +1261,18 @@ enum DemoFixtures {
         model.voiceStates = states
         model.connectedVoiceChannelID = voiceChannelID
         model.isVoiceChatShown = true
+        // Wordle running in the reader's room with two of the cast, so the call
+        // shows the Join Activity tile (docs/ACTIVITIES-CALLS-PICKER.md, D3).
+        if cast.count >= 2 {
+            model.activityInstances.apply(ActivityInstance(
+                applicationID: ApplicationID(rawValue: 1_211_781_489_931_452_447),
+                launchID: "1500000000000000777",
+                location: ActivityLocation(
+                    guildID: model.channelIndex[voiceChannelID]?.guildID, channelID: voiceChannelID
+                ),
+                participants: cast.prefix(2).map { ActivityParticipant(userID: $0.0, sessionID: "demo") }
+            ))
+        }
         // Two people talking at once, which is what makes the speaking ring and
         // the tile's own lit edge visible together rather than one at a time.
         model.speakingUserIDs = Set(cast.prefix(1).map(\.0))

@@ -41,6 +41,9 @@ struct ReadySupplementalPayload: Decodable, Sendable {
 struct SupplementalGuildDTO: Decodable, Sendable {
     var id: GuildID?
     var voice_states: [VoiceStateDTO]?
+    /// The activities running in this server's channels. Discord's store is
+    /// rebuilt from these on every connection (`CONNECTION_OPEN_SUPPLEMENTAL`).
+    var activity_instances: LossyList<ActivityInstanceDTO>?
 }
 
 struct MergedPresencesDTO: Decodable, Sendable {
@@ -64,6 +67,9 @@ public struct ReadySupplementalSnapshot: Sendable {
     /// `SessionController.applyReadySupplemental`.
     public var presences: [UserID: Presence]
     public var privateChannels: [Channel]
+    /// Every server's running activities, keyed by server. A server listed
+    /// with none is in here with an empty array: it is the whole truth for it.
+    public var activityInstances: [GuildID: [ActivityInstance]]
 
     /// - Parameter guildOrder: the order READY listed the account's guilds in.
     ///   **The merged arrays are indexed against *that* list**, not against this
@@ -137,10 +143,24 @@ public struct ReadySupplementalSnapshot: Sendable {
             presences[presence.userID] = presence
         }
 
+        // The running activities, and the members their participants carried
+        // (a face in an activity tile needs a name like a face in a voice row).
+        var instances: [GuildID: [ActivityInstance]] = [:]
+        for guildDTO in guilds {
+            guard let guildID = guildDTO.id else { continue }
+            instances[guildID] = (guildDTO.activity_instances?.elements ?? []).compactMap(\.domain)
+            for dto in guildDTO.activity_instances?.elements ?? [] {
+                for (userID, member) in dto.members {
+                    membersByGuild[guildID, default: [:]][userID] = member
+                }
+            }
+        }
+
         self.voiceStates = voiceStates
         self.membersByGuild = membersByGuild
         self.presences = presences
         self.privateChannels = (payload.lazy_private_channels ?? []).map { $0.domain() }
+        self.activityInstances = instances
     }
 }
 

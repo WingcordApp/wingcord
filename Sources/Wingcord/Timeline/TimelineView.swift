@@ -347,6 +347,8 @@ final class TimelineCoordinator: NSObject {
     /// The video playing over an embed's thumbnail. One at a time, as a
     /// second Play ends the first.
     private var embedPlayer: EmbedPlayerView?
+    /// A video attachment playing in place (decision 24).
+    private var inlineVideo: InlineVideoView?
 
     /// What the viewport was anchored to before a prepend, so history landing
     /// above does not move what the reader is looking at.
@@ -408,6 +410,9 @@ final class TimelineCoordinator: NSObject {
         }
         canvas.onPlayVideo = { [weak self] messageID, player, rect in
             self?.playVideo(player, of: messageID, in: rect)
+        }
+        canvas.onPlayAttachmentVideo = { [weak self] messageID, index, rect in
+            self?.playAttachmentVideo(messageID, attachmentIndex: index, in: rect)
         }
         canvas.onToggleFavoriteGIF = { [weak self] gif in
             self?.model.sessionController.toggleFavorite(gif)
@@ -625,6 +630,9 @@ final class TimelineCoordinator: NSObject {
         }
         canvas.onOpenAttachment = { [weak self] messageID, index, widths, urls in
             guard let self, let channelID = self.channelID else { return }
+            // One thing plays at a time: the viewer's, now.
+            self.inlineVideo?.stop()
+            self.inlineVideo = nil
             self.model.openMedia(
                 messageID: messageID,
                 in: channelID,
@@ -635,6 +643,9 @@ final class TimelineCoordinator: NSObject {
         }
         canvas.onOpenForwardedAttachment = { [weak self] messageID, index, widths, urls in
             guard let self, let channelID = self.channelID else { return }
+            // One thing plays at a time: the viewer's, now.
+            self.inlineVideo?.stop()
+            self.inlineVideo = nil
             self.model.openMedia(
                 messageID: messageID,
                 in: channelID,
@@ -646,6 +657,8 @@ final class TimelineCoordinator: NSObject {
         }
         canvas.onOpenEmbedPictures = { [weak self] messageID, pictures, index in
             guard let self, let channelID = self.channelID else { return }
+            self.inlineVideo?.stop()
+            self.inlineVideo = nil
             self.model.openEmbedPictures(messageID: messageID, in: channelID, pictures: pictures, index: index)
         }
         canvas.onJumpToForwarded = { [weak self] jump in self?.model.jumpToForwarded(jump) }
@@ -889,8 +902,11 @@ final class TimelineCoordinator: NSObject {
         MediaSources.shared.unregister(self)
         canvas?.onToggleFavoriteGIF = nil
         canvas?.onPlayVideo = nil
+        canvas?.onPlayAttachmentVideo = nil
         embedPlayer?.stop()
         embedPlayer = nil
+        inlineVideo?.stop()
+        inlineVideo = nil
         canvas?.onTogglePreview = nil
         canvas?.onOpenMusicPlayer = nil
         canvas?.isFavoriteGIF = nil
@@ -1111,6 +1127,8 @@ final class TimelineCoordinator: NSObject {
             // A clip does not play on in a channel the reader has left.
             embedPlayer?.stop()
             embedPlayer = nil
+            inlineVideo?.stop()
+            inlineVideo = nil
             layoutTask?.cancel()
             // **A clip does not follow the reader out of the channel.** The chip
             // that started it is about to stop existing, so the only way to stop
@@ -1568,6 +1586,7 @@ final class TimelineCoordinator: NSObject {
         frostView?.alignToWindow()
         reconcileUserCards()
         placeEmbedPlayer()
+        placeInlineVideo()
         schedulePrefetch()
         if let channelID, !rows.isEmpty { LoadMarks.shared.mark(.painted, in: channelID) }
         // A page landing is the moment a channel's newest message becomes
@@ -1599,6 +1618,7 @@ final class TimelineCoordinator: NSObject {
         positionCanvas()
         reconcileUserCards()
         placeEmbedPlayer()
+        placeInlineVideo()
     }
 
     private func resizeDocument(to height: CGFloat) {
@@ -1895,6 +1915,65 @@ final class TimelineCoordinator: NSObject {
         view.frame = rect
         canvas.addSubview(view)
         embedPlayer = view
+    }
+
+    /// Plays a video attachment where it is, one at a time; a double click
+    /// on it opens the full player from the same place (decision 24).
+    private func playAttachmentVideo(_ messageID: MessageID, attachmentIndex: Int, in rect: CGRect) {
+        guard let canvas, let channelID,
+              let attachments = model.knownMessage(messageID, in: channelID)?.attachments,
+              attachments.indices.contains(attachmentIndex),
+              let url = URL(string: attachments[attachmentIndex].url)
+        else { return }
+        if let inlineVideo, inlineVideo.messageID == messageID, inlineVideo.attachmentIndex == attachmentIndex {
+            return
+        }
+        inlineVideo?.stop()
+        embedPlayer?.stop()
+        embedPlayer = nil
+        let view = InlineVideoView(messageID: messageID, attachmentIndex: attachmentIndex, url: url)
+        view.frame = rect
+        view.onExpand = { [weak self] seconds in
+            self?.expandInlineVideo(at: seconds)
+        }
+        canvas.addSubview(view)
+        inlineVideo = view
+    }
+
+    /// The inline player's double click: it stops, and the viewer takes the
+    /// video on from the same moment.
+    private func expandInlineVideo(at seconds: Double) {
+        guard let view = inlineVideo, let canvas, let channelID else { return }
+        view.stop()
+        inlineVideo = nil
+        guard let index = canvas.rows.firstIndex(where: { $0.messageID == view.messageID }),
+              case .message(let row) = canvas.rows[index].kind
+        else { return }
+        model.openMedia(
+            messageID: view.messageID,
+            in: channelID,
+            attachmentIndex: view.attachmentIndex,
+            posterWidths: row.attachments.map(\.decodeWidth),
+            posterURLs: row.attachments.map(\.url),
+            startingAt: seconds
+        )
+    }
+
+    /// Keeps the inline video on its attachment through a relayout, and ends it
+    /// when its message is gone.
+    private func placeInlineVideo() {
+        guard let view = inlineVideo, let canvas else { return }
+        guard let index = canvas.rows.firstIndex(where: { $0.messageID == view.messageID }),
+              case .message(let row) = canvas.rows[index].kind,
+              row.attachments.indices.contains(view.attachmentIndex)
+        else {
+            view.stop()
+            inlineVideo = nil
+            return
+        }
+        let origin = canvas.rowFrame(at: index).origin
+        let frame = row.attachments[view.attachmentIndex].rect.offsetBy(dx: origin.x, dy: origin.y)
+        if view.frame != frame { view.frame = frame }
     }
 
     /// Keeps the player on its thumbnail as the rows are laid out again, and

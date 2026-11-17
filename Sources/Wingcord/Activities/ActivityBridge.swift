@@ -21,8 +21,8 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
     /// `RPCCloseCodes.CLOSE_NORMAL` — the app finishing, rather than refusing.
     static let normalCloseCode = 1000
 
-    private unowned let model: AppModel
-    private let activity: RunningActivity
+    unowned let model: AppModel
+    let activity: RunningActivity
     private weak var webView: WKWebView?
     private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Activity")
 
@@ -30,6 +30,18 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
     /// activity, generated here rather than taken from the app: it exists so
     /// *this* client can tell its own request apart from anything else.
     private let authorizeState = UUID().uuidString.lowercased()
+
+    /// The events the app has subscribed to. Only these are dispatched.
+    var subscriptions: Set<String> = []
+    /// The scopes the app's token holds, from AUTHENTICATE: what gates
+    /// Relationships (`relationships.read`), as Discord's handler does.
+    var grantedScopes: Set<String> = []
+    /// The Mac's thermal state, for an app that subscribed to it.
+    var thermalObserver: (any NSObjectProtocol)?
+    /// Who was talking in the activity's call at the last look, for
+    /// SPEAKING_START and SPEAKING_STOP.
+    var lastSpeakers: Set<UserID> = []
+    var watchesSpeaking = false
 
     init(model: AppModel, activity: RunningActivity) {
         self.model = model
@@ -74,6 +86,9 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
     func attach(_ webView: WKWebView) { self.webView = webView }
 
     func detach(_ webView: WKWebView) {
+        if let thermalObserver { NotificationCenter.default.removeObserver(thermalObserver) }
+        thermalObserver = nil
+        watchesSpeaking = false
         webView.configuration.userContentController
             .removeScriptMessageHandler(forName: Self.messageHandler)
         webView.stopLoading()
@@ -191,16 +206,17 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
             // deciding it is finished, and anything else is a refusal.
             let (code, message) = frame.closeReason
             Self.trace("close code=\(code) message=\(message ?? "-")")
-            model.clearPublishedActivity()
-            model.activityRuntime?.stop()
-            model.activityRuntime = nil
-            if code != Self.normalCloseCode {
-                model.reportActionFailure(
-                    message.map { "\(activity.name): \($0)" }
-                        ?? "\(activity.name) closed itself (code \(code))."
-                )
+            // The app is done with it, so the instance is left as Leave would:
+            // a session left standing in it is one the next launch joins.
+            Task { await model.sessionController.leaveActivity() }
+            // **A message is a reason, whatever the code.** An app that hits an
+            // error closes with 1000 and "Unhandled exception", and treating
+            // 1000 as "finished" hid every one of those failures.
+            if let message, !message.isEmpty, message.lowercased() != "user closed" {
+                model.reportActionFailure("\(activity.name) closed: \(message)")
+            } else if code != Self.normalCloseCode {
+                model.reportActionFailure("\(activity.name) closed itself (code \(code)).")
             }
-            model.runningActivity = nil
         case .hello:
             break
         }
@@ -215,16 +231,16 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
         case "AUTHENTICATE":
             authenticate(frame)
         case "SUBSCRIBE", "UNSUBSCRIBE":
-            // Acknowledged, and nothing is delivered. **The events this client
-            // could raise are the ones it cannot verify** — the participant
-            // list and the instance's own updates come from
-            // `EMBEDDED_ACTIVITY_UPDATE_V2`, a dispatch with no published
-            // payload and none in any capture here. An app that subscribes gets
-            // a clean acknowledgement and no events, which is a quiet activity;
-            // an app that got invented events would be a wrong one.
-            // `SubscribeResponse` is `{ evt: string }` — the event's name goes
-            // in the DATA, not in the frame's own `evt`, which must be null.
+            // Remembered, so the events it asked for are the ones it gets: the
+            // participants from `EMBEDDED_ACTIVITY_UPDATE_V2` (see
+            // `participantsChanged`). `SubscribeResponse` is `{ evt: string }`:
+            // the event's name goes in the DATA, not in the frame's own `evt`,
+            // which must be null.
+            if let event = frame.event {
+                if command == "SUBSCRIBE" { subscriptions.insert(event) } else { subscriptions.remove(event) }
+            }
             reply(to: frame, data: ["evt": frame.event ?? ""])
+            if command == "SUBSCRIBE", let event = frame.event { subscribed(to: event) }
         case "ENCOURAGE_HW_ACCELERATION":
             reply(to: frame, data: ["enabled": true])
 
@@ -236,7 +252,8 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
             // `{ use_interactive_pip: boolean }`. False: there is no picture in
             // picture for an activity here, and claiming one would have the app
             // lay itself out for a control that does not exist.
-            reply(to: frame, data: ["use_interactive_pip": false])
+            // True now: the picture in picture is interactive (decision 4).
+            reply(to: frame, data: ["use_interactive_pip": true])
         case "USER_SETTINGS_GET_LOCALE":
             reply(to: frame, data: ["locale": model.sessionController.metadata.locale])
         case "GET_PLATFORM_BEHAVIORS":
@@ -300,13 +317,31 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
             ])
         case "GET_INSTANCE_CONNECTED_PARTICIPANTS",
              "GET_ACTIVITY_INSTANCE_CONNECTED_PARTICIPANTS":
-            // The honest answer is "only you": this client joins no voice
-            // channel on the activity's behalf and has no dispatch that names
-            // the others. An empty list would be a lie about the reader
-            // themselves.
-            reply(to: frame, data: ["participants": [currentUserPayload].compactMap { $0 }])
+            // Everybody in the instance, as Discord's store lists them, each a
+            // user with their server nickname (`R7` in Discord's RPC schemas).
+            reply(to: frame, data: ["participants": participantsPayload()])
         case "OPEN_EXTERNAL_LINK":
             openExternalLink(frame)
+        // The rest of what Discord answers an embedded app (decision 7), in
+        // `ActivityBridge+Commands.swift`.
+        case "OPEN_INVITE_DIALOG":
+            openInviteDialog(frame)
+        case "SHARE_LINK":
+            shareLink(frame)
+        case "OPEN_SHARE_MOMENT_DIALOG":
+            shareMoment(frame)
+        case "INITIATE_IMAGE_UPLOAD":
+            uploadImage(frame)
+        case "GET_RELATIONSHIPS":
+            relationships(frame)
+        case "GET_USER":
+            getUser(frame)
+        case "GET_CURRENT_USER":
+            reply(to: frame, data: currentUserPayload ?? NSNull())
+        case "OPEN_USER_PROFILE":
+            openUserProfile(frame)
+        case "REQUEST_PROXY_TICKET_REFRESH":
+            refreshProxyTicket(frame)
         default:
             Self.trace("REFUSED \(command)")
             refuse(frame, code: .invalidCommand, message: "\(command) is not supported here.")
@@ -427,6 +462,7 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
         Task {
             do {
                 let identity = try await model.sessionController.rest.oauthIdentity(bearer: token)
+                grantedScopes = Set(identity.scopes)
                 // Shaped by `AuthenticateResponseSchema` in the SDK's generated
                 // schemas, which is stricter than the rest of the protocol:
                 // `user.public_flags`, `expires` and `application.description`
@@ -490,6 +526,43 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
         reply(to: frame, data: ["opened": true])
     }
 
+    // MARK: Who's in it
+
+    /// Where the frame is drawn changed: focused (0) on a stage or a band, PiP
+    /// (1) in the small window — the SDK's `ActivityLayoutMode`.
+    func layoutChanged(isPictureInPicture: Bool) {
+        if subscriptions.contains("ACTIVITY_LAYOUT_MODE_UPDATE") {
+            dispatch(event: "ACTIVITY_LAYOUT_MODE_UPDATE", data: ["layout_mode": isPictureInPicture ? 1 : 0])
+        }
+        if subscriptions.contains("ACTIVITY_PIP_MODE_UPDATE") {
+            dispatch(event: "ACTIVITY_PIP_MODE_UPDATE", data: ["is_pip_mode": isPictureInPicture])
+        }
+    }
+
+    /// The instance changed: tell an app that asked.
+    func participantsChanged(_ instance: ActivityInstance) {
+        guard subscriptions.contains("ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE") else { return }
+        dispatch(event: "ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE", data: ["participants": participantsPayload(instance)])
+    }
+
+    private func participantsPayload(_ known: ActivityInstance? = nil) -> [[String: Any]] {
+        let location = activity.instance.location
+        let instance = known ?? model.activityInstances.instance(
+            of: activity.applicationID, in: location.channelID
+        )
+        var ids = instance?.userIDs ?? []
+        // The reader is in it whatever the store has heard so far.
+        if let me = model.currentUserID, !ids.contains(me) { ids.insert(me, at: 0) }
+        return ids.compactMap { userID in
+            guard let user = model.users[userID] else { return nil }
+            var payload = Self.payload(for: user)
+            if let guildID = location.guildID, let nick = model.members[guildID]?[userID]?.nickname, !nick.isEmpty {
+                payload["nickname"] = nick
+            }
+            return payload
+        }
+    }
+
     // MARK: Replying
 
     /// A reply to a command.
@@ -513,7 +586,7 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
     /// malformed replies produce four, and the frame's main thread saturates.
     /// Watch Together's spinner freezing mid-rotation was this, not a hang.
     /// The SDK's own source warns about the loop in as many words.
-    private func reply(to frame: ActivityFrameMessage, data: [String: Any]) {
+    func reply(to frame: ActivityFrameMessage, data: Any) {
         guard let body = ActivityReply.response(
             command: frame.command, nonce: frame.nonce, data: data
         ) else {
@@ -523,7 +596,7 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
         post(body)
     }
 
-    private func refuse(
+    func refuse(
         _ frame: ActivityFrameMessage,
         code: ActivityRPCError,
         message: String
@@ -534,7 +607,7 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
         post(body)
     }
 
-    private func dispatch(event: String, data: [String: Any]) {
+    func dispatch(event: String, data: [String: Any]) {
         post(ActivityReply.dispatch(event: event, data: data))
     }
 
@@ -563,7 +636,7 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
 
     // MARK: Payloads
 
-    private var currentUserPayload: [String: Any]? {
+    var currentUserPayload: [String: Any]? {
         model.currentUserID.flatMap { model.users[$0] }.map(Self.payload(for:))
     }
 
@@ -572,7 +645,7 @@ final class ActivityBridge: NSObject, WKScriptMessageHandler, WKNavigationDelega
     /// `.optional()` accepts `undefined` — it does **not** accept `null`. An
     /// account with no avatar would otherwise fail the parse and storm.
     /// `public_flags` is required outright.
-    private static func payload(for user: User) -> [String: Any] {
+    static func payload(for user: User) -> [String: Any] {
         ActivityReply.user(
             id: user.id.description,
             username: user.username,

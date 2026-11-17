@@ -105,6 +105,13 @@ struct SidebarChannelRow: View {
                         .padding(.leading, Metrics.voiceStripInset)
                 }
 
+                // What's being played in the room, before who is in it: Discord
+                // draws the activity's icon and name under the channel.
+                ForEach(channel.activities) { activity in
+                    SidebarActivityLine(activity: activity)
+                        .padding(.leading, Metrics.voiceStripInset)
+                }
+
                 if !channel.voiceMembers.isEmpty {
                     VoiceMemberStrip(
                         members: channel.voiceMembers,

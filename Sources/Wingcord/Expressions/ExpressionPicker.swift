@@ -98,6 +98,8 @@ struct ExpressionPicker: View {
     /// Whether every pick is a super reaction. Starts off each time the picker
     /// opens, as Discord's does.
     @State private var isSuperReaction = false
+    /// The Nitro Emoji Packs page is up in place of the grid (decision 16).
+    @State private var showsPacks = false
 
     /// The panel's size. A popover has no natural one, and a grid inside a
     /// container that sizes to its content has no width to lay out against.
@@ -129,20 +131,58 @@ struct ExpressionPicker: View {
 
     private var showsRail: Bool { !catalog.sections.isEmpty }
 
+    /// **One row of chrome, not three** (Alex, 2026-11-17: "the header that's
+    /// too big"; decision 12): search, the GIFs / Stickers / Emoji control and
+    /// the skin tone share one glass row, and the servers moved to a column on
+    /// the leading edge, as Discord's own picker has them. About a hundred
+    /// points more for the grid.
     var body: some View {
-        VStack(spacing: 0) {
-            if tabs.count > 1 { tabStrip }
-            Group {
-                if shown == .gifs {
-                    GIFBoard(query: $query, onPick: onPickGIF).environment(model)
-                } else {
-                    gridTab
+        ZStack(alignment: .top) {
+            HStack(spacing: 0) {
+                if shown != .gifs, showsRail {
+                    VStack(spacing: Spacing.base) {
+                        ExpressionRail(
+                            sections: catalog.sections,
+                            selection: topSection,
+                            side: Self.railSide,
+                            onSelect: { index in
+                                // The token is what makes a repeat click a new
+                                // request: the same index twice is the same value.
+                                jumpToken += 1
+                                jump = ExpressionJump(section: index, token: jumpToken)
+                                topSection = index
+                            }
+                        )
+                        // Discord's Nitro Emoji Packs, at the rail's foot.
+                        if shown == .emoji, reactingIn == nil {
+                            Button("Nitro Emoji Packs", systemImage: "sparkles") { showsPacks.toggle() }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.glass)
+                                .buttonBorderShape(.circle)
+                                .help("View Emoji Packs")
+                        }
+                    }
+                    .padding(.top, chromeHeight + Spacing.tight)
+                    .padding(.leading, Spacing.snug)
+                    .padding(.bottom, Spacing.snug)
+                    .transition(.opacity)
                 }
+                Group {
+                    if shown == .emoji, showsPacks {
+                        EmojiPacksPage(topInset: chromeHeight) { showsPacks = false }
+                    } else if shown == .gifs {
+                        GIFBoard(query: $query, showsSearchField: false, topInset: chromeHeight, onPick: onPickGIF)
+                            .environment(model)
+                    } else {
+                        gridTab
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Each tab arrives with its own grid and its own place in it.
+                .id(shown)
+                .transition(.opacity)
             }
-            .frame(maxHeight: .infinity)
-            // Each tab arrives with its own grid and its own place in it.
-            .id(shown)
-            .transition(.opacity)
+            chrome
         }
         .frame(width: Self.width, height: Self.height)
         .animation(motion.standard, value: shown)
@@ -153,14 +193,16 @@ struct ExpressionPicker: View {
             await model.sessionController.loadDefaultStickerPacks()
             openInitialSection()
         }
-        // The account's stars and uses, read once per session.
-        .task { await model.sessionController.loadExpressionUsage() }
+        // The account's stars and uses, read once per session; and Discord's
+        // Nitro Emoji Packs (decision 16).
+        .task {
+            await model.sessionController.loadExpressionUsage()
+            await model.sessionController.loadEmojiPacks()
+        }
     }
 
-    /// GIFs, Stickers, Emoji — the system's capsule strip, centred over the
-    /// panel. Outside the floating chrome on purpose: the strip brings its own
-    /// glass, and glass inside the chrome's container is glass on glass (§4).
-    private var tabStrip: some View {
+    /// GIFs, Stickers, Emoji, at the trailing end of the header row.
+    private var tabControl: some View {
         SegmentedPicker(
             options: tabs.map { .init($0, $0.rawValue) },
             selection: Binding(
@@ -175,9 +217,7 @@ struct ExpressionPicker: View {
                 }
             )
         )
-        .frame(maxWidth: .infinity)
-        .padding(.top, Spacing.base)
-        .padding(.bottom, Spacing.tight)
+        .fixedSize()
     }
 
     /// Jumps to `initialSectionID`, once the packs it names are in the catalog.
@@ -217,7 +257,6 @@ struct ExpressionPicker: View {
                     onToggleFavorite: { model.toggleFavorite($0) }
                 )
             }
-            chrome
             footer
         }
     }
@@ -305,7 +344,8 @@ struct ExpressionPicker: View {
         }
     }
 
-    /// The rail and the field, as one glass assembly over the grid.
+    /// The header row: the field and the tabs, as one glass assembly over
+    /// every tab (decision 12).
     ///
     /// **One `GlassEffectContainer` around both.** Two adjacent glass surfaces
     /// rendered independently double the material where they meet, which is the
@@ -313,23 +353,9 @@ struct ExpressionPicker: View {
     /// one piece of material carrying two shapes.
     private var chrome: some View {
         GlassEffectContainer(spacing: Spacing.base) {
-            VStack(spacing: Spacing.base) {
-                if showsRail {
-                    ExpressionRail(
-                        sections: catalog.sections,
-                        selection: topSection,
-                        side: Self.railSide,
-                        onSelect: { index in
-                            // The token is what makes a repeat click a new
-                            // request: the same index twice is the same value,
-                            // and a value cannot express "again".
-                            jumpToken += 1
-                            jump = ExpressionJump(section: index, token: jumpToken)
-                            topSection = index
-                        }
-                    )
-                }
+            HStack(spacing: Spacing.base) {
                 searchRow
+                if tabs.count > 1 { tabControl }
             }
             .padding(.horizontal, Spacing.snug)
             .padding(.top, Spacing.base)
@@ -462,18 +488,20 @@ private struct ExpressionRail: View {
 
     var body: some View {
         ScrollViewReader { rail in
-            ScrollView(.horizontal) {
-                HStack(spacing: Spacing.tight) {
+            // A column on the leading edge (decision 12): servers stack where
+            // there's room for all of them, and scroll on their own.
+            ScrollView(.vertical) {
+                VStack(spacing: Spacing.tight) {
                     ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
                         icon(section, index: index).id(index)
                     }
                 }
-                .padding(.horizontal, Spacing.base)
+                .padding(.horizontal, Spacing.tight)
                 .padding(.vertical, Spacing.base)
             }
             .scrollIndicators(.never)
-            .frame(height: side + Spacing.base * 2)
-            .chromeOverMedia()
+            .frame(width: side + Spacing.tight * 2)
+            .chromeOverMedia(in: .rect(cornerRadius: (side + Spacing.tight * 2) / 2, style: .continuous))
             .onChange(of: selection) { _, index in
                 withAnimation(motion.standard) { rail.scrollTo(index, anchor: .center) }
             }

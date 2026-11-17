@@ -195,10 +195,14 @@ extension DemoFixtures {
                     applicationCount: 2 + (index * 3) % 6
                 )
             }
+            // The competition's last day, so the demo shows Discord's podium
+            // (decision 19): `day_pt` on the week's seventh day.
+            let weekStart = now.addingTimeInterval(-6 * 86_400 + 3_600 * 5)
             return .leaderboard(GuildSpaceLeaderboard(
                 stat: .hoursPlayed,
                 nextStat: .daysPlayed,
-                weekStart: now.addingTimeInterval(-6 * 86_400 + 3_600 * 5),
+                weekStart: weekStart,
+                dayPT: Self.leaderboardDay(weekStart.addingTimeInterval(6 * 86_400)),
                 computedAt: now.addingTimeInterval(-3 * 3_600),
                 entries: Array(entries)
             ))
@@ -235,5 +239,15 @@ extension DemoFixtures {
         default:
             return nil
         }
+    }
+
+    /// A `day_pt` as Discord spells it.
+    static func leaderboardDay(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 }

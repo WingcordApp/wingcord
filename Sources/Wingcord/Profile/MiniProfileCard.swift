@@ -60,6 +60,8 @@ struct MiniProfileCard: View {
     /// top of the card is the other thing that opens the editor: clicking what
     /// you wrote is how you change it.
     @State private var ownSurface: OwnProfileSurface = .root
+    /// The status editor, open on the bubble.
+    @State private var isEditingStatus = false
     /// The prompt an empty bubble carries, chosen once per card.
     ///
     /// **Not per body evaluation.** A body runs on every hover, and a prompt
@@ -570,7 +572,7 @@ struct MiniProfileCard: View {
             // one arrangement, and a hand-tuned offset here would be right on
             // one of the two profile surfaces at most.
             if ownActions != nil {
-                Button { ownSurface = .customStatus } label: {
+                Button { isEditingStatus = true } label: {
                     CustomStatusBubble(
                         text: profile.customStatus,
                         emoji: profile.customStatusEmoji,
@@ -585,6 +587,11 @@ struct MiniProfileCard: View {
                 .accessibilityLabel(
                     Text(hasCustomStatus ? "Edit your custom status" : "Set a custom status")
                 )
+                .popover(isPresented: $isEditingStatus, arrowEdge: .bottom) {
+                    if let ownActions {
+                        OwnCustomStatusPopover(actions: ownActions) { isEditingStatus = false }
+                    }
+                }
             } else if hasCustomStatus {
                 CustomStatusBubble(
                     text: profile.customStatus,
@@ -843,7 +850,8 @@ struct MiniProfileCard: View {
                                 first.applicationID, side: Metrics.avatarProfile
                             ),
                             isOwn: profile.isSelf,
-                            listenAlong: model.listenAlongOffer(for: profile.userID, activity: first)
+                            listenAlong: model.listenAlongOffer(for: profile.userID, activity: first),
+                            joinActivity: model.activityJoinOffer(for: profile.userID, activity: first)
                         )
                     } else if let voice {
                         ProfileVoiceCard(

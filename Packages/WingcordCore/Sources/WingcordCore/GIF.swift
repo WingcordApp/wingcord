@@ -60,12 +60,25 @@ public struct GIF: Hashable, Sendable, Identifiable {
         return CGFloat(width) / CGFloat(height)
     }
 
-    public init(url: URL, previewURL: URL?, width: Int?, height: Int?, isVideo: Bool = false) {
+    /// The result's MP4 rendition, when the picker asked for one: played as
+    /// video (hardware-decoded, only while on screen) over `previewURL`'s
+    /// still, never decoded into frames (docs/ACTIVITIES-CALLS-PICKER.md,
+    /// decision 14).
+    public var videoURL: URL?
+
+    public init(url: URL, previewURL: URL?, width: Int?, height: Int?, isVideo: Bool = false, videoURL: URL? = nil) {
         self.url = url
         self.previewURL = previewURL
         self.width = width
         self.height = height
         self.isVideo = isVideo
+        self.videoURL = videoURL
+    }
+
+    /// Whether a URL names an MP4 or QuickTime file AVFoundation plays.
+    public static func isPlayableVideo(_ url: URL?) -> Bool {
+        guard let ext = url?.pathExtension.lowercased() else { return false }
+        return ["mp4", "m4v", "mov"].contains(ext)
     }
 }
 
@@ -78,7 +91,11 @@ public struct GIFCategory: Hashable, Sendable, Identifiable {
 
     public var id: String { name }
 
-    public init(name: String, previewURL: URL?) {
+    /// The category's MP4 preview, played over its still (decision 14).
+    public var videoURL: URL?
+
+    public init(name: String, previewURL: URL?, videoURL: URL? = nil) {
+        self.videoURL = videoURL
         self.name = name
         self.previewURL = previewURL
     }

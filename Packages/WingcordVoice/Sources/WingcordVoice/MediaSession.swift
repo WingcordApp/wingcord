@@ -120,6 +120,12 @@ public actor MediaSession {
         /// Negotiated, keyed, and passing media: a call with its audio up, a
         /// share with its capture running, a watch ready for the picture.
         case connected
+        /// The voice server closed the connection in a way its own resume
+        /// can't mend (a restarted server, an expired session). Not the end
+        /// of the call: the controller connects again to a fresh server while
+        /// the reader stays in the channel, as Discord's client does
+        /// (docs/ACTIVITIES-CALLS-PICKER.md, decision 10).
+        case interrupted(code: Int, reason: String)
         case failed(String)
     }
 
@@ -202,6 +208,13 @@ public actor MediaSession {
         public var lossPercent = 0
         public var jitterMilliseconds: Double = 0
         public var outgoingBitrate = 0
+        /// The voice server's heartbeat round trip, once one has come back.
+        public var pingMilliseconds: Int?
+        /// The far end's loss of our audio, from its RTCP reports: the other
+        /// direction from `lossPercent`.
+        public var outboundLossPercent = 0
+        /// The transport cipher the server chose (`aead_aes256_gcm_rtpsize`…).
+        public var transportEncryption: String?
 
         public init() {}
     }
@@ -373,6 +386,10 @@ public actor MediaSession {
     private var isReportedSilent = false
     /// The share of our audio the far end last reported losing, in per cent.
     private var audioLoss = 0
+    /// The last heartbeat round trip — see `Statistics.pingMilliseconds`.
+    private var ping: Int?
+    /// The transport cipher in use, once the session is keyed.
+    private var transportCipher: VoiceCipher?
 
     // MARK: What our picture should be
 
@@ -573,6 +590,7 @@ public actor MediaSession {
             await openTransport(ready)
 
         case .sessionDescription(let cipher, let key, _, let daveVersion):
+            transportCipher = cipher
             // **Once.** A second session description would build a second
             // group, a second set of writers, a second mix pump and a second
             // statistics loop over the first. Discord has never been seen to
@@ -675,6 +693,9 @@ public actor MediaSession {
         case .resumed:
             if isConnected { emit(.state(.connected)) }
 
+        case .heartbeatAcknowledged(let roundTrip):
+            ping = roundTrip
+
         case .closed(let code, let reason, _):
             // **4006 on a stream means the `server_id` is wrong**: the server
             // found the media server and no session on it under what was named.
@@ -687,7 +708,7 @@ public actor MediaSession {
                     + "that field is the suspect"
                 )
             }
-            emit(.state(.failed(reason)))
+            emit(.state(.interrupted(code: code, reason: reason)))
         }
     }
 
@@ -1491,6 +1512,13 @@ public actor MediaSession {
         inbound.setIsStage(isStage)
     }
 
+    /// Stretches speech by a pitch period to absorb delay changes inside a
+    /// sentence, as WebRTC's NetEQ does (docs/ACTIVITIES-CALLS-PICKER.md,
+    /// decision 11).
+    public nonisolated func setStretchesTime(_ on: Bool) {
+        inbound.setStretchesTime(on)
+    }
+
     /// The pixels a person's tile draws them at; zero when it goes.
     public nonisolated func setDrawnPixels(_ pixels: Int, for userID: UInt64) {
         inbound.setDrawnPixels(pixels, for: userID)
@@ -1945,6 +1973,9 @@ public actor MediaSession {
             statistics.lossPercent = summary.lossPercent
             statistics.jitterMilliseconds = summary.jitterMilliseconds
             statistics.outgoingBitrate = (sent.bytes + video.bytes) * 8 * 2
+            statistics.pingMilliseconds = ping
+            statistics.outboundLossPercent = audioLoss
+            statistics.transportEncryption = transportCipher?.rawValue
             emit(.statistics(statistics))
         }
 

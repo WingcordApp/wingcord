@@ -33,6 +33,9 @@ struct VoiceCallOverlay: View {
     var leave: () -> Void = {}
     /// Reports the outside height, so the transcript can inset itself by it.
     var heightChanged: (CGFloat) -> Void = { _ in }
+    /// The activity running in this call (decision 3).
+    var activity: CallActivityPresentation? = nil
+    var joinActivity: (CallActivityPresentation) -> Void = { _ in }
 
     /// The panel's height, at rest.
     ///
@@ -64,6 +67,14 @@ struct VoiceCallOverlay: View {
                 .onChange(of: isFullHeight ? proxy.size.height : resolved, initial: true) { _, value in
                     heightChanged(value)
                 }
+                // **An activity the reader joins opens the band to the room a
+                // game needs, to start with**: the grabber still resizes it
+                // (Alex, 2026-11-17: "i cant resize the voice header when an
+                // activity is open"; it was pinned to the ceiling).
+                .onChange(of: activity?.isJoined == true) { _, joined in
+                    guard joined else { return }
+                    withAnimation(motion.reposition) { height = ceiling }
+                }
         }
         // The band arrives from the edge it lives on and leaves the same way —
         // spatial symmetry, §3.
@@ -90,8 +101,9 @@ struct VoiceCallOverlay: View {
             grabber
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Palette.surface)
-        .overlay(alignment: .bottom) { Divider() }
+        // **Transparent** (Alex, 2026-11-17): the conversation's own backdrop
+        // runs behind the call; the tiles and controls carry their own ground.
+        .overlay(alignment: .bottom) { Divider().opacity(0.6) }
         .overlay(alignment: .bottomTrailing) {
             HStack(spacing: Spacing.tight) {
                 CallFullScreenButton()
@@ -111,7 +123,9 @@ struct VoiceCallOverlay: View {
             selfUserID: selfUserID,
             attachVideo: attachVideo,
             watch: watch,
-            spotlight: spotlight
+            spotlight: spotlight,
+            activity: activity,
+            joinActivity: joinActivity
         )
         .padding(.horizontal, Spacing.snug)
         .padding(.top, Spacing.snug)
@@ -295,11 +309,17 @@ struct VoiceCallOverlayContainer: View {
                         toggleCamera: model.toggleCamera,
                         toggleScreenShare: model.toggleScreenShare,
                         leave: model.leaveVoice,
-                        heightChanged: heightChanged
+                        heightChanged: heightChanged,
+                        activity: model.callActivity(in: channelID),
+                        joinActivity: model.joinCallActivity
                     )
                 }
             } else if let lobby {
-                VoiceCallLobby(participants: lobby) { model.joinCall(in: channelID) }
+                VoiceCallLobby(
+                    participants: lobby,
+                    activity: model.callActivity(in: channelID),
+                    joinActivity: model.joinCallActivity
+                ) { model.joinCall(in: channelID) }
                     .frame(height: VoiceCallLobby.height)
                     .frame(maxWidth: .infinity, alignment: .top)
                     // The band arrives from the edge it lives on and leaves the

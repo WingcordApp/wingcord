@@ -204,6 +204,53 @@ final class MediaCanvasView: NSView {
     /// A click on a video itself — play or pause.
     var onContentClick: (() -> Void)?
 
+    // MARK: The system player, the light, Live Text (decisions 24–26)
+
+    /// A video plays in AVKit's own player once it's still; a clip and a
+    /// GIF's MP4 keep the viewer's (their bars carry marks, or nothing).
+    var usesSystemPlayer = false {
+        didSet {
+            guard usesSystemPlayer != oldValue else { return }
+            if !usesSystemPlayer { systemPlayer.detach() }
+            layoutContent()
+        }
+    }
+    /// Cinema mode's glow behind the picture.
+    var isCinemaOn = false {
+        didSet { if isCinemaOn != oldValue { layoutContent() } }
+    }
+    /// Live Text over a still.
+    var isLiveTextOn = false {
+        didSet { if isLiveTextOn != oldValue { layoutContent() } }
+    }
+    private lazy var systemPlayer = ViewerSystemPlayer(host: self)
+    private let ambient = ViewerAmbientLight()
+    private lazy var liveText = ViewerLiveText(host: self)
+
+    /// Nothing is moving the picture: no flight, page, throw or squeeze.
+    private var isAtRest: Bool {
+        flight == nil && !isClosing && pageOffset == 0 && committingPage == 0
+            && dismissProgress < 0.001 && pendingOpen == nil
+    }
+
+    private func layoutExtras() {
+        let atRest = isAtRest
+        if case .letterboxed = fill, usesSystemPlayer, let player = playerLayer?.player {
+            systemPlayer.show(player, frame: restingContent, visible: atRest)
+        } else {
+            systemPlayer.hide()
+        }
+        // The light follows the picture through a throw and a page; a flight
+        // takes it away (the scrim is fading there anyway).
+        let showsLight = isCinemaOn && flight == nil && !isClosing && pendingOpen == nil
+        ambient.layout(around: contentLayer.frame, visible: showsLight, animated: !reducesMotion)
+        liveText.update(
+            image: shownImage,
+            frame: contentLayer.frame,
+            active: isLiveTextOn && isTransformable && film == nil && atRest
+        )
+    }
+
     // MARK: Lifecycle
 
     override init(frame frameRect: NSRect) {
@@ -227,6 +274,10 @@ final class MediaCanvasView: NSView {
         clipLayer.addSublayer(nextLayer)
         clipLayer.addSublayer(contentLayer)
         layer?.addSublayer(clipLayer)
+        // Cinema mode's light, behind the picture (decision 25). Its blur is a
+        // Core Image filter on a layer, which the view has to allow.
+        layerUsesCoreImageFilters = true
+        layer?.insertSublayer(ambient.layer, below: clipLayer)
         // Nothing is shown until the opening flight has somewhere to start.
         clipLayer.opacity = 0
     }
@@ -247,6 +298,9 @@ final class MediaCanvasView: NSView {
 
     /// Releases the link and the clock subscription. Idempotent.
     func tearDown() {
+        systemPlayer.detach()
+        ambient.tearDown()
+        liveText.tearDown()
         stopSettle()
         unsubscribeFromClock()
         playerLayer?.player = nil
@@ -275,6 +329,7 @@ final class MediaCanvasView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         contentLayer.contents = image
+        ambient.setImage(image)
         CATransaction.commit()
         setFill(pixelSize.width > 0 ? .transformable(pixelSize) : .letterboxed)
     }
@@ -295,6 +350,7 @@ final class MediaCanvasView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         contentLayer.contents = image
+        ambient.setImage(image)
         CATransaction.commit()
         if case .transformable = fill {
             fill = .transformable(CGSize(width: image.width, height: image.height))
@@ -309,6 +365,7 @@ final class MediaCanvasView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         contentLayer.contents = image
+        ambient.setImage(image)
         CATransaction.commit()
         layoutContent()
     }
@@ -335,9 +392,12 @@ final class MediaCanvasView: NSView {
             playerLayer?.removeFromSuperlayer()
             playerLayer = nil
             videoSize = .zero
+            systemPlayer.detach()
+            ambient.setPlayer(nil)
             return
         }
         videoSize = size
+        ambient.setPlayer(player)
         if let playerLayer {
             if playerLayer.player !== player { playerLayer.player = player }
         } else {
@@ -469,6 +529,7 @@ final class MediaCanvasView: NSView {
             playerLayer?.frame = content
             previousLayer.isHidden = true
             nextLayer.isHidden = true
+            layoutExtras()
             return
         }
 
@@ -495,6 +556,7 @@ final class MediaCanvasView: NSView {
         if let next {
             nextLayer.frame = restingFrame(of: next).offsetBy(dx: pageOffset + pageStride, dy: 0)
         }
+        layoutExtras()
     }
 
     /// The dismissal, applied last: a squeeze about the picture's own centre
@@ -742,6 +804,7 @@ final class MediaCanvasView: NSView {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             contentLayer.contents = incoming.image
+            ambient.setImage(incoming.image)
             CATransaction.commit()
             contentIdentity = incoming.identity
             film = nil
@@ -808,6 +871,7 @@ final class MediaCanvasView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         contentLayer.contents = shownImage
+        ambient.setImage(shownImage)
         CATransaction.commit()
         onFrameChange?(index)
     }

@@ -16,6 +16,9 @@ extension SessionController {
             for link in EventLink.links(in: message.content) {
                 resolveEventCard(EventCardKey(guildID: link.guildID, eventID: link.eventID, occurrence: link.occurrence))
             }
+            for link in ActivityLink.links(in: message.content) {
+                resolveActivityCard(ActivityCardKey(applicationID: link.applicationID, channelID: message.channelID))
+            }
             if message.kind == .stageStart, let event = model.liveEvent(in: message.channelID),
                event.name == message.content
             {
@@ -58,6 +61,21 @@ extension SessionController {
         {
             let key = HostedCardKey.plaintext(PlaintextCardKey(attachment))
             guard model.hostedCardSizes[key] == nil, hostedCardFetches.insert(key).inserted else { continue }
+            model.noteHostedCardSize(HostedCardHosts.measure(key, model: model), for: key)
+        }
+    }
+
+    /// Readies one activity link's card: the app's page (its tags and how many
+    /// can play), the shelf for its cover, then the card's size. A link to an
+    /// app Discord won't describe stays a link.
+    func resolveActivityCard(_ card: ActivityCardKey) {
+        let key = HostedCardKey.activity(card)
+        guard model.hostedCardSizes[key] == nil, hostedCardFetches.insert(key).inserted else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await loadActivityDirectory()
+            await loadActivityApp(card.applicationID)
+            guard model.activityApp(card.applicationID) != nil else { return }
             model.noteHostedCardSize(HostedCardHosts.measure(key, model: model), for: key)
         }
     }

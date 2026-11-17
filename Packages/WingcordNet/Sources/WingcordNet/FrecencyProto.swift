@@ -683,3 +683,34 @@ extension ProtobufReader {
         return result
     }
 }
+
+// MARK: - Pinned emoji packs (field 14)
+
+extension FrecencyProto {
+    static let pinnedEmojiPacksField = 14
+
+    /// `PinnedEmojiPacks { repeated fixed64 pack_ids = 1 }`, packed or not.
+    static func pinnedEmojiPacks(base64: String) -> [UInt64] {
+        guard let data = Data(base64Encoded: base64) else { return [] }
+        var reader = ProtobufReader(data)
+        var ids: [UInt64] = []
+        while let field = reader.next() {
+            guard field.number == pinnedEmojiPacksField, field.wireType == 2 else { continue }
+            var message = reader.reader(for: field)
+            while let inner = message.next() {
+                guard inner.number == 1 else { continue }
+                ids.append(contentsOf: inner.wireType == 2 ? message.packedFixed64(for: inner) : [inner.value])
+            }
+        }
+        return ids
+    }
+
+    /// A PATCH body that replaces field 14 and nothing else.
+    static func pinnedEmojiPacksPatch(_ ids: [UInt64]) -> String {
+        var packs = ProtobufWriter()
+        packs.packedFixed64(field: 1, ids)
+        var top = ProtobufWriter()
+        top.message(field: pinnedEmojiPacksField, packs.data)
+        return top.data.base64EncodedString()
+    }
+}

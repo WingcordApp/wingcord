@@ -169,6 +169,44 @@ struct MessageActionPresenter: ViewModifier {
                     ProfileSharePreview(userID: request.userID)
                 }
             }
+            // A running activity's Invite, Share Link or Share Moment
+            // (docs/ACTIVITIES-CALLS-PICKER.md, decision 7): the same sheet,
+            // and the app hears what the reader did when it goes.
+            .modal(item: $model.activityShareRequest, onDismiss: { model.activityShareRequest?.close() }) { request in
+                ForwardSheet(
+                    title: request.title,
+                    subtitle: request.subtitle,
+                    targets: model.forwardTargets(excluding: nil),
+                    copyLink: { request.copied() },
+                    send: { targets, comment in model.shareFromActivity(request, to: targets, comment: comment) },
+                    dismiss: {
+                        request.close()
+                        model.activityShareRequest = nil
+                    }
+                ) {
+                    ActivitySharePreview(request: request)
+                }
+            }
+            .modal(item: $model.activityEndedPrompt, style: .alert) { prompt in
+                ModalAlert(
+                    hero: .symbol("gamecontroller.fill"),
+                    title: "Activity has ended",
+                    message: Text("Start a new one?"),
+                    actions: [
+                        .cancel(),
+                        .act("Start \(prompt.app.name)", symbol: "play.fill") {
+                            Task {
+                                await model.sessionController.launchActivity(
+                                    prompt.app, in: prompt.channelID, section: nil, guildID: prompt.guildID
+                                )
+                            }
+                        },
+                    ]
+                )
+            }
+            .modal(item: $model.celebrateGIFRequest, style: .panel) { request in
+                CelebrateGIFSheet(request: request)
+            }
             .modal(item: $model.reportRequest) { request in
                 ReportSheet(request: request)
                     .environment(model)

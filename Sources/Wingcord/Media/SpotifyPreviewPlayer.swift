@@ -14,20 +14,34 @@ import OSLog
 /// songs, and there is no arrangement in which somebody wanted that — the same
 /// rule a moving cosmetic follows (§4.6).
 @MainActor
+@Observable
 final class SpotifyPreviewPlayer {
-    private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Preview")
+    @ObservationIgnored private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Preview")
 
     /// What is playing, or nil. Read by the card so its chip says which way the
     /// click goes.
     private(set) var playing: URL?
 
-    private var player: AVPlayer?
+    @ObservationIgnored private var player: AVPlayer?
     /// The end-of-clip observer, kept so it can be taken off again. An observer
     /// left behind fires for the *next* clip and stops it a second in.
-    private var endObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
     /// What to call when playback starts or stops, so the transcript can redraw
     /// the one chip that changed.
-    var onChange: ((URL?) -> Void)?
+    @ObservationIgnored var onChange: ((URL?) -> Void)?
+
+    /// How far into the clip, for the card's progress line. Read on a timer
+    /// while it plays, never observed.
+    func elapsed() -> Double {
+        let seconds = player?.currentTime().seconds ?? 0
+        return seconds.isFinite ? seconds : 0
+    }
+
+    /// The clip's length, once known; thirty seconds is Spotify's preview.
+    func length() -> Double {
+        let seconds = player?.currentItem?.duration.seconds ?? 30
+        return seconds.isFinite && seconds > 0 ? seconds : 30
+    }
 
     /// Starts this clip, or stops it if it is the one already going.
     func toggle(_ url: URL) {

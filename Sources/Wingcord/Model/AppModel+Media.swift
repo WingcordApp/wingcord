@@ -38,7 +38,8 @@ extension AppModel {
         posterWidths: [CGFloat],
         posterURLs: [URL?] = [],
         origin: MediaViewerRequest.Origin = .transcript,
-        forwarded: Bool = false
+        forwarded: Bool = false,
+        startingAt seconds: Double? = nil
     ) {
         // The transcript's copy, or the inspector's — see `knownMessage`.
         guard let message = knownMessage(messageID, in: channelID) else { return }
@@ -67,9 +68,18 @@ extension AppModel {
                 ? posterWidths[position]
                 : Metrics.attachmentThumbnail
             let poster = posterURLs.indices.contains(position) ? posterURLs[position] : nil
-            guard let item = MediaItem(
+            guard var item = MediaItem(
                 attachment, posterWidth: width, posterURL: poster, attachmentIndex: indexBase + position
             ) else { continue }
+            // An uploaded GIF is starred under its CDN address, as the chat's
+            // own star keys it (`TimelineRowLayout.favorite(for:)`).
+            if item.kind == .animated, !attachment.isSpoiler, attachment.playsAsAnimated,
+               let url = URL(string: attachment.url), url.scheme == "https" {
+                item.favoriteGIF = GIF(
+                    url: url, previewURL: URL(string: attachment.proxyURL),
+                    width: attachment.width, height: attachment.height
+                )
+            }
             if position == attachmentIndex { index = items.count }
             items.append(item)
         }
@@ -81,7 +91,8 @@ extension AppModel {
             channelID: channelID,
             origin: origin,
             authorName: authorName(of: message, in: channelID),
-            sentAt: message.sentAt
+            sentAt: message.sentAt,
+            startsAt: seconds.flatMap { seconds in items.indices.contains(index) ? (items[index].id, seconds) : nil }
         )
     }
 
@@ -93,10 +104,14 @@ extension AppModel {
         var items: [MediaItem] = []
         var start = 0
         for (position, picture) in pictures.enumerated() {
-            guard let item = MediaItem(
+            guard var item = MediaItem(
                 picture.attachment, posterWidth: picture.posterWidth, posterURL: picture.posterURL,
                 attachmentIndex: picture.sourceIndex
             ) else { continue }
+            // An embed's only playable picture is a GIF's MP4: the cards with a
+            // player keep their own Play.
+            if item.isVideo { item.loopsSilently = true }
+            item.favoriteGIF = picture.favorite
             if position == index { start = items.count }
             items.append(item)
         }

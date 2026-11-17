@@ -10,15 +10,19 @@ struct ServerHubPageBody: View {
         switch presentation.phase {
         case .loading:
             SurfaceLoadingState(message: "Opening the Server Hub\u{2026}")
-        case .failed:
+        case .failed(let isOffline):
             VStack(spacing: Spacing.snug) {
                 SurfaceEmptyState(
-                    symbol: "wifi.exclamationmark",
+                    symbol: isOffline ? "wifi.exclamationmark" : "exclamationmark.triangle",
                     title: "The Server Hub didn\u{2019}t load",
-                    detail: "Check your connection, then try again."
+                    detail: isOffline
+                        ? "Check your connection, then try again."
+                        : "Discord didn\u{2019}t send this server\u{2019}s Server Hub. Try again in a moment."
                 )
                 Button("Try Again", action: retry)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.large)
             }
             .frame(maxWidth: .infinity)
         case .missing:

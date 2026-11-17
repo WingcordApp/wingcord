@@ -147,6 +147,13 @@ final class VoiceController {
     private var watchdog: Task<Void, Never>?
     /// How many times the join has been re-sent for the current channel.
     private var rejoinAttempts = 0
+    /// When the call started recovering, if it is: a dropped voice server, a
+    /// network that changed, a Mac that woke. Nil while it's healthy.
+    private var recoveryStartedAt: Date?
+    private var recoveryAttempts = 0
+    private var recoveryTask: Task<Void, Never>?
+    /// Network changes and waking from sleep, watched while a call is up.
+    private var network: CallNetworkWatch?
     /// **A handshake that hangs is the failure this protocol produces most
     /// often**, because every way it can fail is silent: a lost op 4, a
     /// `VOICE_SERVER_UPDATE` that arrived while the socket was reconnecting, a
@@ -252,6 +259,7 @@ final class VoiceController {
         // A new room: nobody's clip flags are known yet, and its own notice.
         model.forgetVoiceClientFlags()
         model.voiceQuality = .idle
+        model.callDiagnostics = .idle
         model.spotlightUserID = nil
         model.isVoiceChatShown = guildID != nil
         streamViewerIDs = []
@@ -282,6 +290,8 @@ final class VoiceController {
         // that takes a second to negotiate turns instant feedback into lag.
         sounds.play(.join)
         armWatchdog(channelID: channelID, guildID: guildID)
+        endRecovery()
+        startNetworkWatch()
         Task { [socket] in
             await socket?.updateVoiceState(
                 guildID: guildID,
@@ -325,6 +335,8 @@ final class VoiceController {
         let guildID = model.channelIndex[channelID]?.guildID
         Self.log.info("leaving voice")
 
+        stopNetworkWatch()
+        endRecovery()
         stopRinging()
         startsWithCamera = false
         sounds.play(.voiceDisconnected)
@@ -344,6 +356,7 @@ final class VoiceController {
         model.spotlightUserID = nil
         model.isVoiceChatShown = false
         model.voiceQuality = .idle
+        model.callDiagnostics = .idle
         model.incomingCallChannelID = nil
         model.voiceRevision &+= 1
 
@@ -393,6 +406,10 @@ final class VoiceController {
             guard model.connectedVoiceChannelID == channelID,
                   !model.voiceQuality.isConnected else { return }
 
+            if recoveryStartedAt != nil {
+                recover(reason: "The voice connection didn\u{2019}t come back.", code: nil)
+                return
+            }
             guard rejoinAttempts < 1 else {
                 Self.log.error("voice handshake never completed; giving up")
                 model.reportActionFailure("Could not connect to voice. Try joining again.")
@@ -751,6 +768,7 @@ final class VoiceController {
         model.refreshClipCallPlan()
         // What the call asks to receive — VOICE-VIDEO-NOTES §5.5b.
         engine.setIsStage(channel?.kind == .stage)
+        engine.setStretchesTime(AppSettings.shared.adaptivePlayout)
         engine.setFocusedVideoUser(model.focusedCameraUserID?.rawValue)
         engine.setIncomingVideoEnabled(isIncomingVideoEnabled)
         // **The system's own picker offers this app while there is a call to
@@ -795,6 +813,10 @@ final class VoiceController {
                 model.voiceQuality.isConnected = true
                 disarmWatchdog()
                 rejoinAttempts = 0
+                if recoveryStartedAt != nil {
+                    Log.info(.voice, "the call recovered after \(recoveryAttempts) attempt(s)")
+                }
+                endRecovery()
                 // From here the call has a mixer of its own, and a one-shot
                 // goes through it: out of the chosen device, and inside the
                 // canceller's reference so the far end does not hear it back.
@@ -818,6 +840,10 @@ final class VoiceController {
                 // something the reader can act on.
                 model.reportActionFailure(reason)
                 leaveLocally()
+            case .interrupted(let code, let reason):
+                Log.info(.voice, "the call was interrupted: code=\(code) reason=\(public: reason)")
+                model.voiceQuality.isConnected = false
+                recover(reason: reason, code: code)
             case .idle, .connecting:
                 model.voiceQuality.isConnected = false
             }
@@ -864,6 +890,15 @@ final class VoiceController {
             // which is how the encryption badge came to read "not end to end"
             // twice a second on a call that was. Anything this event does not
             // measure has to survive it.
+            let diagnostics = CallDiagnostics(
+                pingMilliseconds: statistics.pingMilliseconds,
+                inboundLossPercent: statistics.lossPercent,
+                outboundLossPercent: statistics.outboundLossPercent,
+                jitterMilliseconds: statistics.jitterMilliseconds,
+                outgoingKilobits: statistics.outgoingBitrate / 1_000,
+                transportEncryption: statistics.transportEncryption
+            )
+            if diagnostics != model.callDiagnostics { model.callDiagnostics = diagnostics }
             var next = model.voiceQuality
             next.lossPercent = statistics.lossPercent
             next.jitterMilliseconds = statistics.jitterMilliseconds
@@ -919,9 +954,101 @@ final class VoiceController {
         }
     }
 
+    // MARK: Recovering a call
+
+    /// How long a call may spend reconnecting before it's given up.
+    private static let recoveryWindow: TimeInterval = 30
+
+    /// Connects a dropped call again: a fresh voice server, the reader still in
+    /// the channel, "Reconnecting" on the call meanwhile.
+    ///
+    /// **Discord's rules** (its voice socket's `handleClose`): a close the
+    /// server can't resume (4004, 4006, 4011, 4015) means a new connection, not
+    /// the end of the call; a resumable one is retried with backoff; only a
+    /// call that hasn't come back within half a minute is ended, and says why.
+    /// 4014 is the server taking the reader out (moved, kicked, the channel
+    /// gone): the main gateway says where they are, and that is believed.
+    private func recover(reason: String, code: Int?) {
+        guard let channelID = model.connectedVoiceChannelID else { return }
+        let guildID = model.channelIndex[channelID]?.guildID
+        if code == 4014 {
+            teardownEngine()
+            pendingSession = nil
+            pendingServer = nil
+            model.voiceQuality.isReconnecting = true
+            recoveryTask?.cancel()
+            recoveryTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, !Task.isCancelled, let me = model.currentUserID,
+                      model.connectedVoiceChannelID == channelID,
+                      model.voiceStates[me]?.channelID == channelID
+                else { return }
+                // Still in the room by the gateway's own account: a blip.
+                recover(reason: reason, code: nil)
+            }
+            return
+        }
+        // A refusal no retry mends.
+        if code == 4016 || reason.localizedCaseInsensitiveContains("end-to-end encryption") {
+            endRecovery()
+            model.reportActionFailure(reason)
+            leaveLocally()
+            return
+        }
+        let started = recoveryStartedAt ?? .now
+        recoveryStartedAt = started
+        guard Date.now.timeIntervalSince(started) < Self.recoveryWindow else {
+            Log.fault(.voice, "the call didn't recover in \(Int(Self.recoveryWindow)) s: \(public: reason)")
+            endRecovery()
+            model.reportActionFailure("Lost the call: \(reason)")
+            leaveLocally()
+            return
+        }
+        model.voiceQuality.isReconnecting = true
+        let delay = min(8.0, 0.5 * pow(2.0, Double(recoveryAttempts)))
+        recoveryAttempts += 1
+        let attempt = recoveryAttempts
+        recoveryTask?.cancel()
+        recoveryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, !Task.isCancelled, model.connectedVoiceChannelID == channelID else { return }
+            Log.info(.voice, "reconnecting the call, attempt \(attempt)")
+            rejoinAttempts = 0
+            resendJoin(channelID: channelID, guildID: guildID)
+            armWatchdog(channelID: channelID, guildID: guildID)
+        }
+    }
+
+    private func endRecovery() {
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        recoveryStartedAt = nil
+        recoveryAttempts = 0
+        if model.voiceQuality.isReconnecting { model.voiceQuality.isReconnecting = false }
+    }
+
+    /// Network changes and waking from sleep, while a call is up: either leaves
+    /// the media socket on a path that's gone, so the call connects again at
+    /// once rather than going quiet.
+    private func startNetworkWatch() {
+        guard network == nil else { return }
+        network = CallNetworkWatch { [weak self] reason in
+            guard let self, model.connectedVoiceChannelID != nil else { return }
+            Log.info(.voice, "\(public: reason) during a call; connecting again")
+            recover(reason: reason, code: nil)
+        }
+    }
+
+    private func stopNetworkWatch() {
+        network?.stop()
+        network = nil
+    }
+
     /// Ends the media without telling the server, for when the server is what
     /// told us.
     private func leaveLocally() {
+        stopNetworkWatch()
+        endRecovery()
         stopRinging()
         // **The same sound whether you left or the server dropped you.** From
         // where the reader is sitting those are one event — the call ended
@@ -941,6 +1068,7 @@ final class VoiceController {
         model.isScreenSharing = false
         model.isVoiceChatShown = false
         model.voiceQuality = .idle
+        model.callDiagnostics = .idle
         model.voiceRevision &+= 1
     }
 
@@ -1426,7 +1554,7 @@ final class VoiceController {
             model.liveVideoUserIDs.insert(owner)
             model.voiceRevision &+= 1
 
-        case .state(.failed(let reason)):
+        case .state(.failed(let reason)), .state(.interrupted(_, let reason)):
             Log.fault(.share, "watching a stream failed: \(public: reason)")
             model.reportActionFailure(reason)
             stopWatchingStream()
@@ -1498,7 +1626,7 @@ final class VoiceController {
             model.isScreenSharing = true
             model.voiceRevision &+= 1
 
-        case .state(.failed(let reason)):
+        case .state(.failed(let reason)), .state(.interrupted(_, let reason)):
             Log.fault(.share, "the stream failed: \(public: reason)")
             // Said out loud, for the reason a failed call is: a share that
             // stops a second after it started, with nothing on screen to say
@@ -1604,6 +1732,7 @@ final class VoiceController {
     /// Applies a change made in the settings window to a call already running.
     func applyPreferences() {
         let preferences = Self.audioPreferences()
+        engine?.setStretchesTime(AppSettings.shared.adaptivePlayout)
         Task { [engine] in await engine?.updatePreferences(preferences) }
         // The blips follow the device too, or a reader who moved Wingcord's
         // output to a headset still hears them out of the laptop.

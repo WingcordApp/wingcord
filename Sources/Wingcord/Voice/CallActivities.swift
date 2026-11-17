@@ -6,92 +6,15 @@ import WingcordCore
 // Discord's two ways into an activity from inside a call, both reading the
 // shelf's own ranking (`AppModel.suggestedActivities`):
 //
-// - **the call's Activities control**, which opens its "Activities Mini
-//   Shelf": "Suggested Activities", "See All ›", and the top five. See All
-//   opens the full launcher — Search, Recents, Activities — in the same panel,
-//   so nothing nests;
+// - **the call's Activities control**, which opens the launcher itself, as a
+//   large card over the call (`ActivityLauncher`, context `.call`; decision 5:
+//   one launcher, where Discord has a mini shelf and a See All);
 // - **the suggestion under a server's call** — its
 //   `VC_TILE_ACTIVITIES_ENTRY_POINT`: "Looking for something to do? Start a
 //   game or video playlist instantly.", the top three at 16:9, and "Don't show
 //   again".
 //
 // A tile launches into the call through the launcher's own path.
-
-/// The Activities control's panel.
-struct ActivitiesShelfPanel: View {
-    var channelID: ChannelID
-
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    @State private var showsLauncher = false
-    @State private var isLoading = true
-
-    /// The shelf's tiles: Discord's cover art, wide.
-    private static let tile = CGSize(width: 160, height: 90)
-
-    var body: some View {
-        Group {
-            if showsLauncher {
-                ActivityLauncher(channelID: channelID)
-            } else {
-                shelf
-            }
-        }
-        .task {
-            await model.sessionController.loadActivityDirectory()
-            isLoading = false
-        }
-    }
-
-    private var shelf: some View {
-        let suggestions = model.suggestedActivities(5)
-        return VStack(alignment: .leading, spacing: Spacing.snug) {
-            HStack(spacing: Spacing.base) {
-                Image(systemName: "gamecontroller.fill")
-                    .foregroundStyle(Ink.primary)
-                Text("Suggested Activities")
-                    .textCase(.uppercase)
-                    .font(Typeface.sectionHeader)
-                    .foregroundStyle(Ink.primary)
-                Spacer(minLength: Spacing.margin)
-                Button {
-                    model.activityLauncherPage = .directory
-                    showsLauncher = true
-                } label: {
-                    HStack(spacing: 2) {
-                        Text("See All").textCase(.uppercase)
-                        Image(systemName: "chevron.right")
-                    }
-                    .font(Typeface.sectionHeader)
-                    .foregroundStyle(Ink.primary)
-                }
-                .buttonStyle(.plain)
-            }
-            if suggestions.isEmpty {
-                // Loading; and if the directory could not be read, See All
-                // above is still the way in.
-                if isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity, minHeight: Self.tile.height)
-                }
-            } else {
-                HStack(spacing: Spacing.snug) {
-                    ForEach(suggestions) { row in
-                        ActivityArtTile(row: row, size: Self.tile) { launch(row.id) }
-                    }
-                }
-            }
-        }
-        .padding(Spacing.margin)
-    }
-
-    private func launch(_ id: ApplicationID) {
-        guard let app = model.activityApp(id) else { return }
-        dismiss()
-        Task { await model.sessionController.launchActivity(app, in: channelID, section: nil) }
-    }
-}
 
 /// The suggestion under a server's call — Discord's activity entry point.
 ///
@@ -144,7 +67,7 @@ struct ActivitySuggestionCard: View {
 
     private func launch(_ id: ApplicationID) {
         guard let app = model.activityApp(id) else { return }
-        Task { await model.sessionController.launchActivity(app, in: channelID, section: nil) }
+        Task { await model.sessionController.startActivity(app, in: channelID, section: nil) }
     }
 }
 

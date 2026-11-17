@@ -35,6 +35,9 @@ struct ActivityRow: Hashable, Sendable, Identifiable {
     /// The wide artwork, on a featured tile only. Nil on a list row, where it
     /// would be fetched and never drawn.
     var tileURL: URL?
+    /// The app's preview loop (`activity_preview_video_asset_id`), which a
+    /// featured card plays while hovered, as Discord's shelf does (decision 5).
+    var previewVideoURL: URL? = nil
     var monogram: String
     var isLaunchable: Bool
 }
@@ -156,6 +159,9 @@ extension AppModel {
             } ?? CDN.defaultApplicationIcon,
             tileURL: app.tileAssetID.flatMap {
                 CDN.applicationAsset(id: app.id, assetID: $0, side: Metrics.activityTileWidth)
+            },
+            previewVideoURL: app.config?.previewVideoAssetID.flatMap {
+                CDN.activityPreviewVideo(id: app.id, assetID: $0)
             },
             monogram: String(app.name.prefix(1)).uppercased(),
             isLaunchable: app.isLaunchable

@@ -80,11 +80,15 @@ struct ActivityFrameMessage: Sendable {
 
 /// The RPC error codes the SDK knows, for the replies this client refuses.
 ///
-/// Only the two that are actually reachable here are named. An app that asks
+/// Only the ones actually reachable here are named. An app that asks
 /// for something unimplemented gets `INVALID_COMMAND` — **an error, never
 /// silence.** A command left unanswered is an app that hangs on a promise
 /// forever, which looks like a broken activity rather than a missing feature.
 enum ActivityRPCError: Int, Sendable {
+    /// `UNKNOWN_ERROR`: an upload or a ticket that failed on the way.
+    case unknown = 1000
+    /// `INVALID_PAYLOAD`: arguments Discord's handler would refuse too.
+    case invalidPayload = 4000
     case invalidCommand = 4002
     case invalidPermissions = 4006
 }
@@ -118,7 +122,7 @@ nonisolated enum ActivityReply {
     static func response(
         command: String?,
         nonce: String?,
-        data: [String: Any]
+        data: Any
     ) -> [String: Any]? {
         guard let command, let nonce else { return nil }
         return ["cmd": command, "data": data, "evt": NSNull(), "nonce": nonce]

@@ -217,6 +217,9 @@ nonisolated enum ComponentsLayoutEngine {
                     isArtwork: true,
                     placeholder: thumbnail.placeholder
                 ))
+                // **An app's pictures open in the viewer**, as an embed's do
+                // (Alex, 2026-11-17: "cant click media on apps").
+                card.images[card.images.count - 1].viewerMedia = thumbnail
                 y = max(y, origin.y + side)
             }
             return y
@@ -317,6 +320,8 @@ nonisolated enum ComponentsLayoutEngine {
                 placeholder: item.placeholder,
                 isSpoiler: item.isSpoiler
             ))
+            // A picture opens in the viewer; a video plays where it is.
+            if !item.isVideo { card.images[card.images.count - 1].viewerMedia = item }
             column += 1
             if column == perRow {
                 column = 0

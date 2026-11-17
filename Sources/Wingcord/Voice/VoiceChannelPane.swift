@@ -54,7 +54,9 @@ struct VoiceChannelPane: View {
                 selfUserID: model.currentUserID,
                 attachVideo: model.attachVideo,
                 watch: model.toggleWatchingStream,
-                spotlight: model.spotlight
+                spotlight: model.spotlight,
+                activity: model.callActivity(in: presentation.channelID),
+                joinActivity: model.joinCallActivity
             )
             if showsActivitySuggestion(presentation) {
                 ActivitySuggestionCard(channelID: presentation.channelID)
@@ -86,7 +88,9 @@ struct VoiceChannelPane: View {
               let guildID = model.channelIndex[presentation.channelID]?.guildID,
               model.guilds[guildID]?.afkChannelID != presentation.channelID
         else { return false }
+        // Nothing to suggest where an activity already runs: its tile is there.
         return model.runningActivity?.instance.location.channelID != presentation.channelID
+            && model.activityInstances.instances(in: presentation.channelID).isEmpty
     }
 
     // MARK: Looking in

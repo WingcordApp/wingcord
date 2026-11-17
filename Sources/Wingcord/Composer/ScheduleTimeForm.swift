@@ -40,9 +40,21 @@ struct ScheduleTimeForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.snug) {
-            HStack(spacing: Spacing.snug) {
-                field("Date", components: .date)
-                field("Time", components: .hourAndMinute)
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                Text("Date and Time")
+                    .font(.system(.caption, weight: .semibold))
+                    .foregroundStyle(Ink.tertiary)
+                    .textCase(.uppercase)
+                // **Wingcord's own picker, the one search uses** (Alex,
+                // 2026-11-17): a calendar and two big numbers, bounded to the
+                // window a schedule may answer.
+                PlayfulDatePicker(
+                    selection: $date,
+                    minimum: bounds.lowerBound,
+                    accessibilityTitle: "Scheduled date and time",
+                    maximum: bounds.upperBound
+                )
+                .frame(minWidth: 260)
             }
             if let problem {
                 Text(problem.message)
@@ -68,18 +80,6 @@ struct ScheduleTimeForm: View {
         }
         .padding(Spacing.snug)
         .onChange(of: date) { problem = nil }
-    }
-
-    private func field(_ title: String, components: DatePickerComponents) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.tight) {
-            Text(title)
-                .font(.system(.caption, weight: .semibold))
-                .foregroundStyle(Ink.tertiary)
-                .textCase(.uppercase)
-            DatePicker(title, selection: $date, in: bounds, displayedComponents: components)
-                .labelsHidden()
-                .datePickerStyle(.field)
-        }
     }
 
     private func commit() {

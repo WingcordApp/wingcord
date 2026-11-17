@@ -25,6 +25,10 @@ struct VoiceTileGrid: View {
     /// Opens or closes somebody's screen share. Nil where watching cannot work.
     var watch: ((UserID) -> Void)?
     var spotlight: (UserID?) -> Void
+    /// The activity running in this call, if any: a Join tile in the grid, or,
+    /// once the reader is in it, the call's stage (decision 3).
+    var activity: CallActivityPresentation? = nil
+    var joinActivity: (CallActivityPresentation) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
     /// Read for Show Non-Video Participants and by the right-click, nothing
@@ -82,7 +86,9 @@ struct VoiceTileGrid: View {
 
     @ViewBuilder
     private func content(in size: CGSize) -> some View {
-        if let spotlightUserID, let starring = shown.first(where: { $0.id == spotlightUserID }) {
+        if let activity, activity.isJoined {
+            activityLayout(activity, in: size)
+        } else if let spotlightUserID, let starring = shown.first(where: { $0.id == spotlightUserID }) {
             spotlightLayout(starring: starring, in: size)
         } else {
             grid(in: size)
@@ -92,15 +98,51 @@ struct VoiceTileGrid: View {
     // MARK: The even grid
 
     private func grid(in size: CGSize) -> some View {
-        let layout = VoiceGridLayout.solve(count: shown.count, in: size)
+        // The activity's Join tile takes one more slot, after the people.
+        let items = shown.map(CallGridItem.person) + (activity.map { [CallGridItem.activity($0)] } ?? [])
+        let layout = VoiceGridLayout.solve(count: items.count, in: size)
         return VStack(spacing: VoiceGridLayout.spacing) {
-            ForEach(layout.rowRanges(count: shown.count), id: \.lowerBound) { range in
+            ForEach(layout.rowRanges(count: items.count), id: \.lowerBound) { range in
                 HStack(spacing: VoiceGridLayout.spacing) {
-                    ForEach(shown[range]) { participant in
-                        tile(participant, isCompact: layout.tileSize.width < 220)
-                            .frame(width: layout.tileSize.width, height: layout.tileSize.height)
+                    ForEach(items[range]) { item in
+                        switch item {
+                        case .person(let participant):
+                            tile(participant, isCompact: layout.tileSize.width < 220)
+                                .frame(width: layout.tileSize.width, height: layout.tileSize.height)
+                        case .activity(let activity):
+                            CallActivityTile(activity: activity) { joinActivity(activity) }
+                                .frame(width: layout.tileSize.width, height: layout.tileSize.height)
+                                .matchedGeometryEffect(id: "activity", in: tiles)
+                        }
                     }
                 }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: The activity on the stage
+
+    /// The activity the reader is in, big, with everybody in the strip under
+    /// it: Discord's focused activity.
+    private func activityLayout(_ activity: CallActivityPresentation, in size: CGSize) -> some View {
+        let layout = VoiceSpotlightLayout.solve(others: shown.count, in: size)
+        return VStack(spacing: VoiceSpotlightLayout.stripGap) {
+            CallActivityStage(activity: activity)
+                .frame(width: layout.stage.width, height: layout.stage.height)
+                .matchedGeometryEffect(id: "activity", in: tiles)
+            if !shown.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: Spacing.base) {
+                        ForEach(shown) { participant in
+                            tile(participant, isCompact: true)
+                                .frame(width: layout.chipSize.width, height: layout.chipSize.height)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .scrollIndicators(.never)
+                .frame(height: layout.strip.height)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

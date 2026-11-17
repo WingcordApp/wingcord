@@ -1464,6 +1464,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         !InviteCard.codes(in: message.content).isEmpty
             || !UserLink.userIDs(in: message.content).isEmpty
             || !EventLink.links(in: message.content).isEmpty
+            || !ActivityLink.links(in: message.content).isEmpty
             || message.kind == .stageStart
             || message.attachments.contains { PlaintextPreview.isPreviewable(filename: $0.filename) }
             || message.embeds.contains { $0.providerName == "Spotify" }
@@ -1487,8 +1488,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
 
     /// Whether a link's unfurl gives way to a card drawn for it: a profile
     /// link's or an event link's that has measured.
-    private static func hasHostedCard(forLink url: String, in input: Input) -> Bool {
+    private static func hasHostedCard(forLink url: String, in input: Input, channelID: ChannelID) -> Bool {
         guard !input.hostedCardSizes.isEmpty else { return false }
+        if let link = ActivityLink.parse(url) {
+            let key = ActivityCardKey(applicationID: link.applicationID, channelID: channelID)
+            return input.hostedCardSizes[.activity(key)] != nil
+        }
         if let userID = UserLink.userID(inURL: url) {
             return input.hostedCardSizes[.user(UserCardKey(userID: userID, guildID: input.guildID))] != nil
         }
@@ -2248,7 +2253,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             for embed in input.settings.showsEmbeds ? message.drawableEmbeds : [] {
                 // A profile or event link's unfurl, where its card is drawn
                 // instead — Discord shows the card and not both.
-                if let url = embed.url, Self.hasHostedCard(forLink: url, in: input) {
+                if let url = embed.url, Self.hasHostedCard(forLink: url, in: input, channelID: message.channelID) {
                     continue
                 }
                 y += gap
@@ -2270,6 +2275,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     content.components.append(contentsOf: tree.controls)
                     for rect in tree.cards.map(\.rect) + tree.controls.map(\.rect) { holds(rect) }
                     y = tree.bottom
+                    continue
+                }
+                // **A Spotify card is hosted** (Alex, 2026-11-17): its own
+                // design, live progress and Spotify's player, at one height.
+                if Self.spotifyCard(for: embed, in: input) != nil, let link = embed.url,
+                   let address = SpotifyLink.parse(link) {
+                    let width = min(Metrics.embedMaxWidth, cardWidth).rounded(.down)
+                    let slot = HostedCardSlot(
+                        rect: CGRect(x: cardX, y: y, width: width, height: SpotifyLinkCard.height),
+                        key: .spotify(SpotifyCardKey(unfurlKey: "\(address.kind.rawValue)/\(address.id)"))
+                    )
+                    content.hostedCards.append(slot)
+                    holds(slot.rect)
+                    y = slot.rect.maxY
                     continue
                 }
                 let slot = EmbedLayoutEngine.layout(
@@ -2343,6 +2362,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                         rect: CGRect(x: cardX, y: y, width: size.width, height: size.height),
                         key: key
                     )
+                    content.hostedCards.append(slot)
+                    holds(slot.rect)
+                    y = slot.rect.maxY
+                }
+                // An activity link's card (Discord's, his Image 25), once it
+                // has measured: as wide as the column up to Discord's 432.
+                for link in ActivityLink.links(in: message.content) {
+                    let key = HostedCardKey.activity(
+                        ActivityCardKey(applicationID: link.applicationID, channelID: message.channelID)
+                    )
+                    let width = min(Metrics.embedMaxWidth, cardWidth).rounded(.down)
+                    guard let height = input.hostedCardSizes[key]?.height(atWidth: width) else { continue }
+                    y += gap
+                    let slot = HostedCardSlot(rect: CGRect(x: cardX, y: y, width: width, height: height), key: key)
                     content.hostedCards.append(slot)
                     holds(slot.rect)
                     y = slot.rect.maxY

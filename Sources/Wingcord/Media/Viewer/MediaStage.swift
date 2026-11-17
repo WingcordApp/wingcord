@@ -51,11 +51,14 @@ final class MediaStageController {
         didSet { canvas?.filmRate = filmRate }
     }
 
+    /// Live Text over the still on stage (decision 26). Off for each new item.
+    var isLiveTextOn = false
+
     // MARK: Commands
 
     @ObservationIgnored weak var canvas: MediaCanvasView?
 
-    func setZoom(_ scale: CGFloat) { canvas?.setZoom(scale) }
+    func setZoom(_ scale: CGFloat, animated: Bool = true) { canvas?.setZoom(scale, animated: animated) }
     func zoomIn() { canvas?.setZoom(min(maximumZoom, zoomScale * 1.6)) }
     func zoomOut() { canvas?.setZoom(max(1, zoomScale / 1.6)) }
     func resetZoom() { canvas?.reset() }
@@ -152,6 +155,12 @@ struct MediaStage: NSViewRepresentable {
     var onPage: (Int) -> Void
     /// A click on the video itself.
     var onContentClick: () -> Void
+    /// AVKit's player once the video is still (decision 24).
+    var usesSystemPlayer = false
+    /// Cinema mode's light (decision 25).
+    var cinema = false
+    /// Live Text over a still (decision 26).
+    var liveText = false
 
     /// The rendition a picture opens at. See the note above.
     static let openingPixels = 2048
@@ -191,6 +200,10 @@ struct MediaStage: NSViewRepresentable {
     func updateNSView(_ view: MediaCanvasView, context: Context) {
         view.reducesMotion = motion.reduceMotion
         view.letterboxInsets = Self.letterbox(for: item)
+        // Before `configure`, which installs the player the choice is about.
+        view.usesSystemPlayer = usesSystemPlayer
+        view.isCinemaOn = cinema
+        view.isLiveTextOn = liveText
         let coordinator = context.coordinator
         coordinator.onRequestClose = onRequestClose
         coordinator.onPage = onPage

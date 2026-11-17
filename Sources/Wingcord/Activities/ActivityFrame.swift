@@ -38,11 +38,16 @@ enum ActivityFrame {
     /// the whole reason a native client can host one.
     static let host = "discordsays.com"
 
+    /// The frame for an instance this session is in.
+    ///
+    /// **Every id from the instance Discord listed this session in**
+    /// (`instance_id` = its composite id, `launch_id`, `location_id`), and
+    /// `guild_id` beside `channel_id` in a server, as Discord's own frame URL
+    /// has them (module 51250).
     static func url(
         application: ApplicationID,
-        instance: ActivityInstanceID,
+        instance: ActivityInstance,
         proxyTicket: String,
-        channelID: ChannelID,
         isServerHubChannel: Bool = false,
         frameID: UUID = UUID()
     ) -> URL? {
@@ -50,10 +55,11 @@ enum ActivityFrame {
         components.scheme = "https"
         components.host = "\(application.rawValue).\(host)"
         components.path = "/"
+        let channelID = instance.channelID
         components.queryItems = [
-            URLQueryItem(name: "instance_id", value: instance.rawValue),
+            URLQueryItem(name: "instance_id", value: instance.frameInstanceID),
             URLQueryItem(name: "location_id", value: instance.location.rawValue),
-            URLQueryItem(name: "launch_id", value: instance.instance),
+            URLQueryItem(name: "launch_id", value: instance.launchID),
             // Literally the string "undefined" on the wire — JavaScript's own
             // absent value stringified by the reference client. Reproduced
             // rather than omitted: an app reading `referrer_id` gets the same
@@ -83,12 +89,16 @@ enum ActivityFrame {
             URLQueryItem(name: "forced_colors", value: "false"),
             URLQueryItem(name: "underline_links", value: "false"),
             URLQueryItem(name: "discord_proxy_ticket", value: proxyTicket),
-            URLQueryItem(name: "channel_id", value: channelID.description),
             // Lowercased, and one per run. The app keys its own session on this,
             // so a URL rebuilt on a redraw would look like a reconnect.
             URLQueryItem(name: "frame_id", value: frameID.uuidString.lowercased()),
             URLQueryItem(name: "platform", value: "desktop"),
         ]
+        // Discord's order: the ticket, then the server, then the channel.
+        if let guildID = instance.guildID {
+            components.queryItems?.append(URLQueryItem(name: "guild_id", value: guildID.description))
+        }
+        components.queryItems?.append(URLQueryItem(name: "channel_id", value: channelID.description))
         // An activity in a Server Hub's own channel — the whiteboard — is told
         // so: Discord's `surface=5` (`51250`, `GUILD_SPACE` in its surface list).
         if isServerHubChannel {

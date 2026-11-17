@@ -385,6 +385,9 @@ final class TimelineCanvasView: NSView {
     /// A video's Play: the message, the player, and the thumbnail's rect in
     /// this canvas, which the player is laid over.
     var onPlayVideo: ((MessageID, EmbedVideo, CGRect) -> Void)?
+    /// A video attachment clicked once: plays in place (decision 24). The
+    /// rect is in the canvas's coordinates.
+    var onPlayAttachmentVideo: ((MessageID, Int, CGRect) -> Void)?
     var onVisibleRangeChange: ((Range<Int>) -> Void)?
     var onActivateMessage: ((MessageID) -> Void)?
     /// A face or a name was clicked. The rect is in this view's own space; the
@@ -2341,7 +2344,8 @@ final class TimelineCanvasView: NSView {
                     media: media,
                     sourceIndex: MediaSources.embedIndex(embed: embedIndex, image: position),
                     posterWidth: image.decodeWidth,
-                    posterURL: image.url
+                    posterURL: image.url,
+                    favorite: row.embeds[embedIndex].favorite
                 ))
             }
             onOpenEmbedPictures?(row.id, pictures, clicked)
@@ -2355,6 +2359,14 @@ final class TimelineCanvasView: NSView {
                 reconcileFilms()
                 // Its picture was never fetched while it was covered.
                 onRevealAttachment?()
+                return
+            }
+            // **A video plays where it is** on one click, as Discord's does;
+            // two open the full player. A clip keeps the viewer, whose bar
+            // carries its moments.
+            let slot = row.attachments[attachmentIndex]
+            if slot.kind == .video, slot.clip == nil, event.clickCount < 2, let onPlayAttachmentVideo {
+                onPlayAttachmentVideo(row.id, attachmentIndex, slot.rect.offsetBy(dx: frame.minX, dy: frame.minY))
                 return
             }
             onOpenAttachment?(row.id, attachmentIndex, row.attachments.map(\.decodeWidth), row.attachments.map(\.url))

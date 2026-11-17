@@ -293,6 +293,20 @@ struct VoiceVideoPane: View {
                 }
             }
 
+            SettingsCard {
+                SettingsToggle(
+                    title: "Adaptive Playout (Beta)",
+                    help: "Speeds speech up or slows it down by a few milliseconds to ride out network delay, instead of gaps.",
+                    isOn: Binding(
+                        get: { settings.adaptivePlayout },
+                        set: {
+                            settings.adaptivePlayout = $0
+                            model.voicePreferencesChanged()
+                        }
+                    )
+                )
+            }
+
             if settings.resolvedProcessing.echoCancellation {
                 SettingsCard {
                     SettingsActionRow(

@@ -111,9 +111,17 @@ final class SessionController {
     /// The same guard for an activity's icon. Keyed by application rather than
     /// by URL because an app has one icon and the card asks for it once.
     var activityAccentFetches: Set<ApplicationID> = []
-    /// A launch whose instance id has not arrived yet. See
-    /// `awaitActivityInstance`; at most one, because a launch is a click.
-    var pendingActivityLaunch: PendingActivityLaunch?
+    /// A launch or join waiting for the update that lists this session. See
+    /// `PendingActivityConnect`; at most one, because a launch is a click.
+    var pendingActivityConnect: PendingActivityConnect?
+    /// This gateway session's id, from READY: what a running activity's
+    /// participant record names (`reconcileActivity`).
+    var gatewaySessionID: String?
+    /// The private channels whose call this connection has asked about
+    /// (`askForCall`), as Discord's CallStore keeps them.
+    var callsAsked: Set<ChannelID> = []
+    /// Whether this session has asked for the Nitro Emoji Packs.
+    var hasLoadedEmojiPacks = false
     /// Whether the account's command frecency table has been asked for.
     ///
     /// A flag rather than "is the array empty": an account that has never run a
@@ -1107,7 +1115,11 @@ final class SessionController {
             // were counted from may have moved while the socket was down.
             model.forumPostUnreadCounts = [:]
             model.forumUnreadsRequested = []
+            gatewaySessionID = snapshot.sessionID
             Signposts.interval("READY applied") { applyReady(snapshot) }
+            // Discord's CallStore asks again on every new connection.
+            callsAsked = []
+            if let selected = model.selectedChannelID { askForCall(in: selected) }
         case .readySupplemental(let snapshot):
             applyReadySupplemental(snapshot)
             // Discord asks for the activity feed as the connection opens.
@@ -1118,6 +1130,7 @@ final class SessionController {
             // see `VoiceController.gatewayDidReconnect`.
             voice.gatewayDidReconnect()
             askAgainAfterReconnect()
+            if let selected = model.selectedChannelID { askForCall(in: selected, force: true) }
         case .update(let update):
             apply(update)
         case .disconnected(let reason, let willRetry):
@@ -1213,6 +1226,16 @@ final class SessionController {
             + "reader=\(readerHub.map { "v\($0.variantID)\($0.usesAsEligibility ? "+eligible" : "")\($0.isOverride ? "+override" : "")" } ?? "none") "
             + "reader_apex=\(snapshot.experiments.apexReader.count)"
         )
+        // **Which servers Discord's rule lets through**, by id (the log hashes
+        // them), so the set can be compared with where Discord's own client
+        // shows a hub (docs/ACTIVITIES-CALLS-PICKER.md, decision 23).
+        let hubServers = snapshot.guilds.filter { guild in
+            guard let assignments = guild.apexAssignments else { return false }
+            return Experiments.guildVariant(
+                AppModel.serverHubExperiment, reader: snapshot.experiments.apexReader, guild: assignments
+            ) == 1
+        }
+        Self.trace("ready: hubs in_experiment=\(hubServers.count) [\(hubServers.map { "\($0.id)" }.joined(separator: " "))]")
         model.entitlements = model.entitlements.updated(
             premiumType: snapshot.premiumType,
             ageVerificationStatus: snapshot.ageVerificationStatus
@@ -1414,6 +1437,10 @@ final class SessionController {
         model.presences.merge(snapshot.presences) { existing, _ in existing }
         voice.applyReadySupplemental(voiceStates: snapshot.voiceStates)
         refreshVoiceActivityIcons()
+        // Every server's running activities, rebuilt as Discord's store is on a
+        // new connection; a frame whose instance didn't survive closes.
+        model.activityInstances.replaceGuilds(snapshot.activityInstances)
+        reconcileActivitiesAfterConnecting()
 
         if !snapshot.membersByGuild.isEmpty { model.memberRevision &+= 1 }
         if !snapshot.presences.isEmpty { model.noteEveryPresenceChanged() }
@@ -1478,7 +1505,7 @@ final class SessionController {
             // entry point — including the `handler: 1` kind that posts no
             // invitation message at all — and about four hundred milliseconds
             // after the interaction rather than whenever a message lands.
-            resolveActivityLaunch(interaction: id, nonce: nonce)
+            noteActivityAcknowledged(interaction: id, nonce: nonce)
             // …and it is the same dispatch that says a slash command was taken.
             // Both are looked up by nonce and only one of them can match, so the
             // order between them does not matter.
@@ -1486,6 +1513,30 @@ final class SessionController {
 
         case .interactionFailed(let nonce):
             failInteraction(nonce: nonce)
+
+        case .experimentsUpdated(let reader, let apex):
+            // Over READY's, as Discord's client merges them: a later answer
+            // wins for the same experiment.
+            model.experiments.apexReader.merge(reader) { _, new in new }
+            let replaced = Set(apex.map(\.hash))
+            model.experiments.apex = model.experiments.apex.filter { !replaced.contains($0.hash) } + apex
+            let hub = MurmurHash3.hash32(AppModel.serverHubExperiment)
+            Self.trace(
+                "state update: apex reader=\(reader.count) apex=\(apex.count) "
+                + "hub=\(reader[hub].map { "v\($0.variantID)\($0.usesAsEligibility ? "+eligible" : "")" } ?? "none")"
+            )
+            model.sidebarRevision &+= 1
+            if let guildID = model.selectedGuildID, model.mayHaveServerHub(guildID) {
+                loadServerHub(guildID)
+            }
+
+        case .activityInstanceChanged(let instance, let members):
+            if let guildID = instance.guildID, !members.isEmpty {
+                model.members[guildID, default: [:]].merge(members) { _, new in new }
+                model.memberRevision &+= 1
+            }
+            model.activityInstances.apply(instance)
+            reconcileActivity(instance)
 
         case .messageCreated(let message, let author, let quotedAuthor, _, _):
             let merged = author.merged(over: model.users[author.id])
@@ -1516,10 +1567,6 @@ final class SessionController {
             // the window's state as well — see `NotificationPolicy.Subject`.
             announce(message)
             speakIfReading(message)
-            // A launch this client is still waiting on: the invitation message
-            // is the only thing that carries the instance Discord actually
-            // minted. See `awaitActivityInstance`.
-            resolveActivityLaunch(with: message)
             resolveSpotifyUnfurls(in: [message])
             resolveInvites(in: [message])
             resolveHostedCards(in: [message], inGuild: model.channelIndex.guildID(of: message.channelID))
@@ -1593,8 +1640,17 @@ final class SessionController {
                 model.sidebarRevision &+= 1
             }
 
-        case .callChanged(let call):
+        case .callChanged(let call, let voiceStates):
             voice.apply(call: call)
+            // **Who's already in it** (decision 9): the answer to op 13 after a
+            // restart is the only place a client hears that. Applied only where
+            // nothing fresher is known, and never the reader's own state,
+            // which the voice connection owns.
+            for state in voiceStates where state.channelID != nil
+                && state.userID != model.currentUserID
+                && model.voiceStates[state.userID] == nil {
+                voice.apply(state: state, member: nil, user: nil)
+            }
 
         case .callEnded(let channelID):
             voice.applyCallEnded(channelID)
@@ -1644,7 +1700,7 @@ final class SessionController {
         case .guildAvailable(
             let guild, let channels, let voiceChannelInfo, let threads, let roles,
             let members, let users, let presences, let emojis, let stickers, let stages,
-            let scheduledEvents
+            let activityInstances, let scheduledEvents
         ):
             model.guilds[guild.id] = guild
             // **A server just joined goes on top**, as Discord's rebuild on
@@ -1660,6 +1716,7 @@ final class SessionController {
             // is the only place they come from besides READY and the three
             // `STAGE_INSTANCE_*` events.
             for stage in stages { model.applyStage(stage) }
+            model.activityInstances.replace(guild: guild.id, with: activityInstances)
             model.channelIndex.replaceChannels(channels, inGuild: guild.id)
             // After the channels, never before: `replaceChannels` drops the
             // threads of any parent that did not come back, so threads inserted
@@ -1732,6 +1789,7 @@ final class SessionController {
             guard wasLeft else { return }
             // Discord's applicant store forgets a server it is removed from.
             model.ownJoinRequests[guildID] = nil
+            model.activityInstances.remove(guild: guildID)
             model.guildEmojis[guildID] = nil
             model.guildStickers[guildID] = nil
             model.expressionRevision &+= 1
@@ -1785,6 +1843,7 @@ final class SessionController {
 
         case .channelRemoved(let channelID):
             model.forgetChannel(channelID)
+            model.activityInstances.remove(channel: channelID)
 
         case .presenceUpdated(let presence):
             enqueue(presence)
@@ -2271,6 +2330,7 @@ final class SessionController {
     /// Loads the newest page when a channel is opened.
     func openChannel(_ channelID: ChannelID) {
         LoadMarks.shared.opened(channelID, isCached: !(model.messages(in: channelID)?.messages.isEmpty ?? true))
+        askForCall(in: channelID)
         // Arriving anywhere ends a deliberate rewind: the reader has stopped
         // meaning "leave this unread" the moment they navigate.
         if model.suppressedAckChannelID != channelID { model.suppressedAckChannelID = nil }

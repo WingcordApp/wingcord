@@ -125,7 +125,8 @@ extension UserDTO {
             monogram: String(name.prefix(1)).uppercased(),
             tag: primary_guild?.tag,
             tagBadgeHash: primary_guild?.badge,
-            tagGuildID: primary_guild?.identity_guild_id
+            tagGuildID: primary_guild?.identity_guild_id,
+            discriminator: discriminator
         )
     }
 }
@@ -749,6 +750,9 @@ struct GuildDTO: Decodable, Sendable {
     /// every stage channel as dark until somebody starts one while it is
     /// watching.
     var stage_instances: [StageInstanceDTO]?
+    /// The activities **already running** in this server's channels when it
+    /// arrived. Lossy, as the events are: one unreadable instance is dropped.
+    var activity_instances: LossyList<ActivityInstanceDTO>?
     /// The server's scheduled events — what the inbox's Events group is
     /// drawn from, and how it knows one is new. **Lossy**: this rides in
     /// READY, and one event this client cannot read must not cost the reader

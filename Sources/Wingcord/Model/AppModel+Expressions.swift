@@ -172,6 +172,33 @@ extension AppModel {
         guildTable: [GuildID: Guild]
     ) -> ExpressionCatalog {
         var sections: [ExpressionSection] = []
+        // The Nitro Emoji Packs the reader added, first (decision 16). Nitro's
+        // to use; Fake Nitro sends them as links like any other emoji.
+        let packsUsable = entitlements.has(.animatedEmoji) || AppSettings.shared.fakeNitro
+        for packID in pinnedEmojiPackIDs {
+            guard let pack = emojiPacks.first(where: { $0.id == packID }), pack.isAvailable else { continue }
+            sections.append(ExpressionSection(
+                id: "pack-\(pack.id)",
+                title: "\(pack.name) Pack",
+                badge: .image(
+                    pack.cover.flatMap { CDN.emoji(id: EmojiID(rawValue: $0.id), animated: $0.isAnimated, side: Self.emojiCellSide) },
+                    monogram: String(pack.name.prefix(1)).uppercased()
+                ),
+                items: pack.emojis.filter(\.isAvailable).map { emoji in
+                    ExpressionItem(
+                        id: String(emoji.id),
+                        art: .image(
+                            CDN.emoji(id: EmojiID(rawValue: emoji.id), animated: emoji.isAnimated, side: Self.emojiCellSide),
+                            animated: emoji.isAnimated
+                        ),
+                        name: emoji.name.lowercased(),
+                        pick: .insert(emoji.messageToken),
+                        isLocked: !packsUsable
+                    )
+                },
+                isLocked: !packsUsable
+            ))
+        }
         for guildID in Self.homeFirst(orderedGuildIDs, home: home) where emojiTable[guildID] != nil {
             guard let guild = guildTable[guildID], let emojis = emojiTable[guildID] else { continue }
             var items: [ExpressionItem] = []

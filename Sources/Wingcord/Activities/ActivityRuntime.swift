@@ -35,6 +35,18 @@ final class ActivityRuntime {
         )
     }
 
+    /// The frame moved between its place and the picture in picture.
+    func hostChanged(_ host: ActivityHost?) {
+        guard !isStopped else { return }
+        bridge.layoutChanged(isPictureInPicture: host == .pictureInPicture)
+    }
+
+    /// Somebody joined or left: the app hears it if it subscribed.
+    func participantsChanged(_ instance: ActivityInstance) {
+        guard !isStopped else { return }
+        bridge.participantsChanged(instance)
+    }
+
     /// **Idempotent, and the only thing that may end the session.** Called from
     /// Leave and from the app closing itself — never from a view going away.
     func stop() {

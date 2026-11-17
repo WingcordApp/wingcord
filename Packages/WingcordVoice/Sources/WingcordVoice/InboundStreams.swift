@@ -43,6 +43,10 @@ final class InboundStreams: Sendable {
         /// second of silence rather than on the first quiet frame, or a ring
         /// flickers on every syllable.
         var quietFrames = 0
+        /// Decoded audio not yet mixed, interleaved, when frames are being
+        /// stretched (decision 11): a stretched frame is longer or shorter
+        /// than one tick.
+        var pending: [Float] = []
 
         init() { decoder = try? OpusDecoder() }
     }
@@ -216,6 +220,9 @@ final class InboundStreams: Sendable {
         /// Who is speaking with priority and may: everybody else plays at a
         /// tenth while any of them is — Discord's `prioritySpeakerDucking`.
         var prioritySpeakers: Set<UInt64> = []
+        /// NetEQ-style accelerate and preemptive expand inside speech
+        /// (`TimeStretcher`, decision 11). Off unless the app turns it on.
+        var stretchesTime = false
         /// Sounds the app is playing itself — soundboard clips, and the blips
         /// a call makes when somebody joins or a switch moves. Mixed here
         /// rather than played through a second engine so they go out of the
@@ -520,6 +527,14 @@ final class InboundStreams: Sendable {
     func setLocallyMuted(_ muted: Bool, for userID: UInt64) {
         state.withLock { state in
             if muted { state.locallyMuted.insert(userID) } else { state.locallyMuted.remove(userID) }
+        }
+    }
+
+    /// Whether speech is stretched to absorb delay changes (decision 11).
+    func setStretchesTime(_ on: Bool) {
+        state.withLock { state in
+            state.stretchesTime = on
+            if !on { for stream in state.audioBySSRC.values { stream.pending.removeAll() } }
         }
     }
 
@@ -1078,72 +1093,77 @@ final class InboundStreams: Sendable {
         for index in state.mixScratch.indices { state.mixScratch[index] = 0 }
 
         for (ssrc, stream) in state.audioBySSRC {
-            let frame = stream.buffer.pull(at: now)
             let userID = state.userBySSRC[ssrc]
             // Muted by the reader: pulled, so the buffer keeps draining, and
             // never decoded — and not drawn as speaking either.
             if let userID, state.locallyMuted.contains(userID) {
+                _ = stream.buffer.pull(at: now)
+                stream.pending.removeAll()
                 if stream.isSpeaking {
                     stream.isSpeaking = false
                     changes.append((userID, false))
                 }
                 continue
             }
-            // **Kept as it arrived**, before the decode: a save decodes the
-            // same packets again and hears what was heard here. Only for
-            // somebody the tap's plan names — see `ClipAudioTap.Plan`.
-            if let tap = state.clipTap, let userID, let heardAt {
-                switch frame {
-                case .packet(let payload):
-                    tap.noteVoice(userID, TimedAudioFrame(time: heardAt, payload: .opus(payload)))
-                case .forwardCorrection(let successor):
-                    tap.noteVoice(userID, TimedAudioFrame(time: heardAt, payload: .recovered(successor: successor)))
-                case .conceal:
-                    tap.noteVoice(userID, TimedAudioFrame(time: heardAt, payload: .concealed))
-                case .idle:
-                    break
+
+            let isDucked = !state.prioritySpeakers.isEmpty
+                && !(userID.map(state.prioritySpeakers.contains) ?? false)
+            let gain = stream.volume * (isDucked ? Self.priorityDucking : 1)
+            var energy: Float = 0
+            let mixed: Bool
+
+            if state.stretchesTime {
+                // **Stretched playout** (decision 11): decoded frames queue in
+                // `pending`, each one shortened or lengthened by a pitch period
+                // as the buffer advises, and one tick's worth is mixed. A
+                // shortened frame leaves the tick short, so the next packet is
+                // pulled at once: that's how the delay drains inside speech.
+                var pulls = 0
+                while stream.pending.count < OpusFormat.interleavedCount, pulls < 3 {
+                    let frame = stream.buffer.pull(at: now)
+                    let advice = stream.buffer.stretchAdvice
+                    Self.noteForClips(frame, userID: userID, heardAt: heardAt.map { $0 + 0.02 * Double(pulls) }, state: state)
+                    pulls += 1
+                    guard Self.decode(frame, into: stream) else { break }
+                    var samples = [Float](repeating: 0, count: OpusFormat.interleavedCount)
+                    for index in 0..<OpusFormat.interleavedCount { samples[index] = Float(stream.pcm[index]) / 32_768 }
+                    if case .packet = frame, advice != .none {
+                        samples = TimeStretcher.stretch(samples, channels: Int(OpusFormat.channels), action: advice)
+                    }
+                    stream.pending.append(contentsOf: samples)
+                }
+                let take = min(stream.pending.count, OpusFormat.interleavedCount)
+                if take > 0 {
+                    for index in 0..<take {
+                        let sample = stream.pending[index] * gain
+                        state.mixScratch[index] += sample
+                        energy += sample * sample
+                    }
+                    stream.pending.removeFirst(take)
+                }
+                mixed = take > 0
+            } else {
+                let frame = stream.buffer.pull(at: now)
+                Self.noteForClips(frame, userID: userID, heardAt: heardAt, state: state)
+                mixed = Self.decode(frame, into: stream)
+                if mixed {
+                    for index in 0..<OpusFormat.interleavedCount {
+                        let sample = Float(stream.pcm[index]) / 32_768 * gain
+                        state.mixScratch[index] += sample
+                        energy += sample * sample
+                    }
                 }
             }
-            let decoded: Bool
-            switch frame {
-            case .packet(let payload):
-                decoded = (try? stream.decoder?.decode(
-                    payload, into: &stream.pcm
-                )) != nil
-            case .forwardCorrection(let successor):
-                // The redundant copy inside the NEXT packet. This is the
-                // path that makes a lost packet inaudible rather than
-                // merely smoothed.
-                decoded = (try? stream.decoder?.decode(
-                    successor, recoverFromFEC: true, into: &stream.pcm
-                )) != nil
-            case .conceal:
-                decoded = (try? stream.decoder?.decode(nil, into: &stream.pcm)) != nil
-            case .idle:
-                decoded = false
-            }
 
-            guard decoded else {
+            guard mixed else {
                 if stream.isSpeaking {
                     stream.quietFrames += 1
                     if stream.quietFrames > 12 {
                         stream.isSpeaking = false
-                        if let userID = state.userBySSRC[ssrc] {
-                            changes.append((userID, false))
-                        }
+                        if let userID { changes.append((userID, false)) }
                     }
                 }
                 continue
-            }
-
-            var energy: Float = 0
-            let isDucked = !state.prioritySpeakers.isEmpty
-                && !(userID.map(state.prioritySpeakers.contains) ?? false)
-            let gain = stream.volume * (isDucked ? Self.priorityDucking : 1)
-            for index in 0..<OpusFormat.interleavedCount {
-                let sample = Float(stream.pcm[index]) / 32_768 * gain
-                state.mixScratch[index] += sample
-                energy += sample * sample
             }
             contributors += 1
 
@@ -1153,17 +1173,52 @@ final class InboundStreams: Sendable {
                 stream.quietFrames = 0
                 if !stream.isSpeaking {
                     stream.isSpeaking = true
-                    if let userID = state.userBySSRC[ssrc] { changes.append((userID, true)) }
+                    if let userID { changes.append((userID, true)) }
                 }
             } else if stream.isSpeaking {
                 stream.quietFrames += 1
                 if stream.quietFrames > 12 {
                     stream.isSpeaking = false
-                    if let userID = state.userBySSRC[ssrc] { changes.append((userID, false)) }
+                    if let userID { changes.append((userID, false)) }
                 }
             }
         }
         return (contributors, changes)
+    }
+
+    /// **Kept as it arrived**, before the decode: a save decodes the same
+    /// packets again and hears what was heard here. Only for somebody the
+    /// tap's plan names — see `ClipAudioTap.Plan`.
+    private static func noteForClips(
+        _ frame: JitterBuffer.Frame, userID: UInt64?, heardAt: TimeInterval?, state: State
+    ) {
+        guard let tap = state.clipTap, let userID, let heardAt else { return }
+        switch frame {
+        case .packet(let payload):
+            tap.noteVoice(userID, TimedAudioFrame(time: heardAt, payload: .opus(payload)))
+        case .forwardCorrection(let successor):
+            tap.noteVoice(userID, TimedAudioFrame(time: heardAt, payload: .recovered(successor: successor)))
+        case .conceal:
+            tap.noteVoice(userID, TimedAudioFrame(time: heardAt, payload: .concealed))
+        case .idle:
+            break
+        }
+    }
+
+    /// One pull's frame into the stream's PCM. False when there was nothing.
+    private static func decode(_ frame: JitterBuffer.Frame, into stream: AudioStream) -> Bool {
+        switch frame {
+        case .packet(let payload):
+            (try? stream.decoder?.decode(payload, into: &stream.pcm)) != nil
+        case .forwardCorrection(let successor):
+            // The redundant copy inside the NEXT packet. This is the path that
+            // makes a lost packet inaudible rather than merely smoothed.
+            (try? stream.decoder?.decode(successor, recoverFromFEC: true, into: &stream.pcm)) != nil
+        case .conceal:
+            (try? stream.decoder?.decode(nil, into: &stream.pcm)) != nil
+        case .idle:
+            false
+        }
     }
 
     /// Adds a locally-played clip to the mix, alongside anything already

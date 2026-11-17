@@ -1,3 +1,4 @@
+import Foundation
 import WingcordCore
 
 /// The whiteboard, resolved for drawing.
@@ -10,6 +11,19 @@ struct WhiteboardCardModel: Equatable {
     var isLaunching: Bool
     /// Editing: the card shows the board's place, never a live board.
     var isEditing: Bool
+    /// The people on the board right now, when the reader isn't (faces, then
+    /// how many). From Discord's own instance list.
+    var drawing: [Face] = []
+    var drawingCount = 0
+    /// The reader has authorized the whiteboard app before: the board opens by
+    /// itself, as Discord's widget does.
+    var opensByItself = false
+
+    struct Face: Equatable, Identifiable {
+        var id: UserID
+        var url: URL?
+        var monogram: String
+    }
 
     enum Access: Equatable {
         case allowed

@@ -50,6 +50,18 @@ extension AppModel {
             )
         }
 
+        // A Nitro Emoji Pack's (decision 16): Discord's card says whose pack and
+        // that it's Nitro's, in its own words.
+        if let pack = emojiPacks.first(where: { $0.emojis.contains { $0.id == id.rawValue } }) {
+            return ExpressionInfo(
+                artURL: CDN.emoji(id: id, animated: emoji.isAnimated, side: Self.expressionArtSide),
+                isVector: false,
+                glyph: nil,
+                title: ":\(emoji.name):",
+                detail: "From \(pack.name) Pack. Nitro-exclusive emoji: it\u{2019}s in Beta and only available to select Nitro members.",
+                source: nil
+            )
+        }
         let owner = guildEmojis.first { _, emojis in emojis.contains { $0.id == id } }?.key
         return ExpressionInfo(
             artURL: CDN.emoji(id: id, animated: emoji.isAnimated, side: Self.expressionArtSide),

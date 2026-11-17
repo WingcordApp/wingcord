@@ -246,7 +246,9 @@ extension DiscordREST {
     ///   never has to guess what the server ended up with.
     @discardableResult
     public func setFavorite(_ gif: GIF, favorite: Bool) async throws -> [GIF] {
-        let blob = try await frecencySettings()
+        let blob = try await fetchFrecencySettings()
+        // What was cached is about to be stale.
+        frecencyBlob = nil
         var entries = FrecencyProto.favoriteGIFEntries(base64: blob)
         let key = gif.url.absoluteString
         entries.removeAll { $0.key == key }
@@ -271,6 +273,19 @@ extension DiscordREST {
     }
 
     func frecencySettings() async throws -> String {
+        if let blob = frecencyBlob, Date().timeIntervalSince(blob.at) < 20 { return blob.value }
+        if let frecencyRead { return try await frecencyRead.value }
+        let read = Task { try await self.fetchFrecencySettings() }
+        frecencyRead = read
+        defer { frecencyRead = nil }
+        let value = try await read.value
+        frecencyBlob = (value, Date())
+        return value
+    }
+
+    /// The blob, fresh from the server: what a write starts from, so it never
+    /// edits a copy another device has since changed.
+    func fetchFrecencySettings() async throws -> String {
         struct Response: Decodable { var settings: String? }
         return try await get(
             "/users/@me/settings-proto/2",
@@ -348,6 +363,33 @@ extension DiscordREST {
             body: Body(channel_id: channelID.description),
             as: Response.self
         ).ticket
+    }
+
+    /// Join the activity of this app already running in a channel.
+    ///
+    /// **Discord's other path** (module 730602, `isStart: false`): no command,
+    /// no interaction — `POST /activities/{channel}/{application}` with the
+    /// gateway session, and the server adds that session to the channel's
+    /// instance of the app. What it joined arrives as
+    /// `EMBEDDED_ACTIVITY_UPDATE_V2` listing this session; the answer itself
+    /// carries nothing the client reads. `guild_id` is left out in a DM, as
+    /// Discord's client leaves it `undefined`.
+    public func joinActivity(
+        application: ApplicationID,
+        channelID: ChannelID,
+        guildID: GuildID?,
+        sessionID: String
+    ) async throws {
+        struct Body: Encodable {
+            var session_id: String
+            var guild_id: String?
+        }
+        _ = try await requestData(
+            method: "POST",
+            path: "/activities/\(channelID.rawValue)/\(application.rawValue)",
+            route: "activities/:channel/:application",
+            body: Body(session_id: sessionID, guild_id: guildID?.description)
+        )
     }
 
     /// Leave a running instance.

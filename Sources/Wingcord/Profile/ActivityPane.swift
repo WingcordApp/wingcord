@@ -51,6 +51,9 @@ struct CurrentActivityCard: View {
     /// Listen Along on a Spotify session — see `AppModel.listenAlongOffer`.
     /// Nil draws none.
     var listenAlong: ListenAlongOffer?
+    /// Join Activity, where they're in an embedded activity the reader can
+    /// reach — see `AppModel.activityJoinOffer`. Nil draws none.
+    var joinActivity: ActivityJoinOffer?
 
     @Environment(\.openURL) private var openURL
 
@@ -96,6 +99,19 @@ struct CurrentActivityCard: View {
             buttons
             watch
             spotifyControls
+            if let joinActivity {
+                Button(action: joinActivity.join) {
+                    Text("Join Activity")
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
+                .controlSize(.large)
+                .tint(Palette.accent)
+                .disabled(!joinActivity.isEnabled)
+                .help(joinActivity.help)
+            }
             store
         }
         .frame(maxWidth: .infinity, alignment: .leading)

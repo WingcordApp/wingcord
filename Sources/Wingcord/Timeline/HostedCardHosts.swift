@@ -69,8 +69,10 @@ final class HostedCardHosts {
         switch key {
         case .user:
             return NSHostingView(rootView: root).fittingSize
-        case .event, .plaintext:
+        case .event, .plaintext, .activity:
             return NSHostingView(rootView: root.frame(width: Metrics.embedMaxWidth)).fittingSize
+        case .spotify:
+            return CGSize(width: Metrics.embedMaxWidth, height: SpotifyLinkCard.height)
         }
     }
 }
@@ -89,6 +91,8 @@ struct HostedCardRoot: View {
             case .user(let user): UserLinkCard(key: user, isMeasuring: isMeasuring)
             case .event(let event): EventLinkCard(key: event, isMeasuring: isMeasuring)
             case .plaintext(let file): PlaintextPreviewCard(key: file, isMeasuring: isMeasuring)
+            case .activity(let activity): ActivityLinkCard(key: activity, isMeasuring: isMeasuring)
+            case .spotify(let spotify): SpotifyLinkCard(key: spotify)
             }
         }
         .resolvesMotion()

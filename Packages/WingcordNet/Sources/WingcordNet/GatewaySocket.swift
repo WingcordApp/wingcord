@@ -664,6 +664,26 @@ public actor GatewaySocket {
         send(ForumUnreadsRequest(guildID: guildID, channelID: channelID, threads: threads))
     }
 
+    /// Asks for a private channel's call: Discord's op 13, `CALL_CONNECT`,
+    /// exactly as its client sends it (`callConnect(e){this.send(13,
+    /// {channel_id:e})}`). Answered with `CALL_CREATE`, the people already in
+    /// the call included, when one is going; with nothing when none is.
+    ///
+    /// **Without it a call already running is invisible**: nothing else tells
+    /// a client that just connected about a DM call started before it did
+    /// (docs/ACTIVITIES-CALLS-PICKER.md, decision 9).
+    public func callConnect(channelID: ChannelID) {
+        struct Request: Encodable {
+            var op = 13
+            var d: Data
+
+            struct Data: Encodable {
+                var channel_id: String
+            }
+        }
+        send(Request(d: .init(channel_id: channelID.description)))
+    }
+
     public func requestSoundboardSounds(guildIDs: [GuildID]) {
         guard !guildIDs.isEmpty else { return }
         struct Request: Encodable {
@@ -1354,6 +1374,10 @@ struct FrameEnvelope: Decodable, Sendable {
 /// is a visible stall at exactly the moment the window is trying to appear.
 public struct ReadySnapshot: Sendable {
     public var currentUser: User
+    /// This gateway session's id: what a running activity's participant
+    /// record names, so the client can tell its own session from the same
+    /// account elsewhere.
+    public var sessionID: String?
     /// The reader's tier and age status, off READY's own `user` — the one
     /// object in the payload that carries them — and **nil where it did not**,
     /// so they merge into `AccountEntitlements` rather than overwrite it. An
@@ -1479,6 +1503,7 @@ public struct ReadySnapshot: Sendable {
 
     init(payload: ReadyPayload) {
         currentUser = payload.user.domain
+        sessionID = payload.session_id
         premiumType = payload.user.premium_type
         typingIndicatorStyle = payload.user.typing_indicator_style.map(\.domain).flatMap { $0.isPlain ? nil : $0 }
         experiments = ExperimentWire.snapshot(
@@ -1758,6 +1783,12 @@ public enum GatewayUpdate: Sendable {
     /// `{id, nonce}` and nothing more — so what the reader is told is that the
     /// command did not run, which is the only thing the wire actually said.
     case interactionFailed(nonce: String?)
+    /// A running activity, as Discord now describes it. No participants means
+    /// it ended. `members` are the ones its participants carried.
+    case activityInstanceChanged(ActivityInstance, members: [UserID: Member])
+    /// The account's experiment assignments, sent after READY: merged over
+    /// READY's (`STATE_UPDATE`). Nil-free: an update with none isn't sent.
+    case experimentsUpdated(reader: [UInt32: ApexAssignment], apex: [ApexAssignment])
     case messageCreated(
         Message, author: User, quotedAuthor: User?, member: Member?, guildID: GuildID?
     )
@@ -1800,6 +1831,8 @@ public enum GatewayUpdate: Sendable {
         /// The stages that were **already live** when the server arrived. See
         /// `GuildDTO.stage_instances`.
         stages: [StageInstance],
+        /// The activities already running in its channels.
+        activityInstances: [ActivityInstance],
         scheduledEvents: [ScheduledEvent]
     )
     /// A scheduled event was created or changed.
@@ -1960,7 +1993,10 @@ public enum GatewayUpdate: Sendable {
         users: [UserID: User],
         unreads: [(channelID: ChannelID, lastMessageID: MessageID?)]
     )
-    case callChanged(DirectCall)
+    /// A private channel's call, and the people already in it: `CALL_CREATE`
+    /// carries their voice states, which are the only word a client that
+    /// just connected gets about who's sitting in a call.
+    case callChanged(DirectCall, voiceStates: [VoiceState])
     case callEnded(ChannelID)
     case soundboardSoundsChanged(GuildID?, sounds: [SoundboardSound])
     /// Who is watching one person's screen share, and — on the `STREAM_CREATE`
@@ -2000,6 +2036,10 @@ public enum GatewayUpdate: Sendable {
 
         case .interactionFailure(let ack):
             self = .interactionFailed(nonce: ack.nonce)
+
+        case .embeddedActivityUpdate(let dto):
+            guard let instance = dto.domain else { return nil }
+            self = .activityInstanceChanged(instance, members: dto.members)
 
         case .messageCreate(let dto):
             guard let authorDTO = dto.author else { return nil }
@@ -2082,6 +2122,7 @@ public enum GatewayUpdate: Sendable {
                 emojis: (dto.emojis ?? []).compactMap(\.catalogEntry),
                 stickers: (dto.stickers ?? []).compactMap(\.catalogEntry),
                 stages: (dto.stage_instances ?? []).compactMap(\.domain),
+                activityInstances: (dto.activity_instances?.elements ?? []).compactMap(\.domain),
                 scheduledEvents: (dto.guild_scheduled_events?.elements ?? []).compactMap {
                     $0.domain(fallbackGuildID: guild.id)
                 }
@@ -2337,7 +2378,12 @@ public enum GatewayUpdate: Sendable {
                 unreads: unreads
             )
         case .callCreate(let dto), .callUpdate(let dto):
-            self = .callChanged(dto.domain)
+            let states = (dto.voice_states ?? []).compactMap { stateDTO -> VoiceState? in
+                guard var state = stateDTO.domain else { return nil }
+                state.channelID = state.channelID ?? dto.channel_id
+                return state
+            }
+            self = .callChanged(dto.domain, voiceStates: states)
         case .callDelete(let dto):
             self = .callEnded(dto.channel_id)
         case .guildSoundboardSounds(let payload):
@@ -2369,6 +2415,15 @@ public enum GatewayUpdate: Sendable {
         case .streamServerUpdate(let dto):
             guard let server = dto.domain else { return nil }
             self = .streamServerChanged(server)
+        case .stateUpdate(let payload):
+            guard let tree = payload.apex_experiments else { return nil }
+            let reader = Dictionary(
+                ExperimentWire.readerApex(tree).map { ($0.hash, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let apex = ExperimentWire.apex(tree)
+            guard !reader.isEmpty || !apex.isEmpty else { return nil }
+            self = .experimentsUpdated(reader: reader, apex: apex)
         case .conversationSummaryUpdate(let payload):
             let summaries = (payload.summaries ?? []).compactMap(\.domain)
             guard !summaries.isEmpty else { return nil }

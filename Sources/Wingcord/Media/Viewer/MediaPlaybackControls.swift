@@ -20,6 +20,11 @@ struct MediaVideoControls: View {
     @State private var scrubValue: Double = 0
     /// The scrubber's frame, which a clip's marks are laid along.
     @State private var track: CGRect = .zero
+    /// The last value the clock wrote, so a change that isn't it is the
+    /// reader's: a click on the track moves the value before the slider says
+    /// it's being edited, and that first move was being thrown away.
+    @State private var clockValue: Double = 0
+    @State private var isEditing = false
 
     private nonisolated static let space = "mediaVideoBar"
 
@@ -51,8 +56,9 @@ struct MediaVideoControls: View {
                 .font(Typeface.metadata.monospacedDigit())
                 .foregroundStyle(InkColor.secondary)
 
-            Slider(value: $scrubValue, in: 0...max(playback.duration, 0.01)) { isEditing in
-                if isEditing {
+            Slider(value: $scrubValue, in: 0...max(playback.duration, 0.01)) { editing in
+                isEditing = editing
+                if editing {
                     playback.beginScrub()
                 } else {
                     playback.endScrub(at: scrubValue)
@@ -102,11 +108,18 @@ struct MediaVideoControls: View {
         // ten times a second.
         .onChange(of: playback.currentTime) { _, time in
             guard !playback.isScrubbing else { return }
+            clockValue = time
             scrubValue = time
         }
         .onChange(of: scrubValue) { _, value in
-            guard playback.isScrubbing else { return }
-            playback.scrub(to: value)
+            guard value != clockValue else { return }
+            if isEditing || playback.isScrubbing {
+                if !playback.isScrubbing { playback.beginScrub() }
+                playback.scrub(to: value)
+            } else {
+                // A step from the keyboard or VoiceOver: one exact seek.
+                playback.endScrub(at: value)
+            }
         }
     }
 }
@@ -268,6 +281,11 @@ struct MediaZoomControls: View {
     var stage: MediaStageController
 
     @State private var zoomValue: Double = 1
+    /// The thumb is held. **The slider owns the value then**: the canvas's
+    /// own reports (a spring settling) used to be written back into the thumb
+    /// while it was dragged, and the thumb fought the pointer (Alex,
+    /// 2026-11-17: "the zoom slider that bugs out when dragging it").
+    @State private var isDragging = false
 
     var body: some View {
         HStack(spacing: Spacing.snug) {
@@ -278,7 +296,10 @@ struct MediaZoomControls: View {
                 action: stage.zoomOut
             )
 
-            Slider(value: $zoomValue, in: 1...Double(max(stage.maximumZoom, 1.01)))
+            Slider(value: $zoomValue, in: 1...Double(max(stage.maximumZoom, 1.01))) { editing in
+                isDragging = editing
+                if !editing { stage.setZoom(CGFloat(zoomValue), animated: false) }
+            }
                 .frame(width: 160)
                 .accessibilityLabel("Zoom")
                 .accessibilityValue(label)
@@ -303,13 +324,16 @@ struct MediaZoomControls: View {
             .accessibilityLabel("Fit to window")
         }
         .onChange(of: stage.zoomScale) { _, scale in
+            guard !isDragging else { return }
             let value = Double(scale)
             guard abs(zoomValue - value) > 0.001 else { return }
             zoomValue = value
         }
         .onChange(of: zoomValue) { _, value in
             guard abs(Double(stage.zoomScale) - value) > 0.001 else { return }
-            stage.setZoom(CGFloat(value))
+            // Under the pointer, the picture follows the thumb at once; a
+            // spring per drag event is a spring that never lands.
+            stage.setZoom(CGFloat(value), animated: !isDragging)
         }
     }
 

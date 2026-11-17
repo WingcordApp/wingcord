@@ -27,46 +27,60 @@ struct ServerHubTests {
         GuildSpaceWidget(id: id, kind: kind, position: .init(column: column, order: order))
     }
 
-    @Test("Offered only with the switch on, and as Discord's rule says")
+    /// The server put in Discord's `2026-09-guild-spaces` experiment, at
+    /// `variant` (0 is "off").
+    private func inExperiment(_ model: AppModel, variant: Int) -> AppModel {
+        let hash = MurmurHash3.hash32(AppModel.serverHubExperiment)
+        let eligible = [hash: ApexAssignment(hash: hash, variantID: 0, isOverride: false, revision: 1, usesAsEligibility: true)]
+        model.experiments = ExperimentSnapshot(apexReader: eligible)
+        model.guilds[guildID]?.apexAssignments = [
+            hash: ApexAssignment(hash: hash, variantID: variant, isOverride: false, revision: 3),
+        ]
+        return model
+    }
+
+    /// **Discord's channel list needs both**: hub settings, and the server in
+    /// the experiment (docs/ACTIVITIES-CALLS-PICKER.md, decision 23). Alex's
+    /// account had 18 servers with published settings and 3 in the experiment;
+    /// the other 15 answered "Unknown Guild Space".
+    @Test("Offered only with the switch on, and only where Discord shows it")
     func offering() async {
         await withAppSettings(\.showsServerHub) { settings in
             let published = GuildSpaceSettings(isEnabled: true, publishStatus: .published)
             let draft = GuildSpaceSettings(isEnabled: true, publishStatus: .draft)
 
             settings.showsServerHub = false
-            #expect(!model(isOwner: false, settings: published).offersServerHub(guildID))
+            #expect(!inExperiment(model(isOwner: false, settings: published), variant: 1).offersServerHub(guildID))
 
             settings.showsServerHub = true
-            #expect(model(isOwner: false, settings: published).offersServerHub(guildID))
-            #expect(!model(isOwner: false, settings: draft).offersServerHub(guildID))
-            #expect(model(isOwner: true, settings: draft).offersServerHub(guildID))
-            // Never turned on here for a server Discord hasn't given one.
-            #expect(!model(isOwner: true, settings: nil).offersServerHub(guildID))
+            #expect(inExperiment(model(isOwner: false, settings: published), variant: 1).offersServerHub(guildID))
+            #expect(!inExperiment(model(isOwner: false, settings: draft), variant: 1).offersServerHub(guildID))
+            #expect(inExperiment(model(isOwner: true, settings: draft), variant: 1).offersServerHub(guildID))
 
             // Discord answered that there's none: only an editor may make one.
-            let member = model(isOwner: false, settings: published)
+            let member = inExperiment(model(isOwner: false, settings: published), variant: 1)
             member.serverHub.missing.insert(guildID)
             #expect(!member.offersServerHub(guildID))
-            let owner = model(isOwner: true, settings: published)
+            let owner = inExperiment(model(isOwner: true, settings: published), variant: 1)
             owner.serverHub.missing.insert(guildID)
             #expect(owner.offersServerHub(guildID))
+
+            // No experiment data at all: nothing is guessed from the settings;
+            // a hub is offered once it has actually loaded with cards.
+            let unknown = model(isOwner: false, settings: published)
+            #expect(!unknown.offersServerHub(guildID))
+            unknown.serverHub.spaces[guildID] = GuildSpace(guildID: guildID, widgets: [
+                widget("a", column: 0, order: 0),
+            ])
+            #expect(unknown.offersServerHub(guildID))
+            #expect(!model(isOwner: true, settings: nil).offersServerHub(guildID))
         }
     }
 
-    @Test("Discord's experiment offers an editor the row to make a hub, and never hides one")
+    @Test("Discord's experiment offers an editor the row to make a hub, and outside it there is none")
     func experimentOffering() async {
         await withAppSettings(\.showsServerHub) { settings in
             settings.showsServerHub = true
-            let name = AppModel.serverHubExperiment
-            let hash = MurmurHash3.hash32(name)
-            let eligible = [hash: ApexAssignment(hash: hash, variantID: 0, isOverride: false, revision: 1, usesAsEligibility: true)]
-            @MainActor func inExperiment(_ model: AppModel, variant: Int) -> AppModel {
-                model.experiments = ExperimentSnapshot(apexReader: eligible)
-                model.guilds[guildID]?.apexAssignments = [
-                    hash: ApexAssignment(hash: hash, variantID: variant, isOverride: false, revision: 3),
-                ]
-                return model
-            }
 
             // No hub yet, in a server Discord has put in the experiment.
             #expect(inExperiment(model(isOwner: true, settings: nil), variant: 1).offersServerHub(guildID))
@@ -76,12 +90,40 @@ struct ServerHubTests {
             // Variant 0 is "off", and with no experiment data at all nothing is guessed.
             #expect(!inExperiment(model(isOwner: true, settings: nil), variant: 0).offersServerHub(guildID))
             #expect(model(isOwner: true, settings: nil).isInServerHubExperiment(Guild(id: guildID, name: "x", ownerID: me)) == nil)
-            // A published hub stays offered whatever the experiment reads.
+            // **Published settings outside the experiment are not a hub**: Discord
+            // shows none there and its route answers 404. Not offered, not asked.
             let published = GuildSpaceSettings(isEnabled: true, publishStatus: .published)
-            #expect(inExperiment(model(isOwner: false, settings: published), variant: 0).offersServerHub(guildID))
+            #expect(!inExperiment(model(isOwner: false, settings: published), variant: 0).offersServerHub(guildID))
+            #expect(!inExperiment(model(isOwner: false, settings: published), variant: 0).mayHaveServerHub(guildID))
             // Switched off by the server, nobody gets it.
             let off = GuildSpaceSettings(isEnabled: false, publishStatus: .published)
             #expect(!inExperiment(model(isOwner: true, settings: off), variant: 1).offersServerHub(guildID))
+        }
+    }
+
+    /// **The account has no entry of its own: the server's assignment decides**
+    /// (Alex's READY, 2026-11-17: `reader=none`, three servers at variant 1,
+    /// and Discord drew the hub on his test server).
+    @Test("With no account entry, a server marked on in the experiment has its hub")
+    func serverAssignmentDecidesWithoutReader() async {
+        await withAppSettings(\.showsServerHub) { settings in
+            settings.showsServerHub = true
+            let hash = MurmurHash3.hash32(AppModel.serverHubExperiment)
+            let other = MurmurHash3.hash32("2026-01-some-other-experiment")
+            @MainActor func noReaderEntry(_ model: AppModel, variant: Int?) -> AppModel {
+                // Experiment data exists, just none of the account's for this one.
+                model.experiments = ExperimentSnapshot(apexReader: [
+                    other: ApexAssignment(hash: other, variantID: 1, isOverride: false, revision: 1),
+                ])
+                model.guilds[guildID]?.apexAssignments = variant.map {
+                    [hash: ApexAssignment(hash: hash, variantID: $0, isOverride: false, revision: 3)]
+                } ?? [:]
+                return model
+            }
+            let published = GuildSpaceSettings(isEnabled: true, publishStatus: .published)
+            #expect(noReaderEntry(model(isOwner: false, settings: published), variant: 1).offersServerHub(guildID))
+            #expect(!noReaderEntry(model(isOwner: false, settings: published), variant: 0).offersServerHub(guildID))
+            #expect(!noReaderEntry(model(isOwner: false, settings: published), variant: nil).offersServerHub(guildID))
         }
     }
 

@@ -45,6 +45,9 @@ final class VideoPlayback {
     /// it the observer writes the *old* position back over the drag, ten times a
     /// second, and the thumb fights the pointer.
     private(set) var isScrubbing = false
+    /// The item is a GIF's MP4: it loops and stays silent whatever the
+    /// reader's saved loop and volume say, and changes neither.
+    private(set) var isGIF = false
 
     var isLooping: Bool {
         get { settings.loopsVideo }
@@ -89,6 +92,11 @@ final class VideoPlayback {
     }
 
     private let settings: AppSettings
+    /// AVKit's own volume and mute (decision 24) write the player directly;
+    /// these carry the change back to the saved setting, as the viewer's own
+    /// slider did.
+    @ObservationIgnored private var volumeObservation: NSKeyValueObservation?
+    @ObservationIgnored private var muteObservation: NSKeyValueObservation?
     private var timeObserver: Any?
     private var statusObserver: NSKeyValueObservation?
     private var controlObserver: NSKeyValueObservation?
@@ -107,6 +115,26 @@ final class VideoPlayback {
         // Nothing here is a stream that should keep playing while a frame is
         // late; a lightbox wants the newest frame, not a queue of stale ones.
         player.automaticallyWaitsToMinimizeStalling = true
+        volumeObservation = player.observe(\.volume, options: [.new]) { [weak self] player, _ in
+            let volume = Double(player.volume)
+            Task { @MainActor [weak self] in self?.remember(volume: volume) }
+        }
+        muteObservation = player.observe(\.isMuted, options: [.new]) { [weak self] player, _ in
+            let muted = player.isMuted
+            Task { @MainActor [weak self] in self?.remember(muted: muted) }
+        }
+    }
+
+    /// A change from AVKit's controls. Never a GIF's silence, which isn't the
+    /// reader's choice.
+    private func remember(volume: Double) {
+        guard !isGIF, abs(settings.mediaVolume - volume) > 0.001 else { return }
+        settings.mediaVolume = volume
+    }
+
+    private func remember(muted: Bool) {
+        guard !isGIF, settings.mutesMedia != muted else { return }
+        settings.mutesMedia = muted
     }
 
     // MARK: Loading
@@ -116,10 +144,13 @@ final class VideoPlayback {
     /// Idempotent on the identity, because `updateNSView` runs on every SwiftUI
     /// update and re-loading there would restart the clip whenever anything at
     /// all changed in the window.
-    func load(url: URL?, identity: AttachmentIdentity?, autoplay: Bool) {
+    func load(url: URL?, identity: AttachmentIdentity?, autoplay: Bool, asGIF: Bool = false) {
         guard !isTornDown, itemID != identity else { return }
         itemID = identity
         detachItem()
+        isGIF = asGIF
+        pendingStart = nil
+        player.isMuted = asGIF || settings.mutesMedia
 
         duration = 0
         currentTime = 0
@@ -228,6 +259,10 @@ final class VideoPlayback {
         if seconds.isFinite, seconds > 0, abs(duration - seconds) > 0.001 {
             duration = seconds
             publish(time: currentTime)
+            if let pendingStart {
+                self.pendingStart = nil
+                seek(to: pendingStart)
+            }
         }
 
         switch item.status {
@@ -249,7 +284,7 @@ final class VideoPlayback {
 
     private func didReachEnd() {
         guard !isTornDown else { return }
-        guard isLooping else {
+        guard isLooping || isGIF else {
             isPlaying = false
             publish(time: duration)
             return
@@ -288,8 +323,13 @@ final class VideoPlayback {
     }
 
     func beginScrub() {
+        scrubGeneration &+= 1
         isScrubbing = true
     }
+
+    /// Which scrub a seek's landing belongs to: one that lands after the
+    /// reader has taken hold again mustn't let go for them.
+    @ObservationIgnored private var scrubGeneration = 0
 
     /// Follows the thumb. Loose tolerances: an exact seek per drag event asks
     /// the decoder for a keyframe-accurate frame ten times a second, which is
@@ -311,13 +351,26 @@ final class VideoPlayback {
             return
         }
         publish(time: seconds)
+        let generation = scrubGeneration
         player.seek(
             to: CMTime(seconds: seconds, preferredTimescale: 600),
             toleranceBefore: .zero,
             toleranceAfter: .zero
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.isScrubbing = false }
+            MainActor.assumeIsolated {
+                guard let self, self.scrubGeneration == generation else { return }
+                self.isScrubbing = false
+            }
         }
+    }
+
+    /// Where to pick up once the video knows its length — the chat's inline
+    /// player's place (decision 24).
+    @ObservationIgnored private var pendingStart: Double?
+
+    /// Starts from `seconds`: now if the length is known, else when it is.
+    func start(at seconds: Double) {
+        if duration > 0 { seek(to: seconds) } else { pendingStart = seconds }
     }
 
     /// A jump to a moment, exactly — a clip's mark.

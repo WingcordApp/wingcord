@@ -238,6 +238,9 @@ public struct MutualFriend: Hashable, Sendable, Codable, Identifiable {
     public let tag: String?
     public let tagBadgeHash: String?
     public let tagGuildID: GuildID?
+    /// What picks their default avatar when they have none. Optional so a
+    /// list saved before it was kept still decodes.
+    public let discriminator: String?
 
     public init(
         id: UserID,
@@ -246,7 +249,8 @@ public struct MutualFriend: Hashable, Sendable, Codable, Identifiable {
         monogram: String,
         tag: String? = nil,
         tagBadgeHash: String? = nil,
-        tagGuildID: GuildID? = nil
+        tagGuildID: GuildID? = nil,
+        discriminator: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -255,6 +259,21 @@ public struct MutualFriend: Hashable, Sendable, Codable, Identifiable {
         self.tag = tag
         self.tagBadgeHash = tagBadgeHash
         self.tagGuildID = tagGuildID
+        self.discriminator = discriminator
+    }
+
+    /// Their picture, or **Discord's default one** where they set none: the
+    /// coloured mark every client draws, by the same rule as
+    /// `User.defaultAvatarIndex`. The row drew a monogram instead (Alex,
+    /// 2026-11-17).
+    public func avatarURL(side: CGFloat) -> URL? {
+        if let avatarHash { return CDN.avatar(userID: id, hash: avatarHash, side: side) }
+        let index = if let discriminator, discriminator != "0", !discriminator.isEmpty {
+            (Int(discriminator) ?? 0) % 5
+        } else {
+            Int((id.rawValue >> 22) % 6)
+        }
+        return CDN.defaultAvatar(index: index)
     }
 }
 

@@ -99,6 +99,8 @@ private struct VoiceHUDHeader: View {
     var presentation: VoicePresentation
 
     @Environment(\.motion) private var motion
+    /// Discord's connection panel, from the grade (decision 11).
+    @State private var showsConnection = false
 
     var body: some View {
         HStack(spacing: Spacing.snug) {
@@ -108,9 +110,16 @@ private struct VoiceHUDHeader: View {
                 .contentTransition(.symbolEffect(.replace))
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(presentation.quality.label)
-                    .font(.system(.title3, weight: .semibold))
-                    .foregroundStyle(tint)
+                Button { showsConnection.toggle() } label: {
+                    Text(presentation.quality.label)
+                        .font(.system(.title3, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+                .buttonStyle(.plain)
+                .help("Connection details")
+                .popover(isPresented: $showsConnection, arrowEdge: .top) {
+                    CallConnectionPanel(quality: presentation.quality)
+                }
                 Text(place)
                     .font(.body)
                     .foregroundStyle(Ink.primary)

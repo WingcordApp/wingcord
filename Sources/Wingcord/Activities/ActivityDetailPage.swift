@@ -25,6 +25,8 @@ struct ActivityDetailPage: View {
     var channelID: ChannelID?
     /// Which of the two surfaces this is drawn on.
     var layout: Layout = .flyout
+    /// The flyout's width: the composer's panel, or the call's larger card.
+    var flyoutWidth: CGFloat = ActivityLauncherContext.composer.size.width
     var onBack: () -> Void
     var onLaunched: () -> Void
     /// Puts a command into the composer with its first option focused. The page
@@ -116,7 +118,7 @@ struct ActivityDetailPage: View {
             VStack(spacing: 0) {
                 ScrollView {
                     if let app {
-                        sections(for: app, width: ActivityLauncher.width)
+                        sections(for: app, width: flyoutWidth)
                             .padding(.bottom, Spacing.margin)
                     } else {
                         loading
@@ -729,7 +731,7 @@ struct ActivityDetailPage: View {
                 if inDirectMessage {
                     await model.sessionController.launchActivityInDirectMessage(app)
                 } else if let channelID {
-                    await model.sessionController.launchActivity(
+                    await model.sessionController.startActivity(
                         app,
                         in: channelID,
                         section: model.activityQuery.isEmpty ? nil : "Search"

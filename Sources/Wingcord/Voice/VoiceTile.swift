@@ -74,8 +74,15 @@ struct VoiceTile: View {
                     // Discord's ⋯ on hover: the person's menu.
                     if isHovering, let openMenu {
                         Button { openMenu(menuAnchor) } label: {
+                            // **A pill, the name chip's height** (Alex,
+                            // 2026-11-17): the glyph alone is three dots a few
+                            // points tall, and its capsule came out a slab.
                             Image(systemName: "ellipsis")
-                                .modifier(TileCapsule(isCompact: isCompact))
+                                .font(.system(isCompact ? .caption2 : .subheadline, weight: .bold))
+                                .foregroundStyle(tileInk)
+                                .frame(width: isCompact ? 26 : 38, height: isCompact ? 18 : 26)
+                                .background { Capsule().fill(tileScrim) }
+                                .contentShape(.capsule)
                         }
                         .buttonStyle(.plain)
                         .help("More")

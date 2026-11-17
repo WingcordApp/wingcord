@@ -62,6 +62,14 @@ public actor DiscordREST {
     /// `internal` for the sign-in routes, which send their own requests: see
     /// `DiscordREST+Auth`.
     let limiter = RateLimiter()
+    /// The frecency settings blob, shared (decision 15). Five features read it
+    /// (favourite GIFs, emoji usage, the launcher's Recents, commands, the
+    /// quick switcher) and each used to fetch it on its own: opening the
+    /// picker sent several at once and drew 429s (report WC-V76A). Readers in
+    /// the same moment share one request, and a read within twenty seconds
+    /// reuses the answer.
+    var frecencyBlob: (value: String, at: Date)?
+    var frecencyRead: Task<String, any Error>?
     private var token: String?
     /// The `X-Fingerprint` Discord hands a client that isn't signed in, sent on
     /// the sign-in routes as its web client sends it. See `DiscordREST+Auth`.
@@ -1130,13 +1138,16 @@ public actor DiscordREST {
         method: String,
         path: String,
         route: String,
+        query: [URLQueryItem] = [],
         parts: [MultipartPart],
         as type: T.Type
     ) async throws -> T {
         await limiter.acquire(route: route)
 
         let boundary = "wingcord.\(UUID().uuidString)"
-        var request = URLRequest(url: metadata.apiBase.appending(path: path))
+        var url = metadata.apiBase.appending(path: path)
+        if !query.isEmpty { url.append(queryItems: query) }
+        var request = URLRequest(url: url)
         request.httpMethod = method
         metadata.apply(to: &request, token: token)
         request.setValue(
@@ -1297,8 +1308,12 @@ extension DiscordREST {
     /// known to answer with, and `GIFDTO.drawable` takes the animated image out
     /// of the same payload.
     private static func gifQuery(limit: Int? = nil) -> [URLQueryItem] {
+        // **MP4**: one of the video formats Discord's own picker names
+        // (`mp4`, `tinymp4`, …), and the one AVFoundation decodes in hardware;
+        // Discord's desktop asks for webm, which needs a browser. `gif_src`
+        // still carries the animated image for the still and for sending.
         var query = [
-            URLQueryItem(name: "media_format", value: "webm"),
+            URLQueryItem(name: "media_format", value: "mp4"),
             URLQueryItem(name: "locale", value: "en-US"),
         ]
         if let limit { query.append(URLQueryItem(name: "limit", value: String(limit))) }
@@ -1322,7 +1337,8 @@ struct GIFDTO: Decodable, Sendable {
             url: url,
             previewURL: Self.drawable(gif_src, src, url),
             width: width,
-            height: height
+            height: height,
+            videoURL: GIF.isPlayableVideo(src) ? src : nil
         )
     }
 
@@ -1344,7 +1360,11 @@ struct GIFCategoryDTO: Decodable, Sendable {
 
     var domain: GIFCategory? {
         guard let name, !name.isEmpty else { return nil }
-        return GIFCategory(name: name, previewURL: GIFDTO.drawable(gif_src, src))
+        return GIFCategory(
+            name: name,
+            previewURL: GIFDTO.drawable(gif_src, src),
+            videoURL: GIF.isPlayableVideo(src) ? src : nil
+        )
     }
 }
 

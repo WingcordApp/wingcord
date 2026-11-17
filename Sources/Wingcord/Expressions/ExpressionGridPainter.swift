@@ -232,7 +232,8 @@ nonisolated enum ExpressionGridPainter {
         images: ImageStore,
         scale: CGFloat,
         time: Double?,
-        context: CGContext
+        context: CGContext,
+        drawsArt: Bool = true
     ) {
         if isHovered {
             let target = frame.insetBy(dx: highlightInset, dy: highlightInset)
@@ -255,6 +256,9 @@ nonisolated enum ExpressionGridPainter {
         switch item.art {
         case .glyph(let glyph):
             drawGlyph(glyph, in: frame, context: context)
+        case .image(_, _) where !drawsArt:
+            // Its film layer is showing it (`ExpressionGridCanvas.syncFilms`).
+            break
         case .image(let url, let animated):
             drawImage(
                 url: url,

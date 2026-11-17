@@ -115,6 +115,14 @@ struct MediaActionCluster: View {
     var actions: MediaActions
     var canCopyImage: Bool
     var copyImage: () -> Void
+    /// Cinema mode's switch (decision 25); nil where it isn't offered.
+    var cinema: Binding<Bool>? = nil
+    /// Live Text's switch, over a still (decision 26).
+    var liveText: Binding<Bool>? = nil
+    /// Loop, for a video in AVKit's player, whose own bar has none.
+    var loop: Binding<Bool>? = nil
+    /// A GIF's star: whether it's kept, and the toggle.
+    var favorite: (isOn: Bool, toggle: () -> Void)? = nil
 
     /// **One popover on one view**, which is what makes a presentation modifier
     /// legitimate here. The rule it would otherwise break — never a `.popover`
@@ -125,6 +133,38 @@ struct MediaActionCluster: View {
     var body: some View {
         GlassEffectContainer(spacing: Spacing.base) {
             HStack(spacing: Spacing.base) {
+                if let favorite {
+                    MediaGlassButton(
+                        systemImage: favorite.isOn ? "star.fill" : "star",
+                        label: favorite.isOn ? "Remove from Favorites" : "Add to Favorites",
+                        isActive: favorite.isOn,
+                        action: favorite.toggle
+                    )
+                }
+                if let liveText {
+                    MediaGlassButton(
+                        systemImage: "text.viewfinder",
+                        label: liveText.wrappedValue ? "Hide Live Text" : "Live Text",
+                        isActive: liveText.wrappedValue,
+                        action: { liveText.wrappedValue.toggle() }
+                    )
+                }
+                if let loop {
+                    MediaGlassButton(
+                        systemImage: "repeat",
+                        label: loop.wrappedValue ? "Stop Looping" : "Loop",
+                        isActive: loop.wrappedValue,
+                        action: { loop.wrappedValue.toggle() }
+                    )
+                }
+                if let cinema {
+                    MediaGlassButton(
+                        systemImage: "sparkles.tv",
+                        label: cinema.wrappedValue ? "Turn Off Cinema Mode" : "Cinema Mode",
+                        isActive: cinema.wrappedValue,
+                        action: { cinema.wrappedValue.toggle() }
+                    )
+                }
                 MediaGlassButton(
                     systemImage: "info.circle",
                     label: "Details",

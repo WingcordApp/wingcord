@@ -19,7 +19,8 @@ struct ServerHubPresentation: Equatable {
 
     enum Phase: Equatable {
         case loading
-        case failed
+        /// Discord didn't answer; `isOffline` when nothing came back at all.
+        case failed(isOffline: Bool)
         /// Discord has no hub for this server and the reader can't make one.
         case missing
         case ready
@@ -53,6 +54,8 @@ struct ServerHubPresentation: Equatable {
         /// The leaderboard's "1d left", beside the title.
         var accessory: String?
         var accessoryHelp: String?
+        /// Grey rather than the accent: Discord's "Ended" (decision 20).
+        var accessoryIsMuted = false
         var content: Content
         /// Behind a Boost power-up the server hasn't unlocked.
         var isLocked: Bool

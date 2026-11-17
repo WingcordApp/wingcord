@@ -57,6 +57,10 @@ nonisolated enum HostedCardKey: Hashable, Sendable {
     case user(UserCardKey)
     case event(EventCardKey)
     case plaintext(PlaintextCardKey)
+    /// An activity link's card: the app's cover, name, tags and Play.
+    case activity(ActivityCardKey)
+    /// A Spotify link's card (one height, laid out without measuring).
+    case spotify(SpotifyCardKey)
 }
 
 /// What a hosted card measured itself at.

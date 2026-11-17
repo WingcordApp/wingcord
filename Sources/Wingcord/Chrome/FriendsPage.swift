@@ -25,7 +25,8 @@ struct FriendsPage: View {
                     .padding(.vertical, Spacing.base)
                 ActiveNowColumn(
                     cards: model.activeNowCards(),
-                    open: { model.messagePerson($0) }
+                    open: { model.messagePerson($0) },
+                    join: { model.joinFriendActivity($0) }
                 )
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
@@ -67,6 +68,20 @@ struct FriendsPage: View {
                 .help("Add Friend")
             }
             SearchField(text: $query)
+            // Discord's Friend Anniversaries, above the list on Online and
+            // All: friends whose friendship turns a year older this week.
+            let anniversaries = (tab == .online || tab == .all) && query.isEmpty
+                ? model.friendAnniversaries() : []
+            if !anniversaries.isEmpty {
+                Text("FRIEND ANNIVERSARIES — \(anniversaries.count)")
+                    .font(Typeface.categoryHeader)
+                    .foregroundStyle(Ink.tertiary)
+                VStack(spacing: 0) {
+                    ForEach(anniversaries) { anniversary in
+                        FriendAnniversaryRow(anniversary: anniversary)
+                    }
+                }
+            }
             Text("\(tab.heading.uppercased()) — \(rows.count)")
                 .font(Typeface.categoryHeader)
                 .foregroundStyle(Ink.tertiary)
@@ -343,6 +358,8 @@ struct ActiveNowColumn: View {
     var cards: [ActiveNowCard]
     /// A card clicked: the conversation with them.
     var open: (UserID) -> Void
+    /// Join Activity on a card that offers it.
+    var join: (UserID) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
 
@@ -358,7 +375,7 @@ struct ActiveNowColumn: View {
                 ScrollView {
                     LazyVStack(spacing: Spacing.base) {
                         ForEach(cards) { card in
-                            ActiveNowCardView(card: card, open: { open(card.id) })
+                            ActiveNowCardView(card: card, open: { open(card.id) }, join: { join(card.id) })
                         }
                     }
                     .padding(.bottom, Spacing.margin)
@@ -393,6 +410,7 @@ struct ActiveNowColumn: View {
 private struct ActiveNowCardView: View {
     var card: ActiveNowCard
     var open: () -> Void
+    var join: () -> Void = {}
 
     @Environment(\.motion) private var motion
     @State private var isHovered = false
@@ -442,6 +460,8 @@ private struct ActiveNowCardView: View {
                 }
             }
             .padding(Spacing.snug)
+            // Room for Join Activity, which floats over the card's foot.
+            .padding(.bottom, card.canJoinActivity ? 34 : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Radius.glass, style: .continuous))
             .overlay {
@@ -451,6 +471,17 @@ private struct ActiveNowCardView: View {
             .contentShape(RoundedRectangle(cornerRadius: Radius.glass, style: .continuous))
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .bottomTrailing) {
+            // Outside the card's own button: a button inside another's label
+            // never gets the click.
+            if card.canJoinActivity {
+                Button("Join Activity", action: join)
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(Palette.accent)
+                    .padding(Spacing.snug)
+            }
+        }
         .scaleEffect(isHovered ? 1.01 : 1)
         .onHover { hovering in
             guard isHovered != hovering else { return }

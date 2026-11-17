@@ -680,9 +680,7 @@ struct MutualsRow: View {
         } else {
             let friend = friends[index]
             AvatarView(
-                url: friend.avatarHash.flatMap {
-                    CDN.avatar(userID: friend.id, hash: $0, side: Self.iconSide)
-                },
+                url: friend.avatarURL(side: Self.iconSide),
                 monogram: friend.monogram,
                 side: Self.iconSide
             )
@@ -801,9 +799,7 @@ struct MutualFriendsList: View {
     private func row(_ friend: MutualFriend) -> some View {
         HStack(spacing: Spacing.base) {
             AvatarView(
-                url: friend.avatarHash.flatMap {
-                    CDN.avatar(userID: friend.id, hash: $0, side: Metrics.avatarRow)
-                },
+                url: friend.avatarURL(side: Metrics.avatarRow),
                 monogram: friend.monogram,
                 side: Metrics.avatarRow,
                 // **Played here, where a roster of two hundred does not.** The

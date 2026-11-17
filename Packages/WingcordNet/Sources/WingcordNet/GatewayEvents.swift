@@ -46,6 +46,8 @@ struct GatewayFrame: Decodable, Sendable {
         /// `nonce` echoes what the launch sent, which is how a client tells its
         /// own interaction from anybody else's.
         case interactionSuccess(InteractionAckPayload)
+        /// A running activity changed: started, someone joined or left, ended.
+        case embeddedActivityUpdate(ActivityInstanceDTO)
         /// The application refused, or never answered inside Discord's window.
         /// The same `{id, nonce}` shape as the success — the *name* is the whole
         /// difference, which is why one payload type serves both.
@@ -174,6 +176,10 @@ struct GatewayFrame: Decodable, Sendable {
         case streamServerUpdate(StreamServerUpdateDTO)
         /// Discord summed up a new stretch of a channel, or updated one.
         case conversationSummaryUpdate(SummaryUpdatePayload)
+        /// State sent after READY: Discord's own client takes **the account's
+        /// experiment assignments** from it (`CONNECTION_OPEN_STATE_UPDATE`,
+        /// web.js 2026-11-17), including ones READY left out.
+        case stateUpdate(StateUpdatePayload)
         /// Anything this client does not act on. `d` is never decoded.
         case unhandled(name: String?)
     }
@@ -229,6 +235,8 @@ struct GatewayFrame: Decodable, Sendable {
         case "MESSAGE_CREATE": payload = .messageCreate(try decode(MessageDTO.self))
         case "INTERACTION_SUCCESS":
             payload = .interactionSuccess(try decode(InteractionAckPayload.self))
+        case "EMBEDDED_ACTIVITY_UPDATE_V2":
+            payload = .embeddedActivityUpdate(try decode(ActivityInstanceDTO.self))
         case "INTERACTION_FAILURE":
             payload = .interactionFailure(try decode(InteractionAckPayload.self))
         case "MESSAGE_UPDATE": payload = .messageUpdate(try decode(MessageDTO.self))
@@ -372,6 +380,8 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .streamServerUpdate(try decode(StreamServerUpdateDTO.self))
         case "CONVERSATION_SUMMARY_UPDATE":
             payload = .conversationSummaryUpdate(try decode(SummaryUpdatePayload.self))
+        case "STATE_UPDATE":
+            payload = .stateUpdate(try decode(StateUpdatePayload.self))
         default: payload = .unhandled(name: name)
         }
     }
@@ -821,4 +831,9 @@ public struct InteractionAckPayload: Decodable, Sendable {
 /// `refresh_after_ms` and nothing else.
 struct ActivityInboxStaleDTO: Decodable, Sendable {
     var refresh_after_ms: Double?
+}
+
+/// `STATE_UPDATE`'s one field this client reads.
+struct StateUpdatePayload: Decodable, Sendable {
+    var apex_experiments: JSONTree?
 }

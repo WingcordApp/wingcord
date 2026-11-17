@@ -18,9 +18,14 @@ struct ActivityStageContainer: View {
 
     @Environment(AppModel.self) private var model
 
+    /// **Only where nothing else holds it** (decision 3): a conversation with a
+    /// call puts the activity on the call's stage, never in a second band
+    /// under it; the hub's card and a conversation without a call are this
+    /// band's two places (`AppModel.activityHost`).
     private var activity: RunningActivity? {
         guard let running = model.runningActivity,
-              running.instance.location.channelID == channelID
+              running.instance.location.channelID == channelID,
+              model.activityHost == .band || model.activityHost == .hub
         else { return nil }
         return running
     }

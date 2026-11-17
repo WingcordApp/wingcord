@@ -192,8 +192,11 @@ extension AppModel {
                 : decoration?.premiumTier ?? .none,
             premiumSince: decoration?.premiumSince,
             legacyUsername: decoration?.legacyUsername,
-            mutualServers: mutualServers(of: decoration),
-            mutualFriends: decoration?.mutualFriends ?? [],
+            // **None on your own profile**, as Discord's: everything you're in
+            // is "mutual" with yourself, and the list said nothing (Alex,
+            // 2026-11-17).
+            mutualServers: user.id == currentUserID ? [] : mutualServers(of: decoration),
+            mutualFriends: user.id == currentUserID ? [] : decoration?.mutualFriends ?? [],
             isProfilePrivate: decoration?.isProfilePrivate ?? false,
             isPartlyUnavailable: user.id != currentUserID
                 && profileFetchFailures.contains(user.id)

@@ -45,15 +45,14 @@ struct CallControlRow: View {
                         }
                         .position(x: proxy[anchor].midX, y: proxy[anchor].midY)
                 }
-                if let anchor = anchors[.activities] {
-                    panelAnchor(proxy[anchor])
-                        .popover(isPresented: $isActivitiesOpen, arrowEdge: .top) {
-                            ActivitiesShelfPanel(channelID: presentation.channelID)
-                        }
-                        .position(x: proxy[anchor].midX, y: proxy[anchor].midY)
-                }
             }
             .allowsHitTesting(false)
+        }
+        // **The launcher, large and centred over the call** (decision 5): a
+        // card in the window's own modal layer, grown out of the Activities
+        // control, rather than a popover the size of the composer's.
+        .modal(isPresented: $isActivitiesOpen, style: .panel) {
+            ActivityLauncher(channelID: presentation.channelID, context: .call)
         }
     }
 

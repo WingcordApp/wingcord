@@ -23,18 +23,16 @@ import WingcordCore
 /// animates itself.
 struct ActivityLauncher: View {
     var channelID: ChannelID
+    /// The composer's Apps button or a call's Activities button (decision 5).
+    var context: ActivityLauncherContext = .composer
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
-    @Environment(\.dismiss) private var dismiss
+    @ModalDismiss private var dismiss
 
     /// The debounce. A keystroke per request would send five for "wordl".
     @State private var searchTask: Task<Void, Never>?
 
-    /// The expression picker's own panel, so the composer's flyouts are one
-    /// size whichever control opened them (POLISH-NOV decision 6).
-    static let width = ExpressionPicker.width
-    static let height = ExpressionPicker.height
 
     /// How long a keystroke waits before it becomes a request. Short enough to
     /// feel like typing, long enough that a five-letter word is one call.
@@ -51,6 +49,7 @@ struct ActivityLauncher: View {
                 ActivityDetailPage(
                     applicationID: id,
                     channelID: channelID,
+                    flyoutWidth: context.size.width,
                     onBack: { model.activityLauncherPage = .directory },
                     onLaunched: { dismiss() },
                     // A command with options goes to the composer rather than
@@ -87,7 +86,7 @@ struct ActivityLauncher: View {
                 .transition(.opacity)
             }
         }
-        .frame(width: Self.width, height: Self.height)
+        .frame(width: context.size.width, height: context.size.height)
         // No background: the popover's own material IS the panel, and painting
         // over it is what turns liquid glass into a flat dark rectangle.
         .animation(motion.fade, value: model.activityLauncherPage)
@@ -122,13 +121,19 @@ struct ActivityLauncher: View {
     @ViewBuilder
     private var content: some View {
         let sections = model.activitySections
-        if sections.isEmpty {
+        let running = model.activityQuery.isEmpty ? model.runningActivities(in: channelID) : []
+        if sections.isEmpty, running.isEmpty {
             emptyState
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Spacing.group, pinnedViews: []) {
+                    if !running.isEmpty { runningSection(running) }
                     ForEach(sections) { section in
-                        ActivitySectionView(section: section, onOpen: open(_:))
+                        ActivitySectionView(
+                            section: section,
+                            onOpen: open(_:),
+                            onStart: cardStart
+                        )
                     }
                 }
                 .padding(.horizontal, Spacing.snug)
@@ -173,7 +178,15 @@ struct ActivityLauncher: View {
         .padding(.horizontal, Spacing.snug)
         .frame(minHeight: Metrics.control)
         .chromeOverMedia()
-        .padding(.horizontal, Spacing.snug)
+        .padding(.leading, Spacing.snug)
+        .padding(.trailing, context == .call ? Metrics.control + Spacing.snug * 2 : Spacing.snug)
+        .overlay(alignment: .trailing) {
+            // The card's own close beside the field (a `.panel` card's round ✕).
+            if context == .call {
+                ModalCloseButton { dismiss() }
+                    .padding(.trailing, Spacing.snug)
+            }
+        }
         .padding(.top, Spacing.base)
     }
 
@@ -189,6 +202,46 @@ struct ActivityLauncher: View {
 
     private func open(_ row: ActivityRow) {
         model.activityLauncherPage = .app(row.id)
+    }
+
+    /// What a card's own button does here: start the app in the call, or
+    /// nothing in the composer, where a card opens the app's page.
+    private var cardStart: ((ActivityRow) -> Void)? {
+        guard context.startsFromCards else { return nil }
+        return { start($0) }
+    }
+
+    /// Starts a game in the call from its card: joins the one already running
+    /// here, launches it otherwise (decision 2).
+    private func start(_ row: ActivityRow) {
+        guard let app = model.activityApp(row.id) else { return open(row) }
+        dismiss()
+        Task { await model.sessionController.startActivity(app, in: channelID, section: "activity_shelf") }
+    }
+
+    /// What's already running here, first: Join beats Launch (decision 5).
+    private func runningSection(_ running: [CallActivityPresentation]) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.base) {
+            Text(model.isCallBandShowing(in: channelID) || context == .call ? "In This Call" : "Playing Now")
+                .font(Typeface.sectionHeader)
+                .foregroundStyle(Ink.secondary)
+                .textCase(.uppercase)
+                .kerning(0.4)
+                .padding(.leading, Spacing.tight)
+            ForEach(running) { activity in
+                ActivityRunningCard(
+                    activity: activity,
+                    onJoin: {
+                        dismiss()
+                        model.joinCallActivity(activity)
+                    },
+                    onReturn: {
+                        dismiss()
+                        model.returnToActivity()
+                    }
+                )
+            }
+        }
     }
 
     private var emptyState: some View {

@@ -927,13 +927,7 @@ nonisolated enum EmbedLayoutEngine {
         let rect = CGRect(x: origin.x, y: origin.y, width: width, height: height)
         // Discord's own rule: a `.gif` always, a WebP when Discord marked it.
         let isAnimated = media.playsAsAnimated
-        return EmbedSlot(
-            rect: rect,
-            // No accent: there is no rule to draw it on.
-            accent: nil,
-            drawsCard: false,
-            texts: [],
-            images: [EmbedImage(
+        var picture = EmbedImage(
                 rect: rect,
                 // Resized whether or not it moves: the proxy keeps every frame
                 // of a GIF it resizes, and of a WebP when asked. See
@@ -950,7 +944,18 @@ nonisolated enum EmbedLayoutEngine {
                     ? embed.video.flatMap { URL(string: $0.proxyURL ?? $0.url) }.map(EmbedVideo.loop)
                     : nil,
                 placeholder: media.placeholder
-            )],
+            )
+        // **A GIF opens in the viewer**, as Discord's do (Alex, 2026-11-17: "i
+        // cant click on gifs to open them"): a `gifv` as its MP4, which the
+        // viewer plays muted and looping, and an animated picture as itself.
+        picture.viewerMedia = embed.kind == "gifv" ? (embed.video ?? media) : media
+        return EmbedSlot(
+            rect: rect,
+            // No accent: there is no rule to draw it on.
+            accent: nil,
+            drawsCard: false,
+            texts: [],
+            images: [picture],
             favorite: favorite(for: embed, media: media, animates: isAnimated),
             favoriteRect: TimelineLayoutEngine.favoriteBadgeRect(in: rect)
         )

@@ -411,6 +411,8 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     /// When the session in this room began, for the clock Discord runs beside
     /// the name. Nil is a silent channel.
     var voiceStartedAt: Date?
+    /// Activities running in the room, under its name (decision 8).
+    var activities: [SidebarChannelActivity] = []
     /// A conversation's face, for the rows that have one. A DM is identified by
     /// **who** it is with, so it takes an avatar where a guild channel takes a
     /// glyph in the same gutter — same row, same metrics, different leading

@@ -63,7 +63,9 @@ struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View, St
                 }
                 .padding(.horizontal, Metrics.composerControlInset)
             }
-            .glassEffect(.regular, in: .rect(cornerRadius: corner))
+            // **Interactive glass**: the plate lights up under the press, as a
+            // field in an iOS sheet does (Alex, 2026-11-17).
+            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: corner))
         } else {
             HStack(alignment: .bottom, spacing: Spacing.base) {
                 leading
@@ -79,7 +81,9 @@ struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View, St
                     .padding(.leading, Spacing.snug)
                     .padding(.trailing, Metrics.composerControlInset)
                 }
-                .glassEffect(.regular, in: .rect(cornerRadius: corner))
+                // Interactive: lights up under the press, as an iOS sheet's
+                // field does (Alex, 2026-11-17).
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: corner))
                 send
             }
         }

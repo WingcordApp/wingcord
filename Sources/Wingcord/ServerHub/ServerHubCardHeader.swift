@@ -33,13 +33,11 @@ struct ServerHubCardHeader: View {
                     .lineLimit(1)
             }
             if let accessory = widget.accessory {
-                Text(accessory)
-                    .font(.system(.caption, weight: .bold))
-                    .foregroundStyle(Palette.accent)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Palette.accent.opacity(0.16), in: .capsule)
-                    .help(widget.accessoryHelp ?? accessory)
+                ServerHubBadge(
+                    text: accessory,
+                    help: widget.accessoryHelp ?? accessory,
+                    isMuted: widget.accessoryIsMuted
+                )
             }
             Spacer(minLength: Spacing.base)
             if isEditing {
@@ -47,7 +45,7 @@ struct ServerHubCardHeader: View {
                     .transition(.materialize(from: .trailing))
             } else if let expansion = widget.expansion {
                 Button("Expand", systemImage: "arrow.up.left.and.arrow.down.right") {
-                    model.serverHub.sheet = expansion
+                    model.expandServerHubWidget(expansion)
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)

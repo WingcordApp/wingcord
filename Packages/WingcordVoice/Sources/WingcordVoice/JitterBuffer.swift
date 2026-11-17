@@ -106,6 +106,11 @@ public final class JitterBuffer: @unchecked Sendable {
     /// taken, rather than waiting for packets that are not coming.
     private var gatheringSince: TimeInterval?
 
+    /// What the last pull's packet should be played as (decision 11): shorter
+    /// when the buffer holds two frames more than it needs, longer when that
+    /// was the last one in hand mid-speech.
+    private var advice: TimeStretcher.Action = .none
+
     /// Inter-arrival jitter state — RFC 3550 §6.4.1.
     private var lastTransit: Double?
     private var smoothedJitter: Double = 0
@@ -213,8 +218,10 @@ public final class JitterBuffer: @unchecked Sendable {
         if let payload = packets.removeValue(forKey: expected) {
             nextSequence = expected &+ 1
             statistics.depth = packets.count
+            advice = packets.count >= targetDepth + 2 ? .accelerate : (packets.isEmpty ? .expand : .none)
             return .packet(payload)
         }
+        advice = .none
 
         // The packet is not here. If the next one is, its redundant copy stands
         // in for it — this is the case the whole buffer exists to reach.
@@ -276,6 +283,13 @@ public final class JitterBuffer: @unchecked Sendable {
     static func depth(forJitter jitter: Double) -> Int {
         let frames = 2 * jitter / Double(OpusFormat.frameSize)
         return Int(frames.rounded(.up)) + 1
+    }
+
+    /// How to play the packet the last pull returned. See `advice`.
+    public var stretchAdvice: TimeStretcher.Action {
+        lock.lock()
+        defer { lock.unlock() }
+        return advice
     }
 
     public var snapshot: Statistics {

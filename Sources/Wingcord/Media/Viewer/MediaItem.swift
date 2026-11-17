@@ -67,6 +67,12 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
     /// timeline — for the player's faces, markers and timeline comments
     /// (docs/CLIPS-PRESENCE.md, D16). Nil for every other video.
     var clip: AttachmentClip?
+    /// A GIF that is an MP4 (a `gifv` from Tenor or Giphy): played muted and
+    /// looping, with no transport, as an animation rather than a video.
+    var loopsSilently = false
+    /// The GIF as the account's favourites key it, for the viewer's star
+    /// (Alex, 2026-11-17). Nil for everything that isn't a GIF.
+    var favoriteGIF: GIF? = nil
 
     /// The widths the proxy is asked for.
     ///
@@ -97,6 +103,10 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
     }
 
     var isVideo: Bool { kind == .video }
+
+    /// Played in AVKit's own player (decision 24): every video but a clip,
+    /// whose bar carries its marks, and a GIF's MP4, which has no bar.
+    var usesSystemPlayer: Bool { isVideo && clip == nil && !loopsSilently }
 
     /// Builds an item from an attachment, or nil when it is not something the
     /// viewer can show.
@@ -188,6 +198,16 @@ nonisolated struct MediaViewerRequest: Equatable, Sendable {
     /// be the same two fields three times.
     var authorName: String
     var sentAt: Date
+    /// Where the opened video picks up: the place the chat's own player had
+    /// reached when it was double-clicked (decision 24).
+    var startsAt: (item: AttachmentID, seconds: Double)? = nil
+
+    static func == (lhs: MediaViewerRequest, rhs: MediaViewerRequest) -> Bool {
+        lhs.items == rhs.items && lhs.index == rhs.index && lhs.messageID == rhs.messageID
+            && lhs.channelID == rhs.channelID && lhs.origin == rhs.origin && lhs.authorName == rhs.authorName
+            && lhs.sentAt == rhs.sentAt && lhs.startsAt?.item == rhs.startsAt?.item
+            && lhs.startsAt?.seconds == rhs.startsAt?.seconds
+    }
 
     var current: MediaItem? {
         items.indices.contains(index) ? items[index] : nil

@@ -17,6 +17,11 @@ extension DiscordREST {
                 route: "guilds/{id}/space",
                 as: GuildSpaceDTO.self
             ).domain(guildID: guildID)
+        } catch Failure.notFound {
+            // What a 404 becomes in `requestData`: Discord's "Unknown Guild
+            // Space" (10142). Read as an error, it showed "didn't load, check
+            // your connection" on servers that simply have no hub.
+            return nil
         } catch Failure.api(let status, _, _) where status == 404 {
             return nil
         }

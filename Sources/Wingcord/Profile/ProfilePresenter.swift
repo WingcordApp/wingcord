@@ -521,7 +521,10 @@ extension AppModel {
     ///
     /// Derived from `escapeLayer` rather than kept as a second list. Two lists
     /// of "what is on top" is how the next layer added gets into one of them.
-    var isWindowCovered: Bool { escapeLayer != nil }
+    /// **The media viewer too**: it answers Escape itself rather than through
+    /// an escape layer, so the transcript under it went on setting its I-beam
+    /// and pointing hand over the viewer's controls (Alex, 2026-11-17).
+    var isWindowCovered: Bool { escapeLayer != nil || mediaViewer != nil }
 
     /// Whether `layer` is covered by something above it.
     ///

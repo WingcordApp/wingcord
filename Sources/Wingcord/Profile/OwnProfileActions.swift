@@ -513,3 +513,24 @@ private struct OwnProfileDivider: View {
             .accessibilityHidden(true)
     }
 }
+
+/// The status editor in a popover on the bubble itself (Alex, 2026-11-17:
+/// "pressing on this thing in my profile does nothing"). The card's own copy
+/// sits at its foot, and on a card that scrolls it opened out of sight.
+struct OwnCustomStatusPopover: View {
+    var actions: OwnProfileActions
+    var close: () -> Void
+
+    var body: some View {
+        CustomStatusEditor(
+            status: actions.customStatus,
+            commit: {
+                actions.setCustomStatus($0)
+                close()
+            },
+            cancel: close
+        )
+        .padding(Spacing.margin)
+        .frame(width: 300)
+    }
+}

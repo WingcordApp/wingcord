@@ -18,7 +18,8 @@ extension DiscordREST {
     public func recordPlayedSounds(
         _ plays: [(soundID: String, at: Date)], now: Date = .now
     ) async throws -> SoundFrecency {
-        let blob = try await frecencySettings()
+        let blob = try await fetchFrecencySettings()
+        frecencyBlob = nil // a write starts fresh and leaves no stale copy
         var played = SoundFrecency(history: FrecencyProto.playedSoundHistory(base64: blob), now: now)
         for play in plays { played.track(play.soundID, at: play.at) }
         struct Body: Encodable { var settings: String }
@@ -37,7 +38,8 @@ extension DiscordREST {
     /// - Returns: the favourites as written, or nil when Discord's limit of
     ///   250 refused the star and nothing was written.
     public func setFavoriteSound(_ soundID: UInt64, favorite: Bool) async throws -> SoundboardFavorites? {
-        let blob = try await frecencySettings()
+        let blob = try await fetchFrecencySettings()
+        frecencyBlob = nil // a write starts fresh and leaves no stale copy
         let data = Data(base64Encoded: blob, options: .ignoreUnknownCharacters) ?? Data()
         var favorites = FrecencyProto.favoriteSounds(in: data)
         if favorite {

@@ -120,6 +120,11 @@ struct WingcordApp: App {
                 .presentsCallFullScreen()
                 .presentsMedia()
                 .presentsMessageActions()
+                // **Before the profiles**, so a profile opened from one of its
+                // rows comes up over it (decision 22).
+                // The running activity, small, while its own place is off screen.
+                .presentsActivityPictureInPicture()
+                .presentsServerHubLeaderboard()
                 .presentsProfiles()
                 // **After the profiles, so it draws over them.** A game profile
                 // is opened from a tile inside the full profile and has to sit

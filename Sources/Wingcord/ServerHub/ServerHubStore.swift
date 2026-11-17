@@ -17,6 +17,9 @@ final class ServerHubStore {
     var missing: Set<GuildID> = []
     var loading: Set<GuildID> = []
     var failed: Set<GuildID> = []
+    /// Of `failed`, the ones the network failed (no answer at all), the only
+    /// case the page tells the reader to check their connection.
+    var offline: Set<GuildID> = []
     /// What each widget shows, by widget id.
     var hydrations: [String: ServerHubHydrationState] = [:]
     /// The widgets each server can add, once Add Widget has asked.
@@ -26,6 +29,10 @@ final class ServerHubStore {
     /// The sheet over the page. One at a time (HIG: "Display only one sheet at
     /// a time from the main interface").
     var sheet: ServerHubSheet?
+    /// The leaderboard open full size, by widget id: a layer of its own under
+    /// the profiles (`ServerHubLeaderboardPresenter`), so a profile opened
+    /// from one of its rows comes up on top (decision 22).
+    var expandedLeaderboard: String?
     /// Servers whose publish or switch is on its way to Discord.
     var settingsInFlight: Set<GuildID> = []
     /// A whiteboard starting, so its button can say so.
@@ -48,5 +55,6 @@ final class ServerHubStore {
         }
         missing.remove(guildID)
         failed.remove(guildID)
+        offline.remove(guildID)
     }
 }

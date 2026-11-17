@@ -19,6 +19,11 @@ struct GIFBoard: View {
     /// Whether the reader's favourites lead the landing. Discord's Choose GIF
     /// for an avatar or a banner leaves them out (`hideFavorites`).
     var showsFavorites = true
+    /// False inside the expression picker, whose header row has the one
+    /// search field for every tab (decision 12).
+    var showsSearchField = true
+    /// Room for chrome floating over the board from outside it.
+    var topInset: CGFloat = 0
     var onPick: (GIF) -> Void
 
     @Environment(AppModel.self) private var model
@@ -29,7 +34,8 @@ struct GIFBoard: View {
     /// pass underneath. The back header only exists inside a scope.
     private var chromeHeight: CGFloat {
         let header = store.scope == nil ? 0 : Metrics.control + Spacing.base
-        return Spacing.base + header + Metrics.control + Spacing.base
+        let field = showsSearchField ? Metrics.control + Spacing.base : 0
+        return topInset + Spacing.base + header + field
     }
 
     var body: some View {
@@ -41,10 +47,10 @@ struct GIFBoard: View {
             GlassEffectContainer(spacing: Spacing.base) {
                 VStack(spacing: Spacing.base) {
                     if let scope = store.scope { scopeHeader(scope) }
-                    searchField
+                    if showsSearchField { searchField }
                 }
                 .padding(.horizontal, Spacing.snug)
-                .padding(.top, Spacing.base)
+                .padding(.top, Spacing.base + topInset)
             }
         }
         .task {
@@ -117,7 +123,7 @@ struct GIFBoard: View {
                 ) { await store.openTrending() }
 
                 ForEach(store.categories) { category in
-                    tile(title: category.name, icon: nil, art: category.previewURL) {
+                    tile(title: category.name, icon: nil, art: category.previewURL, video: category.videoURL) {
                         await store.open(category: category.name)
                     }
                 }
@@ -139,6 +145,7 @@ struct GIFBoard: View {
         title: String,
         icon: String?,
         art: URL?,
+        video: URL? = nil,
         open: @escaping () async -> Void
     ) -> some View {
         Button {
@@ -153,12 +160,11 @@ struct GIFBoard: View {
                     .aspectRatio(contentMode: .fill)
                 }
                 .overlay {
-                    if let art {
-                        AnimatedDecoration(
-                            url: art,
-                            side: Self.tileSide,
-                            gravity: .resizeAspectFill
-                        )
+                    // A video preview plays (hardware, lazily); without one the
+                    // tile stays a still: decoding every category's GIF into
+                    // frames at once was a main-thread stall on open.
+                    if let video {
+                        LoopingVideo(url: video, isPlaying: !motion.reduceMotion)
                     }
                 }
                 .overlay {
@@ -228,7 +234,17 @@ struct GIFBoard: View {
         Color.clear
             .aspectRatio(gif.aspectRatio, contentMode: .fit)
             .overlay {
-                if gif.isVideo, let url = gif.previewURL {
+                if let video = gif.videoURL {
+                    // **Video, not frames** (decision 14): the MP4 plays,
+                    // hardware-decoded, over its still, and only while the tile
+                    // is on screen (the column is lazy). No decode of a
+                    // hundred GIF frames per tile on the main thread, which is
+                    // what stalled the picker in issue #23.
+                    RemoteImage(url: gif.previewURL, side: Self.tileSide, bucket: .attachment) {
+                        Rectangle().fill(Palette.surfaceRaised)
+                    }
+                    .overlay { LoopingVideo(url: video, isPlaying: !motion.reduceMotion) }
+                } else if gif.isVideo, let url = gif.previewURL {
                     // **A video favourite plays, as Discord's picker plays it.**
                     // Its rendition is Tenor's MP4, which the image path below
                     // decodes nothing from — the tile stayed a plate for good.
@@ -251,7 +267,7 @@ struct GIFBoard: View {
                 // rather than the name. Everything on this tab is a GIF; one
                 // that turns out to be a single frame is recorded in
                 // `isKnownStill` and never asked again.
-                if !gif.isVideo, let url = gif.previewURL {
+                if !gif.isVideo, gif.videoURL == nil, let url = gif.previewURL {
                     AnimatedDecoration(
                         url: url,
                         side: Self.tileSide,

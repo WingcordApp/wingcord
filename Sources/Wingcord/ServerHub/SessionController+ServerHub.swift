@@ -35,6 +35,11 @@ extension SessionController {
                 model.sidebarRevision &+= 1
             } catch {
                 store.failed.insert(guildID)
+                if case DiscordREST.Failure.transport = error {
+                    store.offline.insert(guildID)
+                } else {
+                    store.offline.remove(guildID)
+                }
                 Self.trace("server hub \(guildID) failed: \(Self.describe(error))")
             }
         }
@@ -250,7 +255,9 @@ extension SessionController {
             model.reportActionFailure("The whiteboard isn\u{2019}t available right now.")
             return
         }
-        await launchActivity(app, in: channelID, section: "guild_space", guildID: guildID)
+        // Discord's `im()`: join the board running in the hub's channel,
+        // launch one only where none is (decision 6).
+        await startActivity(app, in: channelID, section: "guild_space", guildID: guildID)
     }
 
     /// Who may draw: Use Activities denied to @everyone in the hub's channel and

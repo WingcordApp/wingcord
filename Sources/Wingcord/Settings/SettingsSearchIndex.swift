@@ -147,6 +147,7 @@ extension SettingsSearch {
         .init(.voiceVideo, "Show a warning when Discord is not detecting audio from your mic"),
         .init(.voiceVideo, "Input Profile"),
         .init(.voiceVideo, "Echo Cancellation"),
+        .init(.voiceVideo, "Adaptive Playout (Beta)"),
         .init(.voiceVideo, "Automatic Gain Control"),
         .init(.voiceVideo, "Noise Suppression", "Reduces background noise from your mic."),
         .init(.voiceVideo, "Always preview video", "Pops up preview modal every time you turn on video"),

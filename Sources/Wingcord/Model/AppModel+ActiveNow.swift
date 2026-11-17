@@ -23,6 +23,9 @@ struct ActiveNowCard: Identifiable, Hashable, Sendable {
     /// The others in their voice room, when they are in one: their faces.
     var roomFaces: [Face] = []
     var roomCount: Int = 0
+    /// They're in an embedded activity the reader can reach: Join Activity
+    /// (decision 8).
+    var canJoinActivity = false
 
     struct Face: Hashable, Sendable {
         var url: URL?
@@ -100,6 +103,12 @@ extension AppModel {
                     card.detail += server.map { " · in \(room), \($0)" } ?? " · in a call"
                 }
             }
+            if let instance = activityInstances.instance(for: userID),
+               channelIndex[instance.location.channelID] != nil,
+               runningActivity?.applicationID != instance.applicationID
+                || runningActivity?.instance.location.channelID != instance.location.channelID {
+                card.canJoinActivity = true
+            }
             cards.append(card)
         }
         return cards.sorted {
@@ -113,6 +122,12 @@ extension AppModel {
     }
 
     /// The line under an activity: what, and for how long.
+    /// Joins the activity a friend's Active Now card offers.
+    func joinFriendActivity(_ userID: UserID) {
+        guard let instance = activityInstances.instance(for: userID) else { return }
+        joinActivityInstance(instance)
+    }
+
     static func activeNowDetail(of activity: Activity, now: Date) -> String {
         let elapsed = activity.startedAt.map { Self.activeNowElapsed(since: $0, now: now) }
         switch activity.kind {
