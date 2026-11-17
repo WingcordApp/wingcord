@@ -6,16 +6,15 @@ import WingcordVoice
 
 // MARK: - A call inside a conversation
 //
-// A band across the top of a direct message, holding the same tiles and the
-// same controls the channel stage does — and resizable, because a call in a
-// conversation is something people want *smaller* while they type and bigger
-// while they watch.
+// A band across the top of a direct message, holding the same tiles the
+// channel stage does — and resizable, because a call in a conversation is
+// something people want *smaller* while they type and bigger while they watch.
 //
-// **Opaque, edge to edge.** It was a clear-glass card floating over the
-// transcript, so messages read through the call. The band is the call's own
-// surface, the transcript is pushed down by its height rather than covered by
-// it, and a hairline closes it off — reference 22, and Alex: "the call overlay
-// could be a blur, like on [another client]".
+// **The tiles take the whole band** (Alex, 2026-11-17): the controls float over
+// their foot as one capsule of glass, FaceTime's arrangement, and show while
+// the pointer is over the call (`FloatingCallControls`). The band's ground is a
+// thick material, so the transcript scrolling under it is frosted rather than
+// read through (`CallBandGround`), and the handle at its foot shows on hover.
 struct VoiceCallOverlay: View {
     var presentation: VoicePresentation
     var effects: [UserID: String]
@@ -49,12 +48,16 @@ struct VoiceCallOverlay: View {
     @State private var drag: CGFloat = 0
     @State private var isFullHeight = false
     @State private var isGrabberHovering = false
+    /// Whether the pointer is over the band, which is when its handle shows.
+    @State private var isPointerInBand = false
 
     @Environment(\.motion) private var motion
 
     static let minimumHeight: CGFloat = 168
     static let maximumHeight: CGFloat = 460
     static let restingHeight: CGFloat = 244
+    /// The strip at the band's foot that holds the handle, under the tiles.
+    static let grabberStrip: CGFloat = 12
 
     var body: some View {
         GeometryReader { proxy in
@@ -94,24 +97,37 @@ struct VoiceCallOverlay: View {
 
     // MARK: The band
 
+    /// Whether the reader is playing the call's activity: the capsule then
+    /// sits under the game, always shown, instead of over its foot.
+    private var isPlaying: Bool { activity?.isJoined == true }
+
     private var band: some View {
-        VStack(spacing: 0) {
-            tiles
-            controls
-            grabber
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // **Transparent** (Alex, 2026-11-17): the conversation's own backdrop
-        // runs behind the call; the tiles and controls carry their own ground.
-        .overlay(alignment: .bottom) { Divider().opacity(0.6) }
-        .overlay(alignment: .bottomTrailing) {
-            HStack(spacing: Spacing.tight) {
-                CallFullScreenButton()
-                expandButton
+        tiles
+            .padding(.horizontal, Spacing.snug)
+            .padding(.top, Spacing.snug)
+            .padding(.bottom, tilesFoot)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .floatingCallControls(
+                isPinned: isPlaying,
+                lift: Self.grabberStrip + CallCapsuleMetrics.lift
+            ) {
+                controls
             }
-            .padding(Spacing.snug)
-        }
-        .animation(motion.reposition, value: isFullHeight)
+            .background { CallBandGround() }
+            .overlay(alignment: .bottom) { grabber }
+            .onHover { hovering in
+                guard isPointerInBand != hovering else { return }
+                isPointerInBand = hovering
+            }
+            .animation(motion.reposition, value: isFullHeight)
+            .animation(motion.reposition, value: isPlaying)
+    }
+
+    /// Below the tiles: the handle's strip, and — while a game is played —
+    /// the capsule's own room, so it never covers the game's foot.
+    private var tilesFoot: CGFloat {
+        guard isPlaying else { return Self.grabberStrip }
+        return Self.grabberStrip + CallCapsuleMetrics.lift + CallCapsuleMetrics.height + Spacing.base
     }
 
     private var tiles: some View {
@@ -127,37 +143,35 @@ struct VoiceCallOverlay: View {
             activity: activity,
             joinActivity: joinActivity
         )
-        .padding(.horizontal, Spacing.snug)
-        .padding(.top, Spacing.snug)
-        .frame(maxHeight: .infinity)
     }
 
     private var controls: some View {
-        CallControlRow(
+        CallControlCapsule(
             presentation: presentation,
             toggleMute: toggleMute,
             toggleDeafen: toggleDeafen,
             toggleCamera: toggleCamera,
             toggleScreenShare: toggleScreenShare,
             leave: leave
-        )
-        .padding(.horizontal, Spacing.snug)
-        .padding(.top, Spacing.snug)
+        ) {
+            CallFullScreenButton()
+            CallExpandControl(isExpanded: $isFullHeight)
+        }
     }
 
     /// The handle at the foot of the band.
     ///
-    /// A pill rather than a hit area with nothing in it: an edge that can be
-    /// dragged has to say so, and a cursor change alone is a discovery nobody
-    /// makes. It brightens on hover, which is the macOS class of motion —
-    /// `hover`, fast enough that running the pointer past it leaves no trail.
+    /// **Shown only while the pointer is over the call** (Alex, 2026-11-17),
+    /// brighter over the handle itself; the strip keeps its resize cursor and
+    /// its drag whether the pill is drawn or not, so the edge is still there
+    /// for a pointer that goes straight for it.
     private var grabber: some View {
         Capsule()
             .fill(isGrabberHovering ? Palette.edgeStrong : Palette.edge)
             .frame(width: 44, height: 4)
-            .padding(.bottom, Spacing.base)
-            .padding(.top, Spacing.tight)
+            .opacity(isPointerInBand || isGrabberHovering || drag != 0 ? 1 : 0)
             .frame(maxWidth: .infinity)
+            .frame(height: Self.grabberStrip)
             .contentShape(.rect)
             .onHover { hovering in
                 guard isGrabberHovering != hovering else { return }
@@ -169,6 +183,7 @@ struct VoiceCallOverlay: View {
             }
             .gesture(resize)
             .animation(motion.hover, value: isGrabberHovering)
+            .animation(motion.standard, value: isPointerInBand)
             .accessibilityLabel(Text("Resize the call"))
             .accessibilityValue(Text("\(Int(height)) points tall"))
             .accessibilityAdjustableAction { direction in
@@ -210,26 +225,6 @@ struct VoiceCallOverlay: View {
             }
     }
 
-    /// Fills the pane, and comes back.
-    private var expandButton: some View {
-        Button {
-            isFullHeight.toggle()
-        } label: {
-            // Vertical, because the band grows down the conversation; the
-            // diagonal arrows are full screen's, as they are across macOS.
-            Image(symbol: isFullHeight
-                ? "rectangle.compress.vertical"
-                : "rectangle.expand.vertical")
-                .font(.system(.footnote, weight: .semibold))
-                .foregroundStyle(Ink.primary)
-                .frame(width: Metrics.compactControl, height: Metrics.compactControl)
-                .contentShape(.circle)
-        }
-        .buttonStyle(.plain)
-        .background { Circle().fill(Palette.selectionFill) }
-        .help(isFullHeight ? "Shrink the call" : "Fill the conversation")
-        .accessibilityLabel(Text(isFullHeight ? "Shrink the call" : "Fill the conversation"))
-    }
 }
 
 /// Reads the store and shows the panel only for the conversation it belongs to.

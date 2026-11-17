@@ -302,23 +302,28 @@ extension SessionController {
     /// Silent on failure: the group keeps its header and shows nothing under
     /// it, which is what a channel the reader cannot fetch should look like.
     func loadUnreadGroup(_ channelID: ChannelID) {
-        // Already loaded, either here or by the transcript. `hasMoreHistory` is
-        // not consulted — any page at all is enough for a summary.
         guard model.inbox.unreadBodies[channelID] == nil,
-              model.messages(in: channelID)?.messages.isEmpty != false
+              !model.hasLoadedUnreads(in: channelID)
         else { return }
         // **A ceiling on how many run at once, and it is what stops the storm.**
         // `LazyVStack` materialises rows ahead of the viewport, so on an account
         // with sixty unread channels a dozen groups can appear in one pass and
         // ask together — a dozen history pages through one rate-limit bucket,
-        // each landing and invalidating the list. Past the cap a group simply
-        // draws its header with nothing under it and asks again the next time it
-        // appears, which is what scrolling to it does.
-        guard unreadGroupFetches.count < Self.concurrentUnreadFetches else { return }
-        guard unreadGroupFetches.insert(channelID).inserted else { return }
+        // each landing and invalidating the list. Past the cap a group waits
+        // its turn in `pendingUnreadGroups` and starts when one ahead lands.
+        guard !unreadGroupFetches.contains(channelID) else { return }
+        guard unreadGroupFetches.count < Self.concurrentUnreadFetches else {
+            if !pendingUnreadGroups.contains(channelID) { pendingUnreadGroups.append(channelID) }
+            return
+        }
+        pendingUnreadGroups.removeAll { $0 == channelID }
+        unreadGroupFetches.insert(channelID)
         Task { [weak self] in
             guard let self else { return }
-            defer { unreadGroupFetches.remove(channelID) }
+            defer {
+                unreadGroupFetches.remove(channelID)
+                startNextUnreadGroup()
+            }
             do {
                 // **Anchored on the last acknowledged message, not on the
                 // newest.** `around:` centres the page, so anchoring at the
@@ -359,6 +364,19 @@ extension SessionController {
             } catch {
                 Self.trace("inbox unread \(channelID) failed: \(Self.describe(error))")
             }
+        }
+    }
+
+    /// The next group that was turned away at the cap, while the inbox is
+    /// still open to show it.
+    private func startNextUnreadGroup() {
+        guard model.inbox.isShown else {
+            pendingUnreadGroups.removeAll()
+            return
+        }
+        while unreadGroupFetches.count < Self.concurrentUnreadFetches, !pendingUnreadGroups.isEmpty {
+            let next = pendingUnreadGroups.removeFirst()
+            loadUnreadGroup(next)
         }
     }
 }

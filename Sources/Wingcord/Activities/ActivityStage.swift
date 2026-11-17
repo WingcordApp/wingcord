@@ -14,6 +14,10 @@ import WingcordCore
 /// not drawn over this one.
 struct ActivityStageContainer: View {
     var channelID: ChannelID
+    /// The hub's whiteboard card: the activity fills the card, edge to edge,
+    /// with no bar of its own (Alex, 2026-11-17) — leaving the page leaves
+    /// the board, as Discord's does (`AppModel.leaveServerHub`).
+    var fillsCard = false
     var onHeightChange: (CGFloat) -> Void
 
     @Environment(AppModel.self) private var model
@@ -33,7 +37,7 @@ struct ActivityStageContainer: View {
     var body: some View {
         Group {
             if let activity {
-                ActivityStage(activity: activity)
+                ActivityStage(activity: activity, fillsCard: fillsCard)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                         onHeightChange(height)
                     }
@@ -45,6 +49,7 @@ struct ActivityStageContainer: View {
 
 private struct ActivityStage: View {
     var activity: RunningActivity
+    var fillsCard: Bool
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -56,21 +61,29 @@ private struct ActivityStage: View {
     private static let height: CGFloat = 420
 
     var body: some View {
-        VStack(spacing: 0) {
+        if fillsCard {
+            // The card's own shape clips it; nothing here draws an edge.
             frame
-            bar
+                .frame(height: ServerHubMetrics.whiteboardHeight)
+                .transition(.opacity)
+                .animation(motion.panel, value: activity.instance)
+        } else {
+            VStack(spacing: 0) {
+                frame
+                bar
+            }
+            .frame(height: Self.height)
+            .background(Palette.surface)
+            .clipShape(.rect(cornerRadius: Radius.glass, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
+                    .strokeBorder(Palette.hoverFill, lineWidth: 1)
+            }
+            .padding(.horizontal, Spacing.snug)
+            .padding(.bottom, Spacing.base)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(motion.panel, value: activity.instance)
         }
-        .frame(height: Self.height)
-        .background(Palette.surface)
-        .clipShape(.rect(cornerRadius: Radius.glass, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
-                .strokeBorder(Palette.hoverFill, lineWidth: 1)
-        }
-        .padding(.horizontal, Spacing.snug)
-        .padding(.bottom, Spacing.base)
-        .transition(.move(edge: .top).combined(with: .opacity))
-        .animation(motion.panel, value: activity.instance)
     }
 
     /// The web view, with the app's own artwork under it until it paints.

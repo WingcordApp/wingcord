@@ -8,6 +8,9 @@ struct WhiteboardCardModel: Equatable {
     var access: Access
     /// Running here now: the card holds it live.
     var isRunning: Bool
+    /// Running in a window of its own (Pop Out): the card says so and offers
+    /// it back.
+    var isPoppedOut = false
     var isLaunching: Bool
     /// Editing: the card shows the board's place, never a live board.
     var isEditing: Bool

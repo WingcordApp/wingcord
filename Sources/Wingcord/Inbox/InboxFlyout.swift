@@ -290,7 +290,11 @@ struct InboxFlyout: View {
             // to be asked for by somebody, and nothing else in the app asks for
             // an inbox row's avatar or embed artwork. One pass per set of
             // groups, behind the scroll gate like every other optional fetch.
-            .task(id: groups.map(\.id)) {
+            // **Keyed on the messages, not just the groups**: an Unreads
+            // group's messages land after its header, and keyed on the groups
+            // alone the pass never ran for them — every avatar in those rows
+            // stayed a letter (Alex, 2026-11-17).
+            .task(id: groups.flatMap { $0.rows.compactMap(\.card).flatMap(\.messageRows).map(\.id) }) {
                 await prefetch(groups)
             }
         }

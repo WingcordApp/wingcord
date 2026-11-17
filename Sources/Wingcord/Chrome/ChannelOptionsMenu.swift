@@ -93,6 +93,16 @@ struct ChannelOptionsMenu: View {
                 AppModel.copy("https://discord.com/channels/\(guildID.rawValue)/\(channel.id.rawValue)")
                 close()
             }
+            // Discord's `pin-channel` (never on a thread or a category): the
+            // channel moves to Pinned Channels at the top of the list.
+            let isPinned = model.isChannelPinned(channel.id)
+            FlyoutRow(
+                title: isPinned ? "Unpin Channel" : "Pin Channel to Top",
+                symbolName: isPinned ? "pin.slash" : "pin"
+            ) {
+                model.toggleChannelPin(channel.id)
+                close()
+            }
             if channel.kind.isConversation {
                 // The channel's own wallpaper, on this Mac only (REDESIGN.md R5).
                 FlyoutRow(title: "Change Background…", symbolName: "photo.on.rectangle") {

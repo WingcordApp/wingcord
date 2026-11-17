@@ -45,7 +45,9 @@ struct VoiceChannelPane: View {
     // MARK: In the room
 
     private func connected(_ presentation: VoicePresentation) -> some View {
-        VStack(spacing: Spacing.snug) {
+        let activity = model.callActivity(in: presentation.channelID)
+        let isPlaying = activity?.isJoined == true
+        return VStack(spacing: Spacing.snug) {
             VoiceTileGrid(
                 participants: presentation.participants,
                 spotlightUserID: presentation.spotlightUserID,
@@ -55,29 +57,31 @@ struct VoiceChannelPane: View {
                 attachVideo: model.attachVideo,
                 watch: model.toggleWatchingStream,
                 spotlight: model.spotlight,
-                activity: model.callActivity(in: presentation.channelID),
+                activity: activity,
                 joinActivity: model.joinCallActivity
             )
+            // A game being played keeps its foot: the capsule sits under it.
+            .padding(.bottom, isPlaying ? CallCapsuleMetrics.height + CallCapsuleMetrics.lift + Spacing.base : 0)
+            // **The controls float over the tiles' foot** (Alex, 2026-11-17),
+            // FaceTime's capsule, so the tiles get the stage's whole height.
+            .floatingCallControls(isPinned: isPlaying) {
+                CallControlCapsule(
+                    presentation: presentation,
+                    toggleMute: model.toggleVoiceMute,
+                    toggleDeafen: model.toggleVoiceDeafen,
+                    toggleCamera: model.toggleCamera,
+                    toggleScreenShare: model.toggleScreenShare,
+                    leave: model.leaveVoice
+                ) {
+                    CallFullScreenButton()
+                }
+            }
             if showsActivitySuggestion(presentation) {
                 ActivitySuggestionCard(channelID: presentation.channelID)
                     .id(presentation.channelID)
             }
         }
         .padding(Spacing.margin)
-        .safeAreaBar(edge: .bottom, spacing: 0) {
-            CallControlRow(
-                presentation: presentation,
-                toggleMute: model.toggleVoiceMute,
-                toggleDeafen: model.toggleVoiceDeafen,
-                toggleCamera: model.toggleCamera,
-                toggleScreenShare: model.toggleScreenShare,
-                leave: model.leaveVoice
-            )
-            .frame(maxWidth: .infinity)
-            .overlay(alignment: .trailing) { CallFullScreenButton() }
-            .padding(.horizontal, Spacing.margin)
-            .padding(.bottom, Spacing.margin)
-        }
     }
 
     /// Discord's condition for its activity suggestion: a server's call with

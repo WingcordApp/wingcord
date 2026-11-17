@@ -71,6 +71,16 @@ extension SessionController {
                 let answers = try await rest.hydrateGuildSpaceWidgets(guildID, widgetIDs: wanted)
                 for (id, data) in answers where wanted.contains(id) {
                     store.hydrations[id] = .loaded(data)
+                    // **The leaderboard's day, as Discord sent it**, so the
+                    // podium's rule can be checked against a real board: its
+                    // spelling decided whether the podium rose (2026-11-17).
+                    if case .leaderboard(let board) = data {
+                        Self.trace(
+                            "server hub leaderboard: day_pt=\(board.dayPT ?? "nil") "
+                                + "week_start=\(Int(board.weekStart.timeIntervalSince1970)) "
+                                + "entries=\(board.entries.count) podium=\(board.isFinalDay)"
+                        )
+                    }
                 }
                 unanswered = wanted.filter { answers[$0] == nil }
                 await resolveServerHubPeople(answers.values, in: guildID)

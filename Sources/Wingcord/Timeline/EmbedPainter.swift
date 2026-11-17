@@ -40,7 +40,10 @@ nonisolated extension TimelineRowPainter {
         favorite: FavoriteBadge? = nil,
         /// Whether this card's own clip is the one currently playing, so the
         /// chip says which way the click goes.
-        isPlayingPreview: Bool = false
+        isPlayingPreview: Bool = false,
+        /// The selected part of each of the card's texts, by index into
+        /// `slot.texts` — an app's text displays select like a message's words.
+        selectedTexts: [Int: NSRange] = [:]
     ) {
         let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
         // A link's card is Discord's `.embed`, rounded 4; a Components V2
@@ -110,7 +113,9 @@ nonisolated extension TimelineRowPainter {
         // **The body's own painter**, so a description's quotes, code and
         // mentions wear the same plates as a message's. Its spoilers have no
         // click of their own, so they draw uncovered rather than unreadable.
-        for text in slot.texts {
+        for (textIndex, text) in slot.texts.enumerated() {
+            var textState = TextState()
+            textState.selectedRange = selectedTexts[textIndex]
             drawTextBlock(
                 text.block,
                 at: CGPoint(x: offset.x + text.origin.x, y: offset.y + text.origin.y),
@@ -119,7 +124,7 @@ nonisolated extension TimelineRowPainter {
                 images: images,
                 scale: scale,
                 time: clock,
-                state: TextState()
+                state: textState
             )
         }
 

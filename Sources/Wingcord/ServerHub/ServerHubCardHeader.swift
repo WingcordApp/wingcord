@@ -43,6 +43,9 @@ struct ServerHubCardHeader: View {
             if isEditing {
                 ServerHubCardEditControls(widget: widget)
                     .transition(.materialize(from: .trailing))
+            } else if case .whiteboard(let board) = widget.content, board.isRunning {
+                WhiteboardHeaderControls(board: board)
+                    .transition(.materialize(from: .trailing))
             } else if let expansion = widget.expansion {
                 Button("Expand", systemImage: "arrow.up.left.and.arrow.down.right") {
                     model.expandServerHubWidget(expansion)

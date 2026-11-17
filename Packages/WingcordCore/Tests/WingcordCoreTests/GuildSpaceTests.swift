@@ -145,6 +145,30 @@ struct GuildSpaceLeaderboardTests {
         board.dayPT = "2027-01-12"
         #expect(!board.isFinalDay)
     }
+
+    /// Discord reads `day_pt` with `new Date()`, and its own fixtures write a
+    /// full timestamp — which this used to refuse, leaving the podium down.
+    @Test("The podium rises on a day_pt written as a full timestamp", arguments: [
+        "2027-01-15T00:00:00.000Z",
+        "2027-01-15T00:00:00Z",
+        "2027-01-15T08:00:00+00:00",
+    ])
+    func finalDayFromTimestamp(dayPT: String) {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        var board = board(entries: 3, weekStart: formatter.date(from: "2027-01-09")!)
+        board.dayPT = dayPT
+        #expect(board.isFinalDay)
+    }
+
+    @Test("A day_pt that isn't a date never raises the podium")
+    func finalDayRejectsNonsense() {
+        var board = board(entries: 3, weekStart: Date(timeIntervalSince1970: 1_800_000_000))
+        board.dayPT = "sometime"
+        #expect(!board.isFinalDay)
+    }
 }
 
 struct GuildSpaceFormatTests {

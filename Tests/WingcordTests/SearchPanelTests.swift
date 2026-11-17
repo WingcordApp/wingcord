@@ -327,13 +327,76 @@ struct SearchPanelTests {
     @Test("Suggestions come from the selected scope and change with it")
     func suggestionsFollowTheScope() {
         let model = peopled()
-        let here = model.searchSuggestions(for: "from: ")
+        let here = model.searchSuggestions(for: "from: al")
         #expect(here.contains { $0.detail == "alexsample" })
 
         // Another server, whose roster this account has not loaded.
         model.selectGuild(otherGuildID)
-        let there = model.searchSuggestions(for: "from: ")
+        let there = model.searchSuggestions(for: "from: al")
         #expect(!there.contains { $0.detail == "alexsample" })
+    }
+
+    /// **Discord's list, not the roster** (Alex, 2026-11-17: it "shows all
+    /// users"): an empty `from:` offers who talked here lately, newest first,
+    /// then who talked elsewhere in the server — and never anybody blocked.
+    @Test("An empty from: offers recent authors, here first, newest first")
+    func emptyFromOffersRecentAuthors() {
+        let model = model()
+        let elsewhere = ChannelID(rawValue: 2002)
+        var index = model.channelIndex
+        index.replaceChannels(
+            [
+                Channel(id: channelID, kind: .text, guildID: guildID, name: "general", position: 0),
+                Channel(id: elsewhere, kind: .text, guildID: guildID, name: "random", position: 1),
+            ],
+            inGuild: guildID
+        )
+        model.channelIndex = index
+        for (raw, name) in [(11, "olderhere"), (12, "newerhere"), (13, "otherroom"), (14, "blockedone"), (15, "silentone")] {
+            let id = UserID(rawValue: UInt64(raw))
+            model.users[id] = User(id: id, username: name)
+            model.members[guildID, default: [:]][id] = Member(userID: id, roleIDs: [])
+        }
+        model.blockedUserIDs = [UserID(rawValue: 14)]
+        var here = MessageBox()
+        here.messages = [
+            searchMessage(1, by: 11, in: channelID),
+            searchMessage(2, by: 14, in: channelID),
+            searchMessage(3, by: 12, in: channelID),
+        ]
+        model.setMessages(here, in: channelID)
+        var there = MessageBox()
+        there.messages = [searchMessage(4, by: 13, in: elsewhere)]
+        model.setMessages(there, in: elsewhere)
+
+        let handles = model.searchSuggestions(for: "from:").compactMap(\.detail)
+        #expect(handles == ["newerhere", "olderhere", "otherroom"])
+        #expect(model.searchSuggestionTitle(for: "from:") == "From User")
+    }
+
+    @Test("A typed from: ranks names it starts before names it's in, and me puts the reader first")
+    func typedFromRanksAndHonoursMe() {
+        let model = model()
+        let reader = UserID(rawValue: 1)
+        model.currentUserID = reader
+        for (raw, name) in [(1, "readerself"), (21, "zmeadow"), (22, "meridian"), (23, "amelia")] {
+            let id = UserID(rawValue: UInt64(raw))
+            model.users[id] = User(id: id, username: name)
+            model.members[guildID, default: [:]][id] = Member(userID: id, roleIDs: [])
+        }
+        let ranked = model.searchSuggestions(for: "from: me").compactMap(\.detail)
+        #expect(ranked.first == "readerself")
+        #expect(ranked.dropFirst().first == "meridian")
+        #expect(ranked.contains("amelia"))
+    }
+
+    private func searchMessage(_ id: UInt64, by author: UInt64, in channel: ChannelID) -> Message {
+        Message(
+            id: MessageID(rawValue: id << 22),
+            channelID: channel,
+            authorID: UserID(rawValue: author),
+            content: "m\(id)"
+        )
     }
 
     /// An empty field offers the grammar itself, which is what Discord's own
@@ -370,6 +433,10 @@ struct SearchPanelTests {
         let member = UserID(rawValue: 4_242)
         model.users[member] = User(id: member, username: "robinresting")
         model.members[guildID] = [member: Member(userID: member, roleIDs: [])]
+        // Discord's bare `from:` offers who talked here lately.
+        var box = MessageBox()
+        box.messages = [searchMessage(1, by: 4_242, in: channelID)]
+        model.setMessages(box, in: channelID)
 
         model.toggleSearch()
         model.searchText = "from:"

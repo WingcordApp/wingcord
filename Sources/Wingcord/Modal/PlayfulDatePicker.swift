@@ -40,28 +40,18 @@ struct PlayfulDatePicker: View {
         Button {
             isOpen.toggle()
         } label: {
-            HStack(spacing: Spacing.base) {
-                Image(systemName: "calendar")
-                    .foregroundStyle(Palette.accent)
-                Text(selection, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
-                    .foregroundStyle(Ink.primary)
-                    .lineLimit(1)
-                    .contentTransition(.numericText())
-                if showsTime {
-                    Text(verbatim: "·")
-                        .foregroundStyle(Ink.secondary)
-                    Image(systemName: "clock")
-                        .foregroundStyle(Palette.accent)
-                    Text(selection, format: .dateTime.hour().minute())
-                        .foregroundStyle(Ink.primary)
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
+            // **Whole words, then fewer of them**, rather than the day cut to
+            // "Tue, 17 Nov 20…". Looking ahead the year goes first (a schedule
+            // is days away; the year is never news); looking back — a search —
+            // the weekday goes first, because last year is a real answer there.
+            ViewThatFits(in: .horizontal) {
+                well(date: .dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
+                if looksBack {
+                    well(date: .dateTime.day().month(.abbreviated).year())
+                } else {
+                    well(date: .dateTime.weekday(.abbreviated).day().month(.abbreviated))
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.down")
-                    .font(.system(.caption, weight: .bold))
-                    .foregroundStyle(Ink.secondary)
-                    .rotationEffect(.degrees(isOpen ? 180 : 0))
+                well(date: .dateTime.day().month(.abbreviated))
             }
             .font(.system(.body, weight: .medium))
             .padding(.horizontal, Spacing.snug)
@@ -90,6 +80,35 @@ struct PlayfulDatePicker: View {
 }
 
 extension PlayfulDatePicker {
+    /// The well's one line, with the day written as `date` writes it.
+    func well(date: Date.FormatStyle) -> some View {
+        HStack(spacing: Spacing.base) {
+            Image(systemName: "calendar")
+                .foregroundStyle(Palette.accent)
+            Text(selection, format: date)
+                .foregroundStyle(Ink.primary)
+                .lineLimit(1)
+                .fixedSize()
+                .contentTransition(.numericText())
+            if showsTime {
+                Text(verbatim: "\u{00B7}")
+                    .foregroundStyle(Ink.secondary)
+                Image(systemName: "clock")
+                    .foregroundStyle(Palette.accent)
+                Text(selection, format: .dateTime.hour().minute())
+                    .foregroundStyle(Ink.primary)
+                    .monospacedDigit()
+                    .fixedSize()
+                    .contentTransition(.numericText())
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.down")
+                .font(.system(.caption, weight: .bold))
+                .foregroundStyle(Ink.secondary)
+                .rotationEffect(.degrees(isOpen ? 180 : 0))
+        }
+    }
+
     /// The month's days in weeks — blanks before the first and after the last,
     /// the week starting where the reader's calendar starts it.
     static func days(of month: Date, calendar: Calendar) -> [Date?] {

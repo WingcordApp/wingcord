@@ -85,21 +85,23 @@ private struct CallFullScreenView: View {
     private static let idleTimeout = Duration.seconds(2)
 
     var body: some View {
-        VStack(spacing: Spacing.snug) {
-            VoiceTileGrid(
-                participants: presentation.participants,
-                spotlightUserID: presentation.spotlightUserID,
-                effects: model.soundboardEffectNames,
-                cameraSession: cameraSession,
-                selfUserID: model.currentUserID,
-                attachVideo: model.attachVideo,
-                watch: model.toggleWatchingStream,
-                spotlight: model.spotlight,
-                activity: model.callActivity(in: presentation.channelID),
-                joinActivity: model.joinCallActivity
-            )
-            .environment(\.isCallIdle, isIdle)
-            controls
+        VoiceTileGrid(
+            participants: presentation.participants,
+            spotlightUserID: presentation.spotlightUserID,
+            effects: model.soundboardEffectNames,
+            cameraSession: cameraSession,
+            selfUserID: model.currentUserID,
+            attachVideo: model.attachVideo,
+            watch: model.toggleWatchingStream,
+            spotlight: model.spotlight,
+            activity: model.callActivity(in: presentation.channelID),
+            joinActivity: model.joinCallActivity
+        )
+        .environment(\.isCallIdle, isIdle)
+        // **Floating over the tiles' foot**, FaceTime's capsule, so the call
+        // gets the whole screen and the controls fade with the pointer.
+        .overlay(alignment: .bottom) {
+            controls.padding(.bottom, CallCapsuleMetrics.lift)
         }
         .padding(Spacing.margin)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -118,8 +120,9 @@ private struct CallFullScreenView: View {
                 let deadline = pointer.lastMove.advanced(by: Self.idleTimeout)
                 guard (try? await Task.sleep(until: deadline, clock: .continuous)) != nil else { return }
                 guard ContinuousClock.now >= pointer.lastMove.advanced(by: Self.idleTimeout) else { continue }
-                // Resting on the controls is using them.
-                if pointer.isOnControls {
+                // Resting on the controls is using them, and so is a flyout
+                // raised from them.
+                if pointer.isOnControls || pointer.isEngaged {
                     pointer.lastMove = .now
                     continue
                 }
@@ -134,17 +137,20 @@ private struct CallFullScreenView: View {
     }
 
     private var controls: some View {
-        CallControlRow(
+        CallControlCapsule(
             presentation: presentation,
             toggleMute: model.toggleVoiceMute,
             toggleDeafen: model.toggleVoiceDeafen,
             toggleCamera: model.toggleCamera,
             toggleScreenShare: model.toggleScreenShare,
             leave: model.leaveVoice
-        )
-        .frame(maxWidth: .infinity)
-        .overlay(alignment: .trailing) { CallFullScreenButton() }
+        ) {
+            CallFullScreenButton()
+        }
         .onHover { pointer.isOnControls = $0 }
+        .onPreferenceChange(CallControlsEngagedKey.self) { engaged in
+            pointer.isEngaged = engaged
+        }
         .opacity(isIdle ? 0 : 1)
         .animation(motion.standard, value: isIdle)
     }
@@ -154,32 +160,28 @@ private struct CallFullScreenView: View {
 private final class PointerActivity {
     var lastMove = ContinuousClock.now
     var isOnControls = false
+    /// A flyout raised from the controls is open.
+    var isEngaged = false
 }
 
-/// Discord's Full Screen / Exit Full Screen: a small round button beside a
-/// call's controls. Escape answers it while the call is full screen and
-/// nothing is open over it.
+/// Discord's Full Screen / Exit Full Screen, at the end of the call's capsule.
+/// Escape answers it while the call is full screen and nothing is open over it.
 struct CallFullScreenButton: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let isFullScreen = model.isCallFullScreen
-        let title = isFullScreen ? "Exit Full Screen" : "Full Screen"
-        Button {
-            if isFullScreen { model.exitCallFullScreen() } else { model.enterCallFullScreen() }
-        } label: {
-            Image(systemName: isFullScreen
+        CallCapsuleAccessory(
+            title: isFullScreen ? "Exit Full Screen" : "Full Screen",
+            systemImage: isFullScreen
                 ? "arrow.down.right.and.arrow.up.left"
-                : "arrow.up.left.and.arrow.down.right")
-                .font(.system(.footnote, weight: .semibold))
-                .foregroundStyle(Ink.primary)
-                .frame(width: Metrics.compactControl, height: Metrics.compactControl)
-                .contentShape(.circle)
-        }
-        .buttonStyle(.plain)
-        .background { Circle().fill(Palette.selectionFill) }
-        .help(title)
-        .accessibilityLabel(Text(title))
+                : "arrow.up.left.and.arrow.down.right",
+            action: toggle
+        )
         .cancelAction(unless: !isFullScreen || model.isCovered(.callFullScreen))
+    }
+
+    private func toggle() {
+        if model.isCallFullScreen { model.exitCallFullScreen() } else { model.enterCallFullScreen() }
     }
 }

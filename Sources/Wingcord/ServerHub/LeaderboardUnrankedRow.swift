@@ -27,8 +27,23 @@ struct LeaderboardUnrankedRow: View {
         }
         .padding(.horizontal, Spacing.base)
         .padding(.vertical, Spacing.base)
-        .background(Palette.accent.opacity(0.12), in: .rect(cornerRadius: Radius.chip))
+        // **Opaque** (Alex, 2026-11-17): it floats over the list's foot as
+        // Discord's bar does, and see-through, the rows scrolling under it read
+        // through its words. Discord's own: the accent fading out to the right
+        // over the raised surface, with a hairline.
+        .background {
+            RoundedRectangle(cornerRadius: Radius.chip)
+                .fill(
+                    LinearGradient(
+                        colors: [Palette.accent.opacity(0.16), Palette.accent.opacity(0.04)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .background(RoundedRectangle(cornerRadius: Radius.chip).fill(Palette.surfaceRaised))
+        }
         .overlay { RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Palette.accent.opacity(0.3), lineWidth: 1) }
+        .shadow(color: .black.opacity(0.22), radius: 8, y: -2)
         .padding(.top, Spacing.tight)
         .accessibilityElement(children: .combine)
     }

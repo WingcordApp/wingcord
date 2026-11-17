@@ -201,6 +201,7 @@ extension AppModel {
                 rank: entry.rank,
                 name: isHidden ? "Blocked User" : voiceName(of: entry.userID, inGuild: guildID),
                 nameColor: isHidden ? nil : voiceNameColor(of: entry.userID, inGuild: guildID),
+                nameFont: isHidden ? nil : user.flatMap { cosmetics(of: $0)?.displayNameStyle?.font },
                 avatarURL: isHidden ? nil : user.flatMap { avatarURL(for: $0, side: 32) },
                 largeAvatarURL: isHidden || entry.rank > 3 ? nil : user.flatMap { avatarURL(for: $0, side: 72) },
                 monogram: user?.monogram ?? "?",
@@ -214,8 +215,10 @@ extension AppModel {
                 moreGames: isHidden ? 0 : max(0, entry.applicationCount - games.count),
                 isReader: entry.userID == reader,
                 isHidden: isHidden,
-                playedSummary: isHidden || entry.applicationIDs.isEmpty ? nil : "Played "
-                    + entry.applicationIDs.prefix(3).map(serverHubGameName).formatted(.list(type: .and))
+                playedSummary: isHidden ? nil : Self.playedSummary(
+                    entry.applicationIDs.prefix(3).map(serverHubGameName),
+                    total: entry.applicationCount
+                )
             )
         }
         // Discord's podium: from the last day on, once three are on the board.
@@ -246,6 +249,26 @@ extension AppModel {
         if calendar.isDateInToday(date) { return "today at \(time)" }
         if calendar.isDateInYesterday(date) { return "yesterday at \(time)" }
         return "on " + date.formatted(date: .numeric, time: .shortened)
+    }
+
+    /// Discord's games tooltip (`tf` in its hub module), word for word: every
+    /// game named while there are three or fewer, otherwise the first two and
+    /// how many more.
+    static func playedSummary(_ names: [String], total: Int) -> String {
+        let total = max(total, names.count)
+        switch names.count {
+        case 0:
+            return "No games played yet"
+        case 1:
+            return "Played \(names[0])"
+        case 2 where total == 2:
+            return "Played \(names[0]) and \(names[1])"
+        case 3 where total == 3:
+            return "Played \(names[0]), \(names[1]) and \(names[2])"
+        default:
+            let others = total - 2
+            return "Played \(names[0]), \(names[1]) and \(others) \(others == 1 ? "other" : "others")"
+        }
     }
 
     static func leaderboardSymbol(_ stat: GuildSpaceLeaderboard.Stat) -> String {
@@ -385,10 +408,12 @@ extension AppModel {
         }
         let instance = channelID.flatMap { activityInstances.instance(of: Self.whiteboardApplicationID, in: $0) }
         let people = instance?.userIDs ?? []
+        let isRunning = channelID != nil && runningActivity?.instance.location.channelID == channelID
         return WhiteboardCardModel(
             channelID: channelID,
             access: access,
-            isRunning: channelID != nil && runningActivity?.instance.location.channelID == channelID,
+            isRunning: isRunning,
+            isPoppedOut: isRunning && isActivityPoppedOut,
             isLaunching: serverHub.launchingWhiteboard == guildID,
             isEditing: isEditing,
             drawing: people.prefix(5).map { userID in
@@ -400,7 +425,10 @@ extension AppModel {
                 )
             },
             drawingCount: people.count,
+            // Once a visit, as Discord's widget opens it on mount — never
+            // again after the reader left it.
             opensByItself: authorizedApps?.contains { $0.applicationID == Self.whiteboardApplicationID } == true
+                && !serverHub.whiteboardOpenedThisVisit.contains(guildID)
         )
     }
 

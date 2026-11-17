@@ -203,12 +203,7 @@ struct HomeRailTile: View {
             ZStack(alignment: .leading) {
                 RailIndicator(isSelected: isSelected, hasUnread: hasUnread)
 
-                // Wingcord's own icon, as the Dock shows it, in its squircle
-                // (Alex, 2026-11-17). It keeps its shape in every state: the
-                // pill beside it says selected, and a hover lifts it a touch.
-                RailAppIcon(side: side)
-                    .brightness(isHovering && !isSelected ? 0.06 : 0)
-                    .scaleEffect(isHovering ? 1.04 : 1)
+                icon
                     .overlay(alignment: .bottomTrailing) {
                         if mentionCount > 0 {
                             UnreadBadge(count: mentionCount, isMuted: false)
@@ -233,6 +228,32 @@ struct HomeRailTile: View {
         .railHoverLabel("Direct Messages", isHovered: isHovering)
         .accessibilityLabel(Text("Direct Messages"))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// The reader's choice in Appearance › Window (`RailHomeIcon`).
+    @ViewBuilder
+    private var icon: some View {
+        switch AppSettings.shared.railHomeIcon {
+        case .appIcon:
+            // Wingcord's own icon, as the Dock shows it, in its squircle
+            // (Alex, 2026-11-17). It keeps its shape in every state: the pill
+            // beside it says selected, and a hover lifts it a touch.
+            RailAppIcon(side: side)
+                .brightness(isHovering && !isSelected ? 0.06 : 0)
+                .scaleEffect(isHovering ? 1.04 : 1)
+        case .wings:
+            // The three feathers off the app icon, white on the rail's own
+            // ground, morphing from circle to squircle like every server tile.
+            WingsShape()
+                .fill(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(Ink.secondary))
+                .frame(width: side * 0.58, height: side * 0.58)
+                .frame(width: side, height: side)
+                .background(Palette.surfaceRaised)
+                .clipShape(.rect(
+                    cornerRadius: isSelected ? 14 : (isHovering ? 17 : side / 2),
+                    style: .continuous
+                ))
+        }
     }
 }
 

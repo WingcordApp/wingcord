@@ -32,9 +32,9 @@ struct LeaderboardPanel: View {
             .padding(.vertical, Spacing.margin)
             Rectangle().fill(Ink.quaternary).frame(height: 1)
             if case .leaderboard(let board) = widget.content {
-                ScrollView {
-                    LeaderboardCardView(board: board, rowLimit: nil)
-                }
+                // The list scrolls itself, taller here (Discord's in-modal
+                // 560), so the reader's own row can float as it does on the card.
+                LeaderboardCardView(board: board, isExpanded: true)
             } else {
                 ContentUnavailableView("Nothing to show yet", systemImage: "trophy")
                     .frame(maxHeight: .infinity)

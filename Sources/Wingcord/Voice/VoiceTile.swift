@@ -18,10 +18,11 @@ import WingcordVoice
 // the material alone lands four steps from the ground and an edgeless card reads
 // as a lighter region rather than as an object.
 //
-// **What floats over a tile is a fixed scrim, not a material** — Discord's own
-// overlay chip, black at about half with white ink in every theme. Also §4: a
-// sampled material over moving pictures churns its blur every frame, and over
-// a ground that is somebody's colour nothing else is legible on all of them.
+// **What floats over a tile is glass** (Alex, 2026-11-17: the flat black
+// scrims "look cheap"): regular glass, smoked, in a dark room — `TileGlass`.
+// The name and the game at the foot, LIVE at the top leading corner, the
+// stream's controls and the ⋯ at the top trailing one on hover, and Watch
+// Stream in the middle over a veil, so it is the one thing that reads.
 struct VoiceTile: View {
     var participant: VoiceParticipant
     /// The sound they just pressed, drawn as a chip for a beat.
@@ -55,6 +56,11 @@ struct VoiceTile: View {
             ZStack {
                 ground
                 content(in: proxy.size)
+                // **A veil while Watch Stream is offered**, so the button is
+                // what reads rather than a face behind it.
+                Color.black
+                    .opacity(isOfferingWatch ? 0.3 : 0)
+                    .allowsHitTesting(false)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipShape(.rect(cornerRadius: radius))
@@ -64,36 +70,20 @@ struct VoiceTile: View {
                     namePill
                     if let game = participant.game { gameChip(game) }
                 }
-                .padding(isCompact ? Spacing.tight : Spacing.snug)
+                .padding(chipInset)
                 .opacity(isCallIdle ? 0 : 1)
                 .animation(motion.standard, value: isCallIdle)
             }
-            .overlay(alignment: .topTrailing) {
-                HStack(spacing: Spacing.tight) {
-                    marks
-                    // Discord's ⋯ on hover: the person's menu.
-                    if isHovering, let openMenu {
-                        Button { openMenu(menuAnchor) } label: {
-                            // **A pill, the name chip's height** (Alex,
-                            // 2026-11-17): the glyph alone is three dots a few
-                            // points tall, and its capsule came out a slab.
-                            Image(systemName: "ellipsis")
-                                .font(.system(isCompact ? .caption2 : .subheadline, weight: .bold))
-                                .foregroundStyle(tileInk)
-                                .frame(width: isCompact ? 26 : 38, height: isCompact ? 18 : 26)
-                                .background { Capsule().fill(tileScrim) }
-                                .contentShape(.capsule)
-                        }
-                        .buttonStyle(.plain)
-                        .help("More")
-                        .accessibilityLabel(Text("More"))
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuAnchor = $0 }
-                        .padding(isCompact ? Spacing.tight : Spacing.snug)
-                    }
+            .overlay(alignment: .topLeading) {
+                if participant.isStreaming {
+                    CallLiveBadge(isCompact: isCompact)
+                        .padding(chipInset)
+                        .transition(.materialize(from: .topLeading, blurring: false))
                 }
             }
+            .overlay(alignment: .topTrailing) { cornerControls }
             .overlay(alignment: .top) { effectChip }
-            .overlay { watchAction }
+            .overlay { watchOffer }
         }
         .onHover { hovering in
             guard isHovering != hovering else { return }
@@ -106,16 +96,73 @@ struct VoiceTile: View {
         .animation(motion.standard, value: participant.showsVideo)
         .animation(motion.standard, value: participant.ground)
         .animation(motion.standard, value: participant.isWatched)
+        .animation(motion.standard, value: participant.isStreaming)
+        .animation(motion.hover, value: isOfferingWatch)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityLabel))
-        // **The button inside is invisible to VoiceOver**, because this tile
-        // takes its children's place. The action is what makes the share
-        // reachable without a pointer, and it carries the same words the
-        // control does.
+        // **The buttons inside are invisible to VoiceOver**, because this tile
+        // takes its children's place. The actions are what make the share and
+        // the menu reachable without a pointer, in the words the controls use.
         .accessibilityActions {
             if let watch, participant.canWatch {
                 Button(watchLabel) { watch(participant.id) }
             }
+            if let openMenu {
+                Button("More") { openMenu(menuAnchor) }
+            }
+        }
+    }
+
+    /// Between a chip and the tile's edge.
+    private var chipInset: CGFloat { isCompact ? Spacing.tight + 2 : Spacing.base + 2 }
+
+    /// Whether Watch Stream is on offer in the middle of the tile: a share
+    /// nobody here is watching yet, under the pointer.
+    private var isOfferingWatch: Bool {
+        watch != nil && participant.canWatch && !participant.isWatched && isHovering
+    }
+
+    // MARK: The corner
+
+    /// On hover: a watched stream's level and Stop Watching, then the ⋯ —
+    /// Discord's person menu. **In the corner, not the middle**, so a stream
+    /// being watched is never covered by the controls that change it.
+    @ViewBuilder
+    private var cornerControls: some View {
+        if isHovering || isStreamVolumeOpen {
+            HStack(spacing: Spacing.tight) {
+                if let watch, participant.isWatched, participant.showsVideo {
+                    Button { isStreamVolumeOpen.toggle() } label: {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .modifier(TileGlassControl(isCompact: isCompact))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stream Volume")
+                    .accessibilityLabel(Text("Stream Volume"))
+                    .popover(isPresented: $isStreamVolumeOpen, arrowEdge: .bottom) {
+                        StreamVolumeFlyout(owner: participant.id)
+                    }
+                    Button { watch(participant.id) } label: {
+                        Image(systemName: "eye.slash.fill")
+                            .modifier(TileGlassControl(isCompact: isCompact))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop Watching")
+                    .accessibilityLabel(Text("Stop Watching"))
+                }
+                if let openMenu {
+                    Button { openMenu(menuAnchor) } label: {
+                        Image(systemName: "ellipsis")
+                            .modifier(TileGlassControl(isCompact: isCompact, isWide: true))
+                    }
+                    .buttonStyle(.plain)
+                    .help("More")
+                    .accessibilityLabel(Text("More"))
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuAnchor = $0 }
+                }
+            }
+            .padding(chipInset)
+            .transition(.materialize(from: .topTrailing, blurring: false))
         }
     }
 
@@ -125,16 +172,16 @@ struct VoiceTile: View {
     @ViewBuilder
     private var watchProgress: some View {
         if participant.isWatched, !participant.showsVideo {
-            HStack(spacing: Spacing.tight) {
+            HStack(spacing: Spacing.tight + 2) {
                 ProgressView().controlSize(.small)
-                Text("Opening share…")
-                    .font(.system(isCompact ? .caption2 : .subheadline, weight: .medium))
+                Text("Opening share\u{2026}")
+                    .font(.system(isCompact ? .caption : .subheadline, weight: .semibold))
             }
-            .foregroundStyle(tileInk)
-            .padding(.horizontal, Spacing.base)
-            .padding(.vertical, Spacing.tight + 1)
-            .background { Capsule().fill(tileScrim) }
-            .padding(.bottom, isCompact ? Spacing.tight : Spacing.snug)
+            .foregroundStyle(TileGlass.ink)
+            .padding(.horizontal, Spacing.snug)
+            .padding(.vertical, Spacing.tight + 2)
+            .tileGlass()
+            .padding(.bottom, chipInset)
             .transition(.materialize(from: .bottom, blurring: false))
             .accessibilityHidden(true)
         }
@@ -150,33 +197,20 @@ struct VoiceTile: View {
     /// second socket, joins a second MLS group and starts a decode — §1.5's
     /// "opening a voice channel does not join it", one surface over: a cost
     /// like that is not something to incur by clicking near something. The tile
-    /// keeps its double-click for the stage.
-    ///
-    /// **A plain capsule**, like the name pill and `marks` beside it.
+    /// keeps its double-click for the stage. Once watched, its controls move to
+    /// the corner (`cornerControls`).
     @ViewBuilder
-    private var watchAction: some View {
-        if let watch, participant.canWatch, isHovering || isStreamVolumeOpen {
-            HStack(spacing: Spacing.tight) {
-                Button {
-                    watch(participant.id)
-                } label: {
-                    Label(watchLabel, systemImage: participant.isWatched
-                        ? "eye.slash.fill" : "play.rectangle.fill")
-                        .modifier(TileCapsule(isCompact: isCompact))
-                }
-                .labelStyle(.titleAndIcon)
-                // The stream's own sound has its own level, as Discord's does.
-                if participant.isWatched, participant.showsVideo {
-                    Button { isStreamVolumeOpen.toggle() } label: {
-                        Image(systemName: "speaker.wave.2.fill")
-                            .modifier(TileCapsule(isCompact: isCompact))
-                    }
-                    .help("Stream Volume")
-                    .accessibilityLabel(Text("Stream Volume"))
-                    .popover(isPresented: $isStreamVolumeOpen, arrowEdge: .bottom) {
-                        StreamVolumeFlyout(owner: participant.id)
-                    }
-                }
+    private var watchOffer: some View {
+        if let watch, isOfferingWatch {
+            Button { watch(participant.id) } label: {
+                Label(isCompact ? "Watch" : "Watch Stream", systemImage: "play.fill")
+                    .labelStyle(.titleAndIcon)
+                    .font(.system(isCompact ? .callout : .body, weight: .semibold))
+                    .foregroundStyle(TileGlass.ink)
+                    .padding(.horizontal, isCompact ? Spacing.snug : Spacing.margin)
+                    .frame(height: isCompact ? 28 : 34)
+                    .contentShape(.capsule)
+                    .tileGlass(isInteractive: true)
             }
             .buttonStyle(.plain)
             .transition(.materialize(from: .center, blurring: false))
@@ -276,34 +310,34 @@ struct VoiceTile: View {
 
     // MARK: The pill
 
-    /// **The pill carries the name and nothing else.** A mic glyph here as well
-    /// as in the corner is two marks for one fact, and the corner is where every
-    /// other thing that is true about somebody already goes.
+    /// The name, and the one sound state that matters most before it —
+    /// Discord's chip (its `CallTileOverlay`), as glass.
     private var namePill: some View {
-        HStack(spacing: Spacing.tight) {
-            // Discord's chip (its `CallTileOverlay`): the one sound state that
-            // matters most, the blocked and ignored marks, the platform, then
-            // the name.
+        HStack(spacing: Spacing.tight + 1) {
             ForEach(chipMarks, id: \.symbol) { mark in
                 Image(systemName: mark.symbol)
-                    .font(.system(isCompact ? .caption2 : .caption, weight: .semibold))
-                    .foregroundStyle(mark.isAlarm ? Palette.destructive : tileInk)
+                    .font(.system(isCompact ? .caption2 : .caption, weight: .bold))
+                    .foregroundStyle(mark.isAlarm ? Palette.destructive : TileGlass.ink)
                     .accessibilityHidden(true)
             }
             Text(participant.isSelf ? "\(participant.displayName) (You)" : participant.displayName)
                 .font(nameFont)
-                .foregroundStyle(tileInk)
+                .foregroundStyle(TileGlass.ink)
                 .lineLimit(1)
         }
-        .padding(.horizontal, isCompact ? Spacing.tight + 2 : Spacing.base)
-        .padding(.vertical, isCompact ? 2 : Spacing.tight + 1)
-        .background { Capsule().fill(tileScrim) }
+        .padding(.horizontal, isCompact ? Spacing.tight + 3 : Spacing.base + 2)
+        .frame(height: chipHeight)
+        .tileGlass()
     }
+
+    /// The name chip's height, which every chip and control on the tile
+    /// shares, so they read as one family.
+    private var chipHeight: CGFloat { isCompact ? 20 : 26 }
 
     /// The face they chose for their name, at the chip's size — or the
     /// system's, which is nearly everybody.
     private var nameFont: Font {
-        let textStyle: Font.TextStyle = isCompact ? .caption2 : .subheadline
+        let textStyle: Font.TextStyle = isCompact ? .caption : .subheadline
         let size = NSFont.preferredFont(forTextStyle: textStyle.nsTextStyle).pointSize
         return participant.nameFont
             .flatMap { DisplayNameFontRegistry.font($0, size: size) }
@@ -314,52 +348,24 @@ struct VoiceTile: View {
     /// Discord's game chip: the game's icon, and its name where the tile has
     /// room for it (its `hideApplicationName` on narrow tiles).
     private func gameChip(_ game: VoiceGame) -> some View {
-        HStack(spacing: Spacing.tight) {
+        HStack(spacing: Spacing.tight + 1) {
             RemoteImage(url: game.iconURL, side: 32, bucket: .artwork) {
-                Image(systemName: "gamecontroller.fill").foregroundStyle(Ink.tertiary)
+                Image(systemName: "gamecontroller.fill").foregroundStyle(TileGlass.ink.opacity(0.7))
             }
             .frame(width: isCompact ? 12 : 16, height: isCompact ? 12 : 16)
             .clipShape(.rect(cornerRadius: 4, style: .continuous))
             if !isCompact {
                 Text(game.name)
                     .font(.system(.subheadline, weight: .semibold))
-                    .foregroundStyle(tileInk)
+                    .foregroundStyle(TileGlass.ink)
                     .lineLimit(1)
             }
         }
         .padding(.horizontal, isCompact ? Spacing.tight + 2 : Spacing.base)
-        .padding(.vertical, isCompact ? 2 : Spacing.tight + 1)
-        .background { Capsule().fill(tileScrim) }
+        .frame(height: chipHeight)
+        .tileGlass()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(game.name))
-    }
-
-    // MARK: Marks
-
-    /// What is true about them, in the corner. Deafened wins over muted: a
-    /// deafened person cannot hear you, which is the more useful fact, and
-    /// drawing both is two glyphs saying one thing.
-    @ViewBuilder
-    private var marks: some View {
-        let symbols = markSymbols
-        if !symbols.isEmpty {
-            HStack(spacing: Spacing.tight) {
-                ForEach(symbols, id: \.self) { symbol in
-                    Image(symbol: symbol)
-                        .font(.system(.caption, weight: .semibold))
-                        .foregroundStyle(
-                            symbol == "rectangle.inset.filled.on.rectangle"
-                                ? AnyShapeStyle(Palette.presenceOnline)
-                                : AnyShapeStyle(Palette.destructive)
-                        )
-                }
-            }
-            .padding(.horizontal, Spacing.base - 2)
-            .padding(.vertical, Spacing.tight + 1)
-            .background { Capsule().fill(tileScrim) }
-            .padding(isCompact ? Spacing.tight : Spacing.snug)
-            .transition(.materialize(from: .topTrailing, blurring: false))
-        }
     }
 
     /// Discord's order for the chip: server-deafened, then server-muted, then
@@ -384,14 +390,6 @@ struct VoiceTile: View {
         return marks
     }
 
-    private var markSymbols: [String] {
-        var symbols: [String] = []
-        if participant.isStreaming {
-            symbols.append("rectangle.inset.filled.on.rectangle")
-        }
-        return symbols
-    }
-
     /// The sound somebody just pressed.
     ///
     /// Over the tile rather than in the transcript, because a soundboard press
@@ -402,16 +400,16 @@ struct VoiceTile: View {
         if let effectName {
             HStack(spacing: Spacing.tight) {
                 Image(systemName: "music.note")
-                    .font(.system(.caption2, weight: .bold))
+                    .font(.system(.caption, weight: .bold))
                 Text(effectName)
-                    .font(.system(.caption2, weight: .semibold))
+                    .font(.system(.caption, weight: .semibold))
                     .lineLimit(1)
             }
-            .foregroundStyle(InkColor.primary)
-            .padding(.horizontal, Spacing.base)
-            .padding(.vertical, Spacing.tight + 1)
-            .background { Capsule().fill(Palette.accent.opacity(0.85)) }
-            .padding(.top, Spacing.snug)
+            .foregroundStyle(TileGlass.ink)
+            .padding(.horizontal, Spacing.base + 2)
+            .frame(height: chipHeight - 2)
+            .tileGlass(tint: Palette.accent.opacity(0.7))
+            .padding(.top, chipInset)
             .transition(.materialize(from: .top, blurring: false))
         }
     }
@@ -432,23 +430,20 @@ struct VoiceTile: View {
 private let voiceTileResting = Color.relative(dark: 0.08, light: 0.05)
 private let voiceTileHovered = Color.relative(dark: 0.16, light: 0.10)
 
-/// Discord's overlay chip, the same in every theme:
-/// `--control-overlay-secondary-background-default` is black at 0.52–0.56 and
-/// `--control-overlay-secondary-text-default` is white — over video, and over
-/// a ground that is somebody's colour, which may be anything.
-private let tileScrim = Color.black.opacity(0.55)
-private let tileInk = Color.white
-
-/// A control floating over a tile: a plain capsule, like the name pill.
-private struct TileCapsule: ViewModifier {
+/// A control floating over a tile, on hover: a glyph on the tile's glass, the
+/// name chip's height — a circle, or a pill for the ⋯ (Alex, 2026-11-17: its
+/// three dots alone made "a slab").
+private struct TileGlassControl: ViewModifier {
     var isCompact: Bool
+    var isWide = false
 
     func body(content: Content) -> some View {
+        let height: CGFloat = isCompact ? 20 : 26
         content
-            .font(.system(isCompact ? .caption2 : .subheadline, weight: .semibold))
-            .foregroundStyle(tileInk)
-            .padding(.horizontal, isCompact ? Spacing.tight + 2 : Spacing.base)
-            .padding(.vertical, isCompact ? 2 : Spacing.tight + 1)
-            .background { Capsule().fill(tileScrim) }
+            .font(.system(isCompact ? .caption : .subheadline, weight: .bold))
+            .foregroundStyle(TileGlass.ink)
+            .frame(width: isWide ? height * 1.35 : height, height: height)
+            .contentShape(.capsule)
+            .tileGlass(isInteractive: true)
     }
 }

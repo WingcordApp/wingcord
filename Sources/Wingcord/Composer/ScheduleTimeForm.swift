@@ -48,13 +48,16 @@ struct ScheduleTimeForm: View {
                 // **Wingcord's own picker, the one search uses** (Alex,
                 // 2026-11-17): a calendar and two big numbers, bounded to the
                 // window a schedule may answer.
+                // **Fitted to the popover, never wider than it** (Alex,
+                // 2026-11-17: a 260-point floor in a 248-point flyout cut "Date
+                // and Time" and Cancel off at both sides). The well shortens
+                // its own wording instead — see `PlayfulDatePicker`.
                 PlayfulDatePicker(
                     selection: $date,
                     minimum: bounds.lowerBound,
                     accessibilityTitle: "Scheduled date and time",
                     maximum: bounds.upperBound
                 )
-                .frame(minWidth: 260)
             }
             if let problem {
                 Text(problem.message)

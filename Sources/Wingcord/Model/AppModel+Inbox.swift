@@ -485,8 +485,13 @@ extension AppModel {
             // lives in `inbox.unreadBodies`, which is outside the transcript's
             // three-slot LRU. Reading only the boxes is what limited this tab
             // to three populated groups at a time.
-            let loaded = messageBoxes[channel.id]?.messages.isEmpty == false
-                ? (messageBoxes[channel.id]?.messages ?? [])
+            // **The box only when it holds the unread part.** A box the
+            // transcript filled around an older position — a jump, a search —
+            // is not empty and has nothing unread in it, and taking it here
+            // drew the header over nothing while the fetch below never ran.
+            let box = messageBoxes[channel.id]?.messages ?? []
+            let loaded = Self.holdsUnreads(box, after: anchor)
+                ? box
                 : (inbox.unreadBodies[channel.id] ?? [])
             // **Which end of the run to show depends on whether there is a
             // cursor at all, and that is the whole of the 2025 bug.**
@@ -582,6 +587,24 @@ extension AppModel {
             rows: [],
             eventsGuildID: guildID,
             events: events
+        )
+    }
+
+    /// Whether loaded messages reach past the read cursor — the part an
+    /// Unreads group shows. With no cursor, any page will do.
+    static func holdsUnreads(_ messages: [Message], after anchor: MessageID?) -> Bool {
+        guard !messages.isEmpty else { return false }
+        guard let anchor else { return true }
+        return messages.contains { $0.id.rawValue > anchor.rawValue }
+    }
+
+    /// Whether a channel's transcript already holds what its Unreads group
+    /// shows, so the group needs no fetch of its own.
+    func hasLoadedUnreads(in channelID: ChannelID) -> Bool {
+        guard let channel = channelIndex[channelID] else { return false }
+        return Self.holdsUnreads(
+            messageBoxes.peek(channelID)?.messages ?? [],
+            after: unreadCursor(of: channel, inGuild: channel.guildID)
         )
     }
 

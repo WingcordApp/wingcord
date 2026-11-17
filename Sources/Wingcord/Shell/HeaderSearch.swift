@@ -30,6 +30,13 @@ struct HeaderSearch: View {
     @State private var suggestionsStoodDown = false
 
     private static let fieldWidth: CGFloat = 240
+    /// Between the field and its list.
+    ///
+    /// **Wider than the header's glass container blends across** (its
+    /// `spacing`, `Spacing.base`): the list is glass inside that container,
+    /// and four points under the row it fused with the controls beside the
+    /// field, bending its top edge (Alex, 2026-11-17).
+    private static let panelGap: CGFloat = Spacing.base + Spacing.tight
 
     var body: some View {
         Group {
@@ -89,7 +96,7 @@ struct HeaderSearch: View {
         .overlay(alignment: .topTrailing) {
             if isFocused, !suggestionsStoodDown {
                 suggestions
-                    .offset(y: ShellMetrics.headerControl + Spacing.tight)
+                    .offset(y: ShellMetrics.headerControl + Self.panelGap)
             }
         }
     }
@@ -101,6 +108,15 @@ struct HeaderSearch: View {
         let rows = model.searchSuggestions(for: model.searchText)
         if !rows.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
+                // Discord's heading over each list: "From User", "In Channel"…
+                if let title = model.searchSuggestionTitle(for: model.searchText) {
+                    Text(title)
+                        .font(.system(.subheadline, weight: .semibold))
+                        .foregroundStyle(Ink.secondary)
+                        .padding(.horizontal, Spacing.base)
+                        .frame(height: 26, alignment: .leading)
+                        .accessibilityAddTraits(.isHeader)
+                }
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, suggestion in
                     Button {
                         adopt(suggestion)

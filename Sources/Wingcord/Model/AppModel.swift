@@ -2708,6 +2708,13 @@ final class MessageBoxTable: Sequence {
         boxes[channelID]
     }
 
+    /// The channels holding a box, without registering an interest in any of
+    /// them — for a one-off look across everything loaded (search's recent
+    /// authors), which must not redraw its reader on every message anywhere.
+    var peekedChannelIDs: Dictionary<ChannelID, MessageBox>.Keys {
+        boxes.keys
+    }
+
     /// How often a message in this channel has landed, changed or gone.
     func contentRevision(of channelID: ChannelID) -> UInt64 {
         signal(for: channelID).contentRevision

@@ -21,6 +21,21 @@ struct SearchSuggestion: Hashable, Sendable, Identifiable {
 
 extension AppModel {
 
+    /// The heading over the list, in Discord's words: "Search Options" over
+    /// the grammar, "From User" over the people a `from:` can name, and so on.
+    func searchSuggestionTitle(for text: String) -> String? {
+        guard searchScope != nil else { return nil }
+        guard let editing = MessageSearchTokenizer.parse(text).editing else { return "Search Options" }
+        return switch editing.kind {
+        case .from: "From User"
+        case .mentions: "Mentions User"
+        case .channel: "In Channel"
+        case .has: "Message Contains"
+        case .pinned: "Pinned"
+        case .before, .after, .during: "Dates"
+        }
+    }
+
     /// How many rows the list offers.
     ///
     /// **Capped, and the cap is the point.** A suggestion list is scanned, not
@@ -138,28 +153,30 @@ extension AppModel {
         ]
     }
 
-    /// The people worth offering, in the order somebody expects to find them.
+    /// The people worth offering, chosen the way Discord's field chooses them
+    /// (its `from:` and `mentions:` autocomplete):
     ///
-    /// **A prefix match on either name, folded once.** Folding the needle per
-    /// candidate is a string allocation per member per keystroke, which on a
-    /// loaded roster is the difference between a list that keeps up with typing
-    /// and one that does not.
+    /// - **Nothing typed, in a server:** whoever talked here lately, newest
+    ///   first, then whoever talked anywhere else in the server — not the
+    ///   whole roster (Alex, 2026-11-17: it "shows all users").
+    /// - **Nothing typed, in a conversation:** the people in it.
+    /// - **Something typed:** the members whose name or handle it starts, then
+    ///   those it appears in; "me" puts the reader first, as Discord's `@me`.
+    ///
+    /// Ten at most, as Discord's; never anybody blocked or ignored, nor a
+    /// webhook or the system, which no filter can name.
     private func people(
         in scope: MessageSearchScope,
         matching needle: String,
         text: String,
         kind: MessageSearchToken.Kind
     ) -> [SearchSuggestion] {
-        var rows: [SearchSuggestion] = []
-        rows.reserveCapacity(Self.suggestionLimit)
-
-        for userID in candidateUserIDs(in: scope) {
-            guard let user = users[userID] else { continue }
-            guard needle.isEmpty
-                    || user.handle.lowercased().hasPrefix(needle)
-                    || user.preferredName.lowercased().hasPrefix(needle)
-            else { continue }
-            rows.append(SearchSuggestion(
+        let ids = needle.isEmpty
+            ? suggestedPeople(in: scope)
+            : matchingPeople(in: scope, needle: needle)
+        return ids.prefix(Self.peopleLimit).compactMap { userID in
+            guard let user = users[userID] else { return nil }
+            return SearchSuggestion(
                 id: "\(kind.rawValue).\(userID.rawValue)",
                 // **The handle, never the display name.** The route matches on
                 // the account, and two people can share a display name.
@@ -170,12 +187,84 @@ extension AppModel {
                 detail: user.handle,
                 avatarURL: avatarURL(for: user, side: Metrics.avatarRow),
                 monogram: user.monogram
-            ))
-            // **Stops at the cap rather than sorting a whole roster.** The list
-            // is scanned; a perfectly ranked thirteenth row is work nobody sees.
-            if rows.count == Self.suggestionLimit { break }
+            )
         }
-        return rows
+    }
+
+    /// Discord's ten.
+    private static let peopleLimit = 10
+
+    /// Whether a person may be offered at all.
+    private func isOfferable(_ userID: UserID) -> Bool {
+        guard let user = users[userID], !user.isSystem else { return false }
+        return !blockedUserIDs.contains(userID) && !isIgnored(userID)
+    }
+
+    /// Nothing typed yet: who talked lately, here first.
+    private func suggestedPeople(in scope: MessageSearchScope) -> [UserID] {
+        switch scope {
+        case .channel(let channelID):
+            var ids = (channelIndex[channelID]?.recipientIDs ?? []).filter { $0 != currentUserID }
+            if let currentUserID { ids.append(currentUserID) }
+            return ids.filter(isOfferable)
+        case .guild(let guildID):
+            return recentAuthors(inGuild: guildID)
+        }
+    }
+
+    /// The people who wrote the newest loaded messages: the channel being read
+    /// first, then the server's other loaded channels by their newest message.
+    ///
+    /// **Read without subscribing** (`peek`, `peekedChannelIDs`): this runs as
+    /// the field is typed in, and must not tie the field to every message box.
+    func recentAuthors(inGuild guildID: GuildID) -> [UserID] {
+        var seen: Set<UserID> = []
+        var ids: [UserID] = []
+        func take(from channelID: ChannelID) {
+            guard let box = messageBoxes.peek(channelID) else { return }
+            for message in box.messages.reversed() where ids.count < Self.peopleLimit {
+                let author = message.authorID
+                // A webhook's name is not an account a filter can name.
+                guard message.webhookID == nil, !seen.contains(author), isOfferable(author) else { continue }
+                seen.insert(author)
+                ids.append(author)
+            }
+        }
+        let current = selectedChannelID.flatMap { channelIndex[$0]?.guildID == guildID ? $0 : nil }
+        if let current { take(from: current) }
+        let others = messageBoxes.peekedChannelIDs
+            .filter { $0 != current && channelIndex[$0]?.guildID == guildID }
+            .compactMap { channelID in
+                messageBoxes.peek(channelID)?.messages.last.map { (channelID, $0.id.rawValue) }
+            }
+            .sorted { $0.1 > $1.1 }
+        for (channelID, _) in others where ids.count < Self.peopleLimit {
+            take(from: channelID)
+        }
+        return ids
+    }
+
+    /// Something typed: the names it starts, then the names it's in.
+    private func matchingPeople(in scope: MessageSearchScope, needle: String) -> [UserID] {
+        var starts: [(UserID, String)] = []
+        var contains: [(UserID, String)] = []
+        for userID in candidateUserIDs(in: scope) where isOfferable(userID) {
+            guard let user = users[userID] else { continue }
+            let name = user.preferredName.lowercased()
+            let handle = user.handle.lowercased()
+            if name.hasPrefix(needle) || handle.hasPrefix(needle) {
+                starts.append((userID, name))
+            } else if name.contains(needle) || handle.contains(needle) {
+                contains.append((userID, name))
+            }
+        }
+        var ids = (starts.sorted { $0.1 < $1.1 } + contains.sorted { $0.1 < $1.1 }).map(\.0)
+        // Discord's `@me`: a needle "me" begins puts the reader first.
+        if let currentUserID, "me".hasPrefix(needle) {
+            ids.removeAll { $0 == currentUserID }
+            ids.insert(currentUserID, at: 0)
+        }
+        return ids
     }
 
     /// Who this scope can offer.
@@ -209,7 +298,13 @@ extension AppModel {
         var rows: [SearchSuggestion] = []
         rows.reserveCapacity(Self.suggestionLimit)
 
-        for channelID in channelIndex.channelIDs(inGuild: guildID) {
+        // Discord's `in:` with nothing typed puts the channel being read first.
+        var order = Array(channelIndex.channelIDs(inGuild: guildID))
+        if needle.isEmpty, let current = selectedChannelID, let index = order.firstIndex(of: current) {
+            order.remove(at: index)
+            order.insert(current, at: 0)
+        }
+        for channelID in order {
             guard let channel = channelIndex[channelID],
                   channel.kind.isConversation,
                   // A channel the reader cannot read is a filter that returns

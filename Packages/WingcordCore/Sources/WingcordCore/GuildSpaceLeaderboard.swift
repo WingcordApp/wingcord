@@ -105,10 +105,32 @@ public struct GuildSpaceLeaderboard: Hashable, Sendable {
 
     /// Whether today is the competition's last day, when Discord raises the
     /// podium: `day_pt` falls on the week's seventh day.
+    ///
+    /// **Read the way Discord reads it**: `new Date(day_pt)`, then whole UTC
+    /// days (`eN` in its hub module). That accepts a bare date
+    /// ("2026-11-16", UTC midnight) and a full timestamp
+    /// ("2026-11-16T00:00:00.000Z", which is what Discord's own fixtures write).
+    /// This used to accept the bare date only, so a timestamp left the podium
+    /// down on a board that had ended (Alex's account, 2026-11-17).
     public var isFinalDay: Bool {
-        guard let dayPT, let day = Self.dayFormat.date(from: dayPT) else { return false }
-        let start = Int(weekStart.timeIntervalSince1970 / 86_400)
-        return Int(day.timeIntervalSince1970 / 86_400) == start + 6
+        guard let dayPT, let day = Self.date(fromDayPT: dayPT) else { return false }
+        let start = Int((weekStart.timeIntervalSince1970 / 86_400).rounded(.down))
+        return Int((day.timeIntervalSince1970 / 86_400).rounded(.down)) == start + 6
+    }
+
+    /// `day_pt` as a moment: a date alone is UTC midnight, as JavaScript reads
+    /// a date-only ISO string; a timestamp is read with its own offset.
+    static func date(fromDayPT text: String) -> Date? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if let day = dayFormat.date(from: trimmed) { return day }
+        if let moment = try? Date(trimmed, strategy: .iso8601) { return moment }
+        if let moment = try? Date(
+            trimmed,
+            strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+        ) {
+            return moment
+        }
+        return nil
     }
 
     /// The reader's place, wherever they rank.

@@ -403,6 +403,18 @@ private struct AppearancePane: View {
                     }
                 )
                 CardDivider()
+                CardHeaderRow(
+                    title: "Home icon",
+                    help: "What the Direct Messages tile at the top of your servers wears: "
+                        + "Wingcord\u{2019}s icon, or its white wings."
+                )
+                SettingsSegmentedControl(
+                    selection: $settings.railHomeIcon,
+                    options: RailHomeIcon.allCases.map {
+                        .init($0, $0.label, symbolName: $0.symbolName)
+                    }
+                )
+                CardDivider()
                 SettingsToggle(
                     title: "Server banners",
                     help: "The server\u{2019}s art across the top of its channel list.",

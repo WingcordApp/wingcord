@@ -1771,10 +1771,25 @@ final class TimelineCanvasView: NSView {
                             state.layered.attachments.insert(lifted.attachmentIndex)
                         }
                     }
-                    if selection != nil, let block = message.textBlock {
-                        state.selectedRange = selectedRange(
-                            of: message.id, length: block.text.selectableLength
-                        )
+                    if selection != nil {
+                        if let block = message.textBlock {
+                            state.selectedRange = selectedRange(
+                                of: message.id, length: block.text.selectableLength
+                            )
+                        }
+                        // The embeds' and component cards' texts, by their
+                        // place across the row (block 1 on).
+                        var place = 0
+                        for slot in message.embeds {
+                            for text in slot.texts {
+                                place += 1
+                                if let range = selectedRange(
+                                    of: message.id, block: place, length: text.block.text.selectableLength
+                                ) {
+                                    state.selectedEmbedTexts[place - 1] = range
+                                }
+                            }
+                        }
                     }
                     state.avatarFrame = avatarFilm.avatarFrame(forRow: message.id.rawValue)
                     state.decorationFrame = avatarFilm.decorationFrame(
@@ -2507,9 +2522,13 @@ final class TimelineCanvasView: NSView {
     // onto somebody else's words. Ordered by the rows only when it is drawn or
     // copied.
 
-    /// A character boundary in one message's body.
+    /// A character boundary in one of a message's texts: its body (block 0),
+    /// or one its embeds and component cards draw (1 on, in reading order) —
+    /// so an app's text displays can be selected and copied like a message's
+    /// own words (Alex, 2026-11-17).
     struct TextPoint: Equatable {
         var messageID: MessageID
+        var block: Int = 0
         var index: Int
     }
 
@@ -2519,21 +2538,22 @@ final class TimelineCanvasView: NSView {
     /// Each message's row, rebuilt with the rows.
     private var messageRows: [MessageID: Int] = [:]
 
-    /// Starts a selection when a press lands on body text: one click places
-    /// it, two take the word, three the whole message.
+    /// Starts a selection when a press lands on a message's text — its body,
+    /// or a text an embed or a component card draws: one click places it, two
+    /// take the word, three the whole text.
     private func beginSelection(in row: MessageRow, rowIndex: Int, at point: CGPoint, clicks: Int) -> Bool {
-        guard let block = row.textBlock,
-              let start = textPoint(in: row, rowIndex: rowIndex, at: point, clamped: false)
+        guard let start = hitTextPoint(in: row, rowIndex: rowIndex, at: point),
+              let text = selectableText(of: row, at: start.block)
         else { return false }
         window?.makeFirstResponder(self)
         switch clicks {
         case 2:
-            let word = block.wordRange(at: start.index)
-            selection = (TextPoint(messageID: row.id, index: word.location),
-                         TextPoint(messageID: row.id, index: NSMaxRange(word)))
+            let word = text.block.wordRange(at: start.index)
+            selection = (TextPoint(messageID: row.id, block: start.block, index: word.location),
+                         TextPoint(messageID: row.id, block: start.block, index: NSMaxRange(word)))
         case 3...:
-            selection = (TextPoint(messageID: row.id, index: 0),
-                         TextPoint(messageID: row.id, index: block.text.selectableLength))
+            selection = (TextPoint(messageID: row.id, block: start.block, index: 0),
+                         TextPoint(messageID: row.id, block: start.block, index: text.block.text.selectableLength))
         default:
             selection = (start, start)
             isSelecting = true
@@ -2542,17 +2562,66 @@ final class TimelineCanvasView: NSView {
         return true
     }
 
-    /// A place in a row's body text: nil off the text unless `clamped`, which
-    /// pins a point above the text to its start and below it to its end.
-    private func textPoint(in row: MessageRow, rowIndex: Int, at point: CGPoint, clamped: Bool) -> TextPoint? {
-        guard let block = row.textBlock else { return nil }
+    /// One of a row's selectable texts and where it sits in the row: the body
+    /// first, then every text its embeds and component cards draw, in order.
+    private func selectableText(of row: MessageRow, at block: Int) -> (block: TimelineTextBlock, origin: CGPoint)? {
+        if block == 0 { return row.textBlock.map { ($0, row.textOrigin) } }
+        var remaining = block - 1
+        for slot in row.embeds {
+            if remaining < slot.texts.count {
+                let text = slot.texts[remaining]
+                return (text.block, text.origin)
+            }
+            remaining -= slot.texts.count
+        }
+        return nil
+    }
+
+    /// How many selectable places a row has, the body's included.
+    private func selectableCount(of row: MessageRow) -> Int {
+        1 + row.embeds.reduce(0) { $0 + $1.texts.count }
+    }
+
+    /// The text under a point, and where in it: nil off every text.
+    private func hitTextPoint(in row: MessageRow, rowIndex: Int, at point: CGPoint) -> TextPoint? {
         let frame = rowFrame(at: rowIndex)
+        for block in 0..<selectableCount(of: row) {
+            guard let text = selectableText(of: row, at: block) else { continue }
+            let local = CGPoint(x: point.x - frame.minX - text.origin.x, y: point.y - frame.minY - text.origin.y)
+            if CGRect(origin: .zero, size: text.block.size).contains(local) {
+                return TextPoint(messageID: row.id, block: block, index: text.block.characterIndex(at: local))
+            }
+        }
+        return nil
+    }
+
+    /// The nearest place in a row's texts to a point: inside the text it's
+    /// over, else the end of the last text above it, else the first's start.
+    private func nearestTextPoint(in row: MessageRow, rowIndex: Int, at point: CGPoint) -> TextPoint? {
+        if let hit = hitTextPoint(in: row, rowIndex: rowIndex, at: point) { return hit }
+        let frame = rowFrame(at: rowIndex)
+        var chosen: (block: Int, text: (block: TimelineTextBlock, origin: CGPoint))?
+        for block in 0..<selectableCount(of: row) {
+            guard let text = selectableText(of: row, at: block) else { continue }
+            if chosen == nil || frame.minY + text.origin.y <= point.y { chosen = (block, text) }
+            if frame.minY + text.origin.y > point.y { break }
+        }
+        guard let chosen else { return nil }
         let local = CGPoint(
-            x: point.x - frame.minX - row.textOrigin.x,
-            y: point.y - frame.minY - row.textOrigin.y
+            x: point.x - frame.minX - chosen.text.origin.x,
+            y: point.y - frame.minY - chosen.text.origin.y
         )
-        guard clamped || CGRect(origin: .zero, size: block.size).contains(local) else { return nil }
-        return TextPoint(messageID: row.id, index: block.characterIndex(at: local))
+        return TextPoint(messageID: row.id, block: chosen.block, index: chosen.text.block.characterIndex(at: local))
+    }
+
+    /// The start of a row's first text, or the end of its last.
+    private func edgeTextPoint(of row: MessageRow, atEnd: Bool) -> TextPoint? {
+        let blocks = Array(0..<selectableCount(of: row))
+        for block in atEnd ? blocks.reversed() : blocks {
+            guard let text = selectableText(of: row, at: block) else { continue }
+            return TextPoint(messageID: row.id, block: block, index: atEnd ? text.block.text.selectableLength : 0)
+        }
+        return nil
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -2588,24 +2657,24 @@ final class TimelineCanvasView: NSView {
         if let selection, selection.anchor == selection.focus { clearSelection() }
     }
 
-    /// Where a drag puts the selection's moving end: the body in the row under
-    /// the pointer, or — over a row with none — the end of the nearest body
-    /// above it, or the start of the nearest below.
+    /// Where a drag puts the selection's moving end: the nearest text in the
+    /// row under the pointer, or — over a row with none — the end of the
+    /// nearest text above it, or the start of the nearest below.
     private func focusPoint(at point: CGPoint) -> TextPoint? {
         guard let index = rowIndex(at: point.y) else { return nil }
         if case .message(let row) = rows[index].kind,
-           let hit = textPoint(in: row, rowIndex: index, at: point, clamped: true)
+           let hit = nearestTextPoint(in: row, rowIndex: index, at: point)
         {
             return hit
         }
         for above in stride(from: index - 1, through: 0, by: -1) {
-            if case .message(let row) = rows[above].kind, let block = row.textBlock {
-                return TextPoint(messageID: row.id, index: block.text.selectableLength)
+            if case .message(let row) = rows[above].kind, let end = edgeTextPoint(of: row, atEnd: true) {
+                return end
             }
         }
         for below in (index + 1)..<rows.count {
-            if case .message(let row) = rows[below].kind, row.textBlock != nil {
-                return TextPoint(messageID: row.id, index: 0)
+            if case .message(let row) = rows[below].kind, let start = edgeTextPoint(of: row, atEnd: false) {
+                return start
             }
         }
         return nil
@@ -2617,7 +2686,8 @@ final class TimelineCanvasView: NSView {
               let anchorRow = messageRows[selection.anchor.messageID],
               let focusRow = messageRows[selection.focus.messageID]
         else { return nil }
-        let forward = (anchorRow, selection.anchor.index) <= (focusRow, selection.focus.index)
+        let forward = (anchorRow, selection.anchor.block, selection.anchor.index)
+            <= (focusRow, selection.focus.block, selection.focus.index)
         return forward
             ? (selection.anchor, selection.focus, anchorRow, focusRow)
             : (selection.focus, selection.anchor, focusRow, anchorRow)
@@ -2628,13 +2698,15 @@ final class TimelineCanvasView: NSView {
         return Set(ordered.startRow...ordered.endRow)
     }
 
-    /// The part of one message's body inside the selection.
-    private func selectedRange(of messageID: MessageID, length: Int) -> NSRange? {
-        guard let ordered = orderedSelection, let row = messageRows[messageID],
-              row >= ordered.startRow, row <= ordered.endRow
-        else { return nil }
-        let from = row == ordered.startRow ? ordered.start.index : 0
-        let to = row == ordered.endRow ? ordered.end.index : length
+    /// The part of one of a message's texts inside the selection.
+    private func selectedRange(of messageID: MessageID, block: Int = 0, length: Int) -> NSRange? {
+        guard let ordered = orderedSelection, let row = messageRows[messageID] else { return nil }
+        let here = (row, block)
+        let first = (ordered.startRow, ordered.start.block)
+        let last = (ordered.endRow, ordered.end.block)
+        guard here >= first, here <= last else { return nil }
+        let from = here == first ? ordered.start.index : 0
+        let to = here == last ? ordered.end.index : length
         return to > from ? NSRange(location: from, length: to - from) : nil
     }
 
@@ -2664,16 +2736,18 @@ final class TimelineCanvasView: NSView {
         guard let ordered = orderedSelection,
               rows.indices.contains(ordered.startRow),
               case .message(let row) = rows[ordered.startRow].kind,
-              let block = row.textBlock,
-              let range = selectedRange(of: row.id, length: block.text.selectableLength),
-              let baseline = block.baselineOrigin(at: range.location)
+              let text = selectableText(of: row, at: ordered.start.block),
+              let range = selectedRange(
+                  of: row.id, block: ordered.start.block, length: text.block.text.selectableLength
+              ),
+              let baseline = text.block.baselineOrigin(at: range.location)
         else { return }
         let frame = rowFrame(at: ordered.startRow)
         showDefinition(
-            for: block.text.attributed.attributedSubstring(from: range),
+            for: text.block.text.attributed.attributedSubstring(from: range),
             at: CGPoint(
-                x: frame.minX + row.textOrigin.x + baseline.x,
-                y: frame.minY + row.textOrigin.y + baseline.y
+                x: frame.minX + text.origin.x + baseline.x,
+                y: frame.minY + text.origin.y + baseline.y
             )
         )
     }
@@ -2682,10 +2756,13 @@ final class TimelineCanvasView: NSView {
         guard let ordered = orderedSelection else { return nil }
         var parts: [String] = []
         for index in ordered.startRow...ordered.endRow {
-            guard case .message(let row) = rows[index].kind, let block = row.textBlock,
-                  let range = selectedRange(of: row.id, length: block.text.selectableLength)
-            else { continue }
-            parts.append(Self.plainText(of: block.text, in: range))
+            guard case .message(let row) = rows[index].kind else { continue }
+            for block in 0..<selectableCount(of: row) {
+                guard let text = selectableText(of: row, at: block),
+                      let range = selectedRange(of: row.id, block: block, length: text.block.text.selectableLength)
+                else { continue }
+                parts.append(Self.plainText(of: text.block.text, in: range))
+            }
         }
         return parts.joined(separator: "\n")
     }
@@ -3434,7 +3511,7 @@ final class TimelineCanvasView: NSView {
             case nil:
                 // Body text reads as text: the I-beam says it can be selected.
                 // "(edited)" cannot be, as Discord's `user-select: none` cannot.
-                if editedHover == nil, textPoint(in: row, rowIndex: index, at: point, clamped: false) != nil {
+                if editedHover == nil, hitTextPoint(in: row, rowIndex: index, at: point) != nil {
                     cursor = .iBeam
                 }
             }

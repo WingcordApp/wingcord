@@ -196,6 +196,32 @@ struct GuildUserSettingsTests {
         )
     }
 
+    // MARK: Pin Channel to Top
+
+    /// Discord's `jA`: the favorited bit over the override's other bits, and
+    /// the opt-in bit with it when pinning, so a pinned channel is followed.
+    @Test("Pinning a channel sets favorited and followed, keeping the other bits")
+    func pinChannelBody() {
+        var existing = GuildUserSettings(guildID: Self.guildID)
+        existing.channelOverrides[Self.channelID] = ChannelUserSettings(flags: ChannelSettingsFlags.unreadsOnlyMentions)
+        #expect(
+            body(.channelPinned(Self.channelID, true), existing: existing)
+                == #"{"channel_overrides":{"733717471666321637":{"flags":6656}}}"#
+        )
+    }
+
+    @Test("Unpinning clears favorited alone")
+    func unpinChannelBody() {
+        var existing = GuildUserSettings(guildID: Self.guildID)
+        existing.channelOverrides[Self.channelID] = ChannelUserSettings(
+            flags: ChannelSettingsFlags.favorited | ChannelSettingsFlags.followed
+        )
+        #expect(
+            body(.channelPinned(Self.channelID, false), existing: existing)
+                == #"{"channel_overrides":{"733717471666321637":{"flags":4096}}}"#
+        )
+    }
+
     // MARK: Taking an override off
 
     /// **There is no route that deletes one override.** Discord's own "use

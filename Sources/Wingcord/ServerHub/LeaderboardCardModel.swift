@@ -19,6 +19,9 @@ struct LeaderboardCardModel: Equatable {
         var rank: Int
         var name: String
         var nameColor: UInt32?
+        /// The face they chose for their name — Discord's leaderboard draws it
+        /// (`displayNameStylesFont`) in their role colour, without the effect.
+        var nameFont: DisplayNameFont?
         var avatarURL: URL?
         /// The face at the podium's size, for the top three.
         var largeAvatarURL: URL?
@@ -35,8 +38,8 @@ struct LeaderboardCardModel: Equatable {
         var isReader: Bool
         /// Blocked or ignored: drawn without a face or a game.
         var isHidden: Bool
-        /// "Played Honkai: Star Rail, ROBLOX and Fortnite": a podium pillar's
-        /// tooltip.
+        /// "Played Honkai: Star Rail, ROBLOX and 3 others", in Discord's
+        /// words: the games tooltip on a pillar and on the games stack.
         var playedSummary: String?
     }
 

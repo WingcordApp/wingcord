@@ -212,4 +212,21 @@ struct DisplayComponentTests {
         #expect(!items[0].isSpoiler)
         #expect(items[1].isSpoiler)
     }
+
+    /// Copy Text on an app's message: its content is empty, so what it says is
+    /// its text displays, inside containers and sections too.
+    @Test("A component tree's text reads in order, a blank line apart")
+    func plainTextOfATree() {
+        let tree: [DisplayComponent] = [
+            .container(accent: nil, children: [
+                .text("How to Set Up"),
+                .separator(isDivider: true, isLarge: false),
+                .section(children: [.text("Server Hub gives your server…")], thumbnail: nil),
+            ]),
+            .text("Important: an experiment."),
+        ]
+        #expect(DisplayComponent.plainText(of: tree)
+            == "How to Set Up\n\nServer Hub gives your server…\n\nImportant: an experiment.")
+        #expect(DisplayComponent.plainText(of: []).isEmpty)
+    }
 }

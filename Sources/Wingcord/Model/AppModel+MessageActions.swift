@@ -398,6 +398,12 @@ extension AppModel {
         // **A forward copies what it forwards** when it carries no words of
         // its own — the text on screen. Its content is empty, and Copy Text
         // used to put nothing on the pasteboard.
+        // **An app's message copies its text displays** (Alex, 2026-11-17):
+        // built of components, its `content` is empty too.
+        if message.content.isEmpty, message.forwarded == nil, !message.displayComponents.isEmpty {
+            Self.copy(DisplayComponent.plainText(of: message.displayComponents))
+            return
+        }
         Self.copy(message.content.isEmpty ? (message.forwarded?.content ?? "") : message.content)
     }
 

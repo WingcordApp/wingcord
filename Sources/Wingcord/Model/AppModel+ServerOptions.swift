@@ -106,6 +106,33 @@ extension AppModel {
     func applyGuildUserSettings(_ settings: GuildUserSettings) {
         guildUserSettings[settings.guildID] = settings
         reflectGuildMute(settings)
+        reflectGuildPins(settings)
+    }
+
+    /// Whether a server channel is pinned to the top of its list — Discord's
+    /// Pin Channel to Top, the same `favorited` bit a pinned conversation
+    /// carries (`pinnedChannelIDs`).
+    func isChannelPinned(_ channelID: ChannelID) -> Bool {
+        pinnedChannelIDs.contains(channelID)
+    }
+
+    /// Pins a server channel to the top of its list, or unpins it.
+    func toggleChannelPin(_ channelID: ChannelID) {
+        guard let guildID = channelIndex[channelID]?.guildID else { return }
+        applyGuildSetting(.channelPinned(channelID, !isChannelPinned(channelID)), in: guildID)
+    }
+
+    /// Keeps the pinned set agreeing with one server's record: its channels'
+    /// pins are exactly the overrides carrying the bit.
+    private func reflectGuildPins(_ settings: GuildUserSettings) {
+        var pinned = pinnedChannelIDs
+        let listed = Set(channelIndex.channelIDs(inGuild: settings.guildID))
+        pinned.subtract(listed.union(settings.channelOverrides.keys))
+        for (channelID, override) in settings.channelOverrides
+            where override.flags & ChannelSettingsFlags.favorited != 0 {
+            pinned.insert(channelID)
+        }
+        if pinned != pinnedChannelIDs { pinnedChannelIDs = pinned }
     }
 
     /// Writes one field, optimistically.
@@ -119,6 +146,7 @@ extension AppModel {
         let next = change.applied(to: previous)
         guildUserSettings[guildID] = next
         reflectGuildMute(next)
+        reflectGuildPins(next)
         sessionController.writeGuildSettings(change, in: guildID, restoring: previous)
     }
 

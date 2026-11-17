@@ -206,6 +206,24 @@ public enum GuildUserSettingsChange: Hashable, Sendable {
     /// channel in an opt-in server has an entry, and almost none of them is a
     /// setting anybody made.
     case clearChannelOverride(ChannelID)
+    /// Discord's Pin Channel to Top / Unpin Channel: the `favorited` bit on the
+    /// channel's override (`jA` in its bundle). Pinning also sets `followed`
+    /// where it is clear, as Discord's own does, so a pinned channel is never
+    /// one the opt-in list leaves out.
+    case channelPinned(ChannelID, Bool)
+
+    /// The flags a pin writes over what the override carries now — every
+    /// other bit kept, `INVARIANTS.md` §1.
+    public static func pinnedFlags(_ isPinned: Bool, over flags: Int) -> Int {
+        var next = flags
+        if isPinned {
+            next |= ChannelSettingsFlags.favorited
+            next |= ChannelSettingsFlags.followed
+        } else {
+            next &= ~ChannelSettingsFlags.favorited
+        }
+        return next
+    }
 
     /// The optimistic result of applying this to a record, so the menu can draw
     /// the new state before the round trip lands and put it back if it fails.
@@ -240,6 +258,10 @@ public enum GuildUserSettingsChange: Hashable, Sendable {
             override.muteConfig = duration.map {
                 ThreadMuteConfig(endTime: $0.endTime(), selectedTimeWindow: $0.rawValue)
             }
+            next.channelOverrides[channelID] = override
+        case .channelPinned(let channelID, let isPinned):
+            var override = next.channelOverrides[channelID] ?? ChannelUserSettings()
+            override.flags = Self.pinnedFlags(isPinned, over: override.flags)
             next.channelOverrides[channelID] = override
         case .clearChannelOverride(let channelID):
             guard var override = next.channelOverrides[channelID] else { break }

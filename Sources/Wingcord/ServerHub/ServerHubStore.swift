@@ -37,6 +37,15 @@ final class ServerHubStore {
     var settingsInFlight: Set<GuildID> = []
     /// A whiteboard starting, so its button can say so.
     var launchingWhiteboard: GuildID?
+    /// Servers whose whiteboard has been opened — or left — on this visit to
+    /// the hub page.
+    ///
+    /// **What keeps Leave left** (Alex, 2026-11-17: Leave "doesn't leave and
+    /// start it again"): the card opens the board by itself for a reader who
+    /// has authorized it, as Discord's widget does on mount — and once the
+    /// board stopped, the card came back and opened it again. Discord opens it
+    /// once per visit; so does this. Cleared when the page is left.
+    var whiteboardOpenedThisVisit: Set<GuildID> = []
 
     /// `--demo`'s pictures, drawn on this Mac where a real hub's are on
     /// Discord's CDN: the banner, and Image + Text pictures by widget id.

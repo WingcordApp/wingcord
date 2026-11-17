@@ -337,6 +337,12 @@ final class SessionController {
     /// is a summary filling in behind a flyout. Sharing the set would let a
     /// scrolling inbox suppress the jump the reader actually asked for.
     var unreadGroupFetches: Set<ChannelID> = []
+    /// Unread groups that appeared while the cap was full, in the order they
+    /// asked. **Started as the fetches ahead of them land** — a group turned
+    /// away used to draw its header over nothing until it scrolled out and
+    /// back, which on open is never (Alex, 2026-11-17: "i have to open it like
+    /// 4-5 times").
+    var pendingUnreadGroups: [ChannelID] = []
     /// When the reader was last reported as typing, per channel.
     ///
     /// Discord's own indicator lasts ten seconds, so the client re-posts at

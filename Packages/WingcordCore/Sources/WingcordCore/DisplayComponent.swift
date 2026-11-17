@@ -87,3 +87,23 @@ public indirect enum DisplayComponent: Hashable, Sendable, Codable {
         }
     }
 }
+
+extension DisplayComponent {
+    /// Every text display in a tree, in reading order, a blank line between
+    /// two — what Copy Text puts on the pasteboard for a message built of
+    /// components, whose `content` is empty.
+    public static func plainText(of nodes: [DisplayComponent]) -> String {
+        var parts: [String] = []
+        func walk(_ nodes: [DisplayComponent]) {
+            for node in nodes {
+                switch node {
+                case .text(let value) where !value.isEmpty: parts.append(value)
+                case .container(_, let children), .section(let children, _): walk(children)
+                default: break
+                }
+            }
+        }
+        walk(nodes)
+        return parts.joined(separator: "\n\n")
+    }
+}

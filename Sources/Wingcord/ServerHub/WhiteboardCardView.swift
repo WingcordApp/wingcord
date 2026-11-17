@@ -12,9 +12,31 @@ struct WhiteboardCardView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if board.isRunning, let channelID = board.channelID, !board.isEditing {
-            ActivityStageContainer(channelID: channelID) { _ in }
-                .padding(.top, Spacing.base)
+        if board.isPoppedOut, !board.isEditing {
+            // In a window of its own: the card says where it went and offers it
+            // back (the head's controls do the same).
+            ZStack {
+                WhiteboardCanvasPattern()
+                VStack(spacing: Spacing.snug) {
+                    Image(systemName: "macwindow.on.rectangle")
+                        .font(.system(size: 30, weight: .medium))
+                        .foregroundStyle(Ink.secondary)
+                    Text("The whiteboard is open in its own window.")
+                        .font(.system(.callout, weight: .semibold))
+                        .foregroundStyle(Ink.primary)
+                    Button("Show in Card", systemImage: "arrow.down.right.and.arrow.up.left", action: showInCard)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.capsule)
+                }
+                .multilineTextAlignment(.center)
+                .padding(Spacing.group)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 260)
+        } else if board.isRunning, let channelID = board.channelID, !board.isEditing {
+            // **The whole card is the board** (Alex, 2026-11-17): no bar, no
+            // Leave — leaving the page leaves it, as on Discord.
+            ActivityStageContainer(channelID: channelID, fillsCard: true) { _ in }
         } else {
             ZStack {
                 WhiteboardCanvasPattern()
@@ -81,5 +103,9 @@ struct WhiteboardCardView: View {
 
     private func launch() {
         model.launchWhiteboard()
+    }
+
+    private func showInCard() {
+        model.toggleWhiteboardWindow()
     }
 }

@@ -907,6 +907,10 @@ extension AppModel {
         return out.trimmingCharacters(in: .whitespaces)
     }
 
+    /// Pinned Channels' heading, which no server's channel can be: a small
+    /// number among the list's other made-up rows (`SidebarRow.id`).
+    static let pinnedChannelsCategoryID = ChannelID(rawValue: 90)
+
     private func buildGuildSidebar(
         guild: Guild,
         eventsRow: SidebarEventsRow?,
@@ -943,6 +947,9 @@ extension AppModel {
         // shortcut or a restored selection could still reach it.
         var byParent: [ChannelID?: [Channel]] = [:]
         var categories: [Channel] = []
+        // Discord's Pinned Channels (`favorited`): out of their categories and
+        // into a section of their own at the top, in the list's own order.
+        var pinned: [Channel] = []
         for channelID in channelIDs {
             guard let channel = channelIndex[channelID] else { continue }
             if channel.kind == .category {
@@ -963,7 +970,27 @@ extension AppModel {
                 // keyboard shortcut could still reach a channel the reader has
                 // taken out of their sidebar.
                 guard isChannelInList(channel, filtered: filtersByFollow) else { continue }
-                byParent[channel.parentID, default: []].append(channel)
+                if pinnedChannelIDs.contains(channel.id) {
+                    pinned.append(channel)
+                } else {
+                    byParent[channel.parentID, default: []].append(channel)
+                }
+            }
+        }
+
+        if !pinned.isEmpty {
+            let isExpanded = !collapsedCategoryIDs.contains(Self.pinnedChannelsCategoryID)
+            rows.append(.category(SidebarCategory(
+                id: Self.pinnedChannelsCategoryID,
+                name: "Pinned Channels",
+                isExpanded: isExpanded,
+                hasUnread: pinned.contains { unreadState(of: $0).unread }
+            )))
+            if isExpanded {
+                for channel in pinned {
+                    rows.append(.channel(makeSidebarChannel(channel)))
+                    appendThreadRows(under: channel, into: &rows)
+                }
             }
         }
 

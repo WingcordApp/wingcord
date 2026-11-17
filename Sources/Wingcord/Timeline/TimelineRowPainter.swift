@@ -129,6 +129,9 @@ nonisolated enum TimelineRowPainter {
         var hoveredLink: MessageText.LinkTarget?
         /// The part of the body the reader has selected.
         var selectedRange: NSRange?
+        /// The selected parts of the texts the row's embeds and component cards
+        /// draw, by their place across the row (`TimelineCanvasView.TextPoint`).
+        var selectedEmbedTexts: [Int: NSRange] = [:]
         /// The author's name under the pointer, underlined — Discord's
         /// `.username.clickable:hover`.
         var isAuthorNameHovered = false
@@ -898,11 +901,22 @@ nonisolated enum TimelineRowPainter {
         }
 
         var embedImageBase = 0
+        var embedTextBase = 0
         for (index, slot) in row.embeds.enumerated() {
             // `layered` counts pictures across every embed in the row; this
             // embed's own start at `embedImageBase`.
             let base = embedImageBase
             embedImageBase += slot.images.count
+            // The selection counts texts the same way.
+            let textBase = embedTextBase
+            embedTextBase += slot.texts.count
+            var selectedTexts: [Int: NSRange] = [:]
+            if !state.selectedEmbedTexts.isEmpty {
+                for (place, range) in state.selectedEmbedTexts
+                    where place >= textBase && place < textBase + slot.texts.count {
+                    selectedTexts[place - textBase] = range
+                }
+            }
             drawEmbed(
                 slot,
                 offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
@@ -920,7 +934,8 @@ nonisolated enum TimelineRowPainter {
                     ? (state.isHoveredEmbedFavorite ? .starred : .unstarred)
                     : nil,
                 isPlayingPreview: slot.previewURL != nil
-                    && slot.previewURL == state.playingPreviewURL
+                    && slot.previewURL == state.playingPreviewURL,
+                selectedTexts: selectedTexts
             )
         }
 

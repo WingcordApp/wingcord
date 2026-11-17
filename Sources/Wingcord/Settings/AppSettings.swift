@@ -789,6 +789,12 @@ final class AppSettings {
         didSet { defaults.set(chromeShape.rawValue, forKey: Key.chromeShape) }
     }
 
+    /// What the Direct Messages tile at the top of the rail wears. See
+    /// `RailHomeIcon`.
+    var railHomeIcon: RailHomeIcon = .appIcon {
+        didSet { defaults.set(railHomeIcon.rawValue, forKey: Key.railHomeIcon) }
+    }
+
     // MARK: The window shell
 
     /// Whether the sidebar is a glass panel floating inside the window, or a
@@ -1663,6 +1669,8 @@ final class AppSettings {
             ?? (defaults.object(forKey: Key.legacyComposerShape) as? String)
             .flatMap(ChromeShape.init(rawValue:))
             ?? .boxy
+        railHomeIcon = (defaults.object(forKey: Key.railHomeIcon) as? String)
+            .flatMap(RailHomeIcon.init(rawValue:)) ?? .appIcon
         composerControls = defaults.stringArray(forKey: Key.composerControls)
             .map(ComposerControlOrder.init(storage:)) ?? .default
         composerControlsInline = defaults.object(forKey: Key.composerControlsInline) as? Bool ?? false
@@ -1913,6 +1921,7 @@ final class AppSettings {
         static let playsAnimated = "chat.playsAnimatedContent"
         static let loadsImages = "chat.loadsImagesAutomatically"
         static let chromeShape = "appearance.chromeShape"
+        static let railHomeIcon = "appearance.railHomeIcon"
         /// Where the composer's own shape lived before the two bars shared one.
         /// Read once, for migration, and never written again.
         static let legacyComposerShape = "appearance.composerShape"

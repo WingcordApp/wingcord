@@ -22,7 +22,7 @@ struct ServerHubCardBody: View {
         case .notEnoughData(let title, let detail):
             ServerHubWidgetMessage(symbol: "chart.bar.xaxis", title: title, detail: detail)
         case .leaderboard(let board):
-            LeaderboardCardView(board: board, rowLimit: 5)
+            LeaderboardCardView(board: board)
         case .popularGames(let games):
             PopularGamesCardView(games: games)
         case .popularMusic(let music):

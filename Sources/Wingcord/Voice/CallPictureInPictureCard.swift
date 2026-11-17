@@ -18,24 +18,20 @@ struct CallPictureInPictureCard: View {
             VoiceVideoView(userID: content.userID, attach: model.attachVideo, reportPixels: model.reportVideoPixels)
             if isHovering { controls.transition(.opacity) }
         }
+        // The tiles' own glass chips (`TileGlass`): LIVE, then the name.
         .overlay(alignment: .topLeading) {
             HStack(spacing: Spacing.tight) {
                 if content.isStream {
-                    Text("LIVE")
-                        .font(.system(size: 10, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Palette.destructive, in: .capsule)
+                    CallLiveBadge(isCompact: true)
                 }
                 Text(content.name)
                     .font(.system(.caption, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(TileGlass.ink)
                     .lineLimit(1)
+                    .padding(.horizontal, Spacing.base)
+                    .frame(height: 20)
+                    .tileGlass()
             }
-            .padding(.horizontal, Spacing.base)
-            .padding(.vertical, 4)
-            .background(.black.opacity(0.45), in: .capsule)
             .padding(Spacing.base)
         }
         .clipShape(.rect(cornerRadius: Radius.glass, style: .continuous))

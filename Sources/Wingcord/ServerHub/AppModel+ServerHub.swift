@@ -307,14 +307,36 @@ extension AppModel {
 
     func launchWhiteboard() {
         guard let guildID = selectedGuildID else { return }
+        serverHub.whiteboardOpenedThisVisit.insert(guildID)
         Task { await sessionController.launchWhiteboard(in: guildID) }
+    }
+
+    /// Leaves the board from its card, and it stays left for this visit — see
+    /// `ServerHubStore.whiteboardOpenedThisVisit`.
+    func leaveWhiteboard() {
+        guard let guildID = selectedGuildID else { return }
+        serverHub.whiteboardOpenedThisVisit.insert(guildID)
+        if isActivityPoppedOut {
+            isActivityPoppedOut = false
+            ActivityPopoutWindow.shared.close()
+        }
+        Task { await sessionController.leaveActivity() }
+    }
+
+    /// The board in a window of its own (Discord's Pop Out), or back into its
+    /// card.
+    func toggleWhiteboardWindow() {
+        if isActivityPoppedOut { popInActivity() } else { popOutActivity() }
     }
 
     /// Leaving the page takes the whiteboard with it, as Discord's does: it is
     /// drawn only here, and an activity nobody can see is still a session.
+    /// **Except in its own window**, which is there to outlive the page.
     func leaveServerHub(_ guildID: GuildID) {
+        serverHub.whiteboardOpenedThisVisit.remove(guildID)
         guard let channelID = serverHub.spaces[guildID]?.channelID,
-              runningActivity?.instance.location.channelID == channelID
+              runningActivity?.instance.location.channelID == channelID,
+              !isActivityPoppedOut
         else { return }
         Task { await sessionController.leaveActivity() }
     }

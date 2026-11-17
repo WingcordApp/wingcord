@@ -151,6 +151,15 @@ struct GuildUserSettingsBody: Encodable {
                         }
                     )
                 ]
+            case .channelPinned(let channelID, let isPinned):
+                // Discord's `jA`: the whole flags word, the pin's bit set or
+                // cleared over whatever else the override carries.
+                let existingFlags = existing.channelOverrides[channelID]?.flags ?? 0
+                channel_overrides = [
+                    String(channelID.rawValue): ChannelOverride(
+                        flags: GuildUserSettingsChange.pinnedFlags(isPinned, over: existingFlags)
+                    )
+                ]
             case .clearChannelOverride(let channelID):
                 // **Discord's own reset, field for field**, read out of its
                 // bundle: `message_notifications` to the inherit value and the

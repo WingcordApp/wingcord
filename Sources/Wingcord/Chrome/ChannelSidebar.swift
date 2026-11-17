@@ -217,6 +217,11 @@ struct ChannelSidebar: View, Equatable {
         }
     }
 
+    /// The reader's Pinned Channels heading, which is no category on the server.
+    private func isPinnedSection(_ category: SidebarCategory) -> Bool {
+        category.id == AppModel.pinnedChannelsCategoryID
+    }
+
     @ViewBuilder
     private func row(_ row: SidebarRow) -> some View {
         switch row {
@@ -270,8 +275,10 @@ struct ChannelSidebar: View, Equatable {
             SidebarCategoryRow(
                 category: category,
                 toggle: { toggleCategory(category.id) },
-                openMenu: { openMenu(category.id, $0) },
-                createChannel: presentation.header?.canCreateChannels == true
+                // Pinned Channels is the reader's own section, not a category
+                // on the server: no menu of a category, no channel made in it.
+                openMenu: { if !isPinnedSection(category) { openMenu(category.id, $0) } },
+                createChannel: presentation.header?.canCreateChannels == true && !isPinnedSection(category)
                     ? { createChannel(category.id) }
                     : nil
             )
@@ -458,8 +465,8 @@ struct ChannelSidebar: View, Equatable {
                         SidebarCategoryRow(
                             category: category,
                             toggle: { toggleCategory(category.id) },
-                            openMenu: { openMenu(category.id, $0) },
-                            createChannel: presentation.header?.canCreateChannels == true
+                            openMenu: { if !isPinnedSection(category) { openMenu(category.id, $0) } },
+                            createChannel: presentation.header?.canCreateChannels == true && !isPinnedSection(category)
                                 ? { createChannel(category.id) }
                                 : nil
                         )
@@ -937,10 +944,10 @@ private struct PinnedConversationsGrid: View {
     var select: (ChannelID) -> Void
     var openMenu: (ChannelID, CGRect) -> Void
 
-    private static let columns = [GridItem(.adaptive(minimum: 76, maximum: 110), spacing: Spacing.tight)]
-
     var body: some View {
-        LazyVGrid(columns: Self.columns, alignment: .center, spacing: Spacing.base) {
+        // **Each row centred** (Alex, 2026-11-17), as Messages lays out its
+        // pins: two faces sit in the middle of the list, not at its left.
+        CenteredTileGrid(minimumWidth: 76, maximumWidth: 110, spacing: Spacing.tight, lineSpacing: Spacing.base) {
             ForEach(channels) { channel in
                 PinnedConversationTile(
                     channel: channel,

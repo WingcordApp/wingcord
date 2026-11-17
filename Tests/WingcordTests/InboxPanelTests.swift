@@ -516,4 +516,21 @@ struct InboxPanelTests {
         // request that was declined if the same person asked again.
         #expect(model.relationshipFacts[requester] == nil)
     }
+
+    // MARK: Unreads loading (Alex, 2026-11-17: "open it like 4-5 times")
+
+    /// A box the transcript filled around an older position has nothing unread
+    /// in it, and must not stand in for the group's own fetch.
+    @Test("Only messages past the read cursor count as an Unreads group's")
+    func holdsUnreadsOnlyPastTheCursor() {
+        func message(_ id: UInt64) -> Message {
+            Message(id: MessageID(rawValue: id), channelID: general, authorID: readerID, content: "m")
+        }
+        let older = [message(100), message(200)]
+        #expect(!AppModel.holdsUnreads(older, after: MessageID(rawValue: 300)))
+        #expect(AppModel.holdsUnreads(older + [message(400)], after: MessageID(rawValue: 300)))
+        // No cursor: any page at all is the newest the reader has.
+        #expect(AppModel.holdsUnreads(older, after: nil))
+        #expect(!AppModel.holdsUnreads([], after: nil))
+    }
 }

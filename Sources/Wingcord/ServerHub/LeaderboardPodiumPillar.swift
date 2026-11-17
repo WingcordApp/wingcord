@@ -1,90 +1,125 @@
 import SwiftUI
 
-/// One place on the podium: a pennant with the face in its ring, the name, the
-/// value, and the trophy or the medal at its foot.
+/// One place on the podium, laid out as Discord's (`tN`, `.pillarColumn`): the
+/// pennant behind it, the face in its ring, the name, the value, and the medal
+/// — or the winner's trophy — at its foot.
 ///
-/// Hover lists the games behind the value, as Discord's pillar does; a click
-/// opens the person's profile on its Activity tab.
+/// Resting on it shows what they played (`LeaderboardPlayedCard`), as
+/// Discord's pillar tooltip does; a click opens their profile on its Activity
+/// tab.
 struct LeaderboardPodiumPillar: View {
     var row: LeaderboardCardModel.Row
-    var place: Int
-    var scale: CGFloat
+    var place: PodiumPlace
+    /// The podium's entrance has run (`LeaderboardPodium`).
+    var hasLanded: Bool
     var open: () -> Void
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
+    @State private var showsGames = false
 
-    private var isWinner: Bool { place == 1 }
-    private var size: CGSize {
-        isWinner ? CGSize(width: 150 * scale, height: 206 * scale) : CGSize(width: 122 * scale, height: 168 * scale)
-    }
-    private var face: CGFloat { (isWinner ? 72 : 46) * scale }
-    private var tone: PodiumTone { PodiumTone(place: place) }
+    /// `.pillarColumn`'s padding and gap.
+    private static let padding: CGFloat = 8
+    private static let gap: CGFloat = 4
 
     var body: some View {
         Button(action: open) {
-            VStack(spacing: 6 * scale) {
-                AvatarView(
-                    url: row.largeAvatarURL ?? row.avatarURL,
-                    monogram: row.isHidden ? "" : row.monogram,
-                    side: face
-                )
-                .padding(3 * scale)
-                .overlay {
-                    Circle().strokeBorder(tone.rim, lineWidth: isWinner ? 3 : 2.5)
-                }
-                .shadow(color: tone.glow.opacity(isWinner ? 0.55 : 0.3), radius: isWinner ? 10 : 6)
-                Text(row.name)
-                    .font(.system(isWinner ? .headline : .subheadline, weight: .bold))
-                    .foregroundStyle(Ink.primary)
-                    .lineLimit(1)
-                    .padding(.horizontal, 10 * scale)
-                Text(row.value)
-                    .font(.system(.callout, weight: .semibold))
-                    .foregroundStyle(Ink.primary.opacity(0.85))
-                    .monospacedDigit()
-                Spacer(minLength: 0)
-                medal
-                    .padding(.bottom, (isWinner ? 34 : 30) * scale)
-            }
-            .padding(.top, 16 * scale)
-            .frame(width: size.width, height: size.height)
-            .background {
-                PodiumPillarShape(point: 26 * scale)
-                    .fill(LinearGradient(colors: tone.fill, startPoint: .top, endPoint: .bottom))
-            }
-            .overlay {
-                PodiumPillarShape(point: 26 * scale)
-                    .strokeBorder(tone.rim.opacity(0.9), lineWidth: isWinner ? 1.5 : 1)
-            }
-            // The winner's light, kept soft (Alex: glow restrained).
-            .shadow(color: tone.glow.opacity(isWinner ? 0.35 : 0), radius: 18)
-            .contentShape(PodiumPillarShape(point: 26 * scale))
-            .scaleEffect(isHovering ? 1.02 : 1)
+            content
+                .padding(.top, Self.padding + (row.detail == nil ? 8 : 0))
+                .padding(.horizontal, Self.padding)
+                .frame(width: place.columnSize.width, height: place.columnSize.height, alignment: .top)
+                .background(alignment: .topLeading) { card }
+                .overlay(alignment: .topLeading) { medal }
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .disabled(row.isHidden)
+        .overlay(alignment: tooltipAlignment) {
+            if showsGames {
+                LeaderboardPlayedCard(row: row)
+                    .alignmentGuide(.top) { $0[.bottom] - metricsTop + 6 }
+                    .transition(.materialize(from: .bottom, blurring: false))
+            }
+        }
+        .zIndex(showsGames ? 2 : (place == .first ? 1 : 0))
+        .modifier(PodiumEntrance(place: place, hasLanded: hasLanded))
         .onHover { hovering in
             guard isHovering != hovering else { return }
             isHovering = hovering
+            if !hovering { showsGames = false }
         }
-        .animation(motion.hover, value: isHovering)
-        .help(row.playedSummary ?? row.name)
-        .accessibilityLabel(Text("Rank \(place), \(row.name), \(row.value)"))
-        .accessibilityHint(Text("Opens their profile"))
+        // Discord's tooltip waits a beat, so sweeping across the podium
+        // doesn't flash three cards.
+        .task(id: isHovering) {
+            guard isHovering, !row.isHidden else { return }
+            try? await Task.sleep(for: .milliseconds(320))
+            guard !Task.isCancelled else { return }
+            showsGames = true
+        }
+        .animation(motion.hover, value: showsGames)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Rank \(place.rawValue), \(row.name), \(row.value)"))
+        .accessibilityHint(Text(row.playedSummary.map { "\($0). Opens their profile." } ?? "Opens their profile."))
+        .accessibilityAddTraits(.isButton)
     }
 
-    @ViewBuilder
+    private var content: some View {
+        VStack(spacing: Self.gap) {
+            AvatarView(
+                url: row.largeAvatarURL ?? row.avatarURL,
+                monogram: row.isHidden ? "" : row.monogram,
+                side: place.avatarSide
+            )
+            .overlay(alignment: .topLeading) {
+                PodiumRing(place: place)
+                    .offset(x: place.ringFrame.minX, y: place.ringFrame.minY)
+            }
+            VStack(spacing: 2) {
+                LeaderboardName(row: row, size: 14)
+                Text(row.value)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Ink.primary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                if let detail = row.detail {
+                    Text(detail)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Ink.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .modifier(PodiumContentEntrance(place: place, hasLanded: hasLanded))
+    }
+
+    /// The pennant, drawn out past the column for the winner's glow.
+    private var card: some View {
+        let spec = PodiumCardSpec.forPlace(place)
+        return PodiumCard(place: place)
+            .frame(width: spec.frame.width, height: spec.frame.height)
+            .offset(x: spec.frame.minX, y: spec.frame.minY)
+    }
+
     private var medal: some View {
-        if isWinner {
-            Image(systemName: "trophy.fill")
-                .font(.system(size: 26 * scale))
-                .foregroundStyle(LinearGradient(colors: tone.medal, startPoint: .top, endPoint: .bottom))
-                .shadow(color: tone.glow.opacity(0.5), radius: 4)
-                .accessibilityHidden(true)
-        } else {
-            LeaderboardRankBadge(rank: place)
-                .accessibilityHidden(true)
+        LeaderboardMedal(rank: place.rawValue, isTrophy: place == .first)
+            .modifier(PodiumMedalEntrance(place: place, hasLanded: hasLanded))
+            .offset(x: (place.columnSize.width - PodiumPlace.medalSide) / 2, y: place.medalTop)
+    }
+
+    /// Where the value line starts, from the column's top: the games card's
+    /// foot sits just above it, as Discord's tooltip sits above the value.
+    private var metricsTop: CGFloat {
+        Self.padding + (row.detail == nil ? 8 : 0) + place.avatarSide + Self.gap + 18 + 2
+    }
+
+    /// The card hangs over the podium, kept inside the leaderboard's edges:
+    /// second's from its leading side, third's from its trailing side.
+    private var tooltipAlignment: Alignment {
+        switch place {
+        case .first: .top
+        case .second: .topLeading
+        case .third: .topTrailing
         }
     }
 }
