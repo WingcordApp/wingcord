@@ -88,29 +88,55 @@ struct MemberActivityTests {
         #expect(stranger.memberActivityBlock == nil)
     }
 
-    @Test("A card's chips: New Player in green, a streak only from three fresh days")
-    func badges() throws {
+    @Test("A card's markers: Discord's order, the first two drawn, New Player's glyph green")
+    func markers() throws {
         let fresh = String((UInt64(Date.now.timeIntervalSince1970 * 1000) - 1_420_070_400_000) << 22)
         let model = model(entries: [
             entry(fresh, author: 11, rank: 1, traits: [.newPlayer, .streak(days: 4), .trending]),
         ])
         let card = try #require(model.memberActivityBlock?.cards.first)
-        let labels = card.badges.compactMap { badge -> String? in
-            if case .label(_, let text, _) = badge { return text }
+        let labels = card.markers.compactMap { marker -> String? in
+            if case .words(let text) = marker.text { return text }
             return nil
         }
         #expect(labels == ["New Player", "4x Streak", "Trending"])
-        #expect(card.badges.contains(.label(symbol: "person.fill.badge.plus", text: "New Player", isPositive: true)))
+        #expect(card.markers.first { $0.text == .words("New Player") }?.tintsSymbol == true)
+        #expect(card.markers.first { $0.text == .words("4x Streak") }?.tooltip == "Played 4 days in a row")
     }
 
-    @Test("The section's own geometry: a heading, then 72-point cards")
+    /// `--demo` draws one entry of every kind (`DemoActivityFeed`): if the
+    /// fixtures stop reaching the section, the demo can't show the cards.
+    @Test("The demo's section holds every kind, and its popouts resolve")
+    func demoFeed() async throws {
+        try await withAppSettings(\.hidesActivityCards) { settings in
+            settings.hidesActivityCards = false
+            let demo = AppModel()
+            DemoFixtures.populate(demo)
+            let block = try #require(demo.memberActivityBlock)
+            #expect(block.count == 7)
+            let guildID = try #require(demo.selectedGuildID)
+            let entries = demo.activityFeed.inbox?.entries ?? []
+            let titles = entries.map { demo.activityPopout(for: $0, inGuild: guildID, now: .now).verb }
+            #expect(titles.contains("listened to"))
+            #expect(titles.contains("is playing"))
+            #expect(titles.contains("is listening to"))
+            // The live game names its party, and its popout its voice room.
+            let live = try #require(entries.first { $0.activity.isLive && $0.activity.subject.isMusic == false })
+            let popout = demo.activityPopout(for: live, inGuild: guildID, now: .now)
+            #expect(popout.markers.contains { $0.text == .words("In a Match (2 of 4)") })
+            #expect(popout.voice != nil)
+        }
+    }
+
+    @Test("The section's own geometry: a heading, then Discord's 78-point bands")
     func geometry() {
         let card = MemberActivityCard(
-            id: "1", authorID: UserID(rawValue: 1), faces: [], name: "A", title: "T",
-            badges: [], artURL: nil, artSymbol: "gamecontroller.fill", liveSince: nil, occurredAt: nil
+            id: "1", authorID: UserID(rawValue: 1), faces: [], extraPeople: 0, name: "A", nameColor: nil,
+            nameFont: nil, title: "T", markers: [], artURL: nil, artSymbol: "gamecontroller.fill",
+            liveSince: nil, occurredAt: nil
         )
         let block = MemberActivityBlock(count: 2, isExpanded: false, isHidden: false, cards: [card, card])
-        #expect(block.height == MemberActivityGeometry.headerHeight + 144)
+        #expect(block.height == MemberActivityGeometry.headerHeight + 156)
         #expect(block.cardIndex(at: 1) == nil)
         #expect(block.cardIndex(at: MemberActivityGeometry.headerHeight + 80) == 1)
         #expect(block.cardIndex(at: block.height + 1) == nil)

@@ -36,14 +36,38 @@ public struct ClientMetadata: Sendable {
         /// was the cause is the Scheduled tab answering at all; the tell that
         /// it was not is a `HTTP 401 users/@me/scheduled-messages` line still
         /// in the trace, which now carries Discord's own words for it.
+        ///
+        /// **It happened again, as a 404** (2026-11-17): `GET /emoji-packs`
+        /// answered `404: Not Found` for an account whose own frecency blob had
+        /// a pack added, at build 617,136 against Discord's 675,174 — and
+        /// Discord's client reads a 404 there as "packs are not enabled for
+        /// this user". So the web build is now also read off discord.com/app
+        /// once a day (`DiscordWebBuild`) and the next launch sends that; these
+        /// numbers are only the floor.
+        ///
+        /// Read 2026-11-17: the web build from discord.com/app's
+        /// `GLOBAL_ENV.BUILD_NUMBER`; the desktop, Electron and Chromium
+        /// versions from an installed Discord 0.0.422. The native build number
+        /// comes from the desktop updater at run time and is not on disk, so it
+        /// is the last one seen.
         public static let current = Baseline(
             apiVersion: 9,
-            webBuildNumber: 617_136,
+            webBuildNumber: 675_174,
             nativeBuildNumber: 87_263,
-            desktopVersion: "0.0.403",
-            electronVersion: "42.7.1",
-            chromiumVersion: "148.0.7778.280"
+            desktopVersion: "0.0.422",
+            electronVersion: "44.10.2",
+            chromiumVersion: "152.0.7977.169"
         )
+
+        /// This baseline with a newer web build, never an older one: a number
+        /// read off the page that is below the shipped floor is a page that
+        /// changed shape, not a client that went back in time.
+        public func with(webBuildNumber: Int?) -> Baseline {
+            guard let webBuildNumber, webBuildNumber > self.webBuildNumber else { return self }
+            var copy = self
+            copy.webBuildNumber = webBuildNumber
+            return copy
+        }
     }
 
     public let baseline: Baseline

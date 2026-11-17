@@ -10,13 +10,20 @@ import WingcordCore
 
 extension DiscordREST {
 
-    /// Every pack the account may see. Empty where Discord answers 404.
-    public func emojiPacks() async throws -> [EmojiPack] {
+    /// Every pack the account may see, or **nil where Discord answers 404**,
+    /// which its own client reads as "emoji packs are not enabled for this
+    /// user" (`934499`). Kept apart from an empty list and from a failure: only
+    /// the 404 may say "not available on this account".
+    ///
+    /// **A 404 here has also meant a stale client**: at build 617,136 Discord
+    /// refused the route to an account that had a pack added (2026-11-17) —
+    /// see `ClientMetadata.Baseline`.
+    public func emojiPacks() async throws -> [EmojiPack]? {
         do {
             return try await get("/emoji-packs", route: "emoji-packs", as: [EmojiPackDTO].self)
                 .compactMap(\.domain)
         } catch Failure.notFound {
-            return []
+            return nil
         }
     }
 

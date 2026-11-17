@@ -17,6 +17,7 @@ struct DisplayNameStyleFlyout: View {
     var editor: ProfileEditor
 
     @Environment(\.motion) private var motion
+    @Environment(AppModel.self) private var model
     /// **Seeded in `init`**, not on appear: a flyout that laid out on the
     /// defaults and then jumped to what is worn drew a frame of the wrong
     /// choices — and laid its rows out for none of the colours.
@@ -50,15 +51,24 @@ struct DisplayNameStyleFlyout: View {
         } content: {
             preview
             if !editor.appliesNameStyle {
-                // Said once, plainly — a try-on, never an upsell.
-                Label(ProfileEditCapability.nameStyleNote, systemImage: "sparkles")
-                    .font(.system(.caption, weight: .medium))
-                    .foregroundStyle(InkColor.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Said once, plainly — a try-on, never an upsell. The Vice City
+                // font is the exception, and says so.
+                Label(
+                    font == .hexagon && editor.allowsCampaignFont
+                        ? "The Vice City font saves without Nitro, on its own. An effect or colours stay a try-on."
+                        : ProfileEditCapability.nameStyleNote,
+                    systemImage: "sparkles"
+                )
+                .font(.system(.caption, weight: .medium))
+                .foregroundStyle(InkColor.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.margin) {
                     fontGrid
+                    if editor.allowsCampaignFont || font == .hexagon {
+                        viceCityFont
+                    }
                     effectGrid
                     colourSection
                 }
@@ -148,6 +158,29 @@ struct DisplayNameStyleFlyout: View {
                 }
             }
         }
+    }
+
+    /// Discord's "Limited Time Font" (decision 4): the campaign's face, under
+    /// the grid it is not part of.
+    private var viceCityFont: some View {
+        let lastMoment = DiscordTheme.ViceCity.lastMoment(for: model.entitlements.premiumTier)
+        return ViceCityFontTile(
+            name: profile.displayName,
+            isSelected: font == .hexagon,
+            terms: model.viceCityFontTerms,
+            daysLeft: max(1, Int((lastMoment.timeIntervalSinceNow / 86_400).rounded(.up))),
+            pick: {
+                font = .hexagon
+                // Without Nitro the font is all that saves; the preview shows
+                // what the save will write.
+                if !editor.appliesNameStyle {
+                    effect = .solid
+                    colours = Self.fitted([], to: .solid, fill: editor.fallbackColour)
+                }
+                Haptics.tick()
+                commit()
+            }
+        )
     }
 
     private var effectGrid: some View {

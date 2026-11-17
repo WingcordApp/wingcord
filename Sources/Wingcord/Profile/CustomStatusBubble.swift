@@ -114,6 +114,15 @@ struct CustomStatusBubble: View {
     /// can; the reader's own is the button that edits it, and a selectable
     /// label inside a button takes the click the button exists for.
     var isSelectable = false
+    /// Whether the bubble moves itself to where it rests beside the face.
+    /// **Off inside a button** — `OwnStatusBubbleButton` moves the button
+    /// instead, because a press is taken where the label was laid out, not
+    /// where an offset inside it drew it (Alex, 2026-11-17, Image 84).
+    var appliesRestingOffset = true
+
+    /// How far the cluster sits below the artwork's edge — what
+    /// `appliesRestingOffset` applies.
+    var restingOffset: CGFloat { layout.verticalOffset(collapsedHeight: collapsedHeight) }
 
     var body: some View {
         bubble
@@ -224,7 +233,7 @@ struct CustomStatusBubble: View {
         .frame(height: layout.topOverhang + collapsedHeight, alignment: .top)
         // Placed from the avatar's own drop, so the cluster leaves the face at
         // the same angle on both surfaces.
-        .offset(y: layout.verticalOffset(collapsedHeight: collapsedHeight))
+        .offset(y: appliesRestingOffset ? restingOffset : 0)
         // **The clamp lifts under the pointer, in place.** Discord expands the
         // bubble itself rather than opening a second surface to read it in, and
         // the flyout this replaces was answering a question by putting the

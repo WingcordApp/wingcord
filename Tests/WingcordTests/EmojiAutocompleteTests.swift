@@ -1,5 +1,6 @@
 import Testing
 @testable import Wingcord
+import WingcordCore
 
 /// The `:shortcode` completion's parsing.
 ///
@@ -54,84 +55,51 @@ struct EmojiAutocompleteTests {
         #expect(EmojiAutocomplete.applying(custom, to: "yes :par") == "yes \(custom) ")
     }
 
-    /// **The fixture is the catalog, and that is the point of this test.**
-    ///
-    /// It used to pass a lone server section and assert that Unicode appeared
-    /// anyway — which was true because `matches` walked Unicode a second time
-    /// on its own. `EmojiCatalog` has appended the nine Unicode sections for a
-    /// long time, so in the running app that second walk found everything
-    /// twice: `:cry` listed `:cry:`, `:crying_cat_face:` and `:crystal_ball:`
-    /// two times each. A fixture that did not look like the caller's input is
-    /// what let it survive.
-    @Test("The account's own emoji lead, and nothing is listed twice")
-    func customEmojiLead() {
-        let matches = EmojiAutocomplete.matches(for: "sob", custom: Self.catalog)
-        #expect(matches.first?.name == "sobbing_cat")
-        // Unicode still follows, because the catalog carries it.
-        #expect(matches.contains { $0.name == "sob" })
+    /// GitHub #25: `:sob` offers the built-in 😭 first, and a server's own
+    /// `sob` under Discord's name for it, `:sob~1:`.
+    @Test("The built-in emoji leads on its own name; the server's is sob~1")
+    func builtInLeads() {
+        let table = Self.table(custom: [("sob", 1, Self.server)])
+        let matches = EmojiAutocomplete.matches(for: "sob", table: table)
+        #expect(matches.first?.glyph == "😭")
+        #expect(matches.contains { $0.name == "sob~1" && $0.id == 1 })
         #expect(Set(matches.map(\.name)).count == matches.count)
     }
 
-    /// The other duplicate, and it is not the same bug: an account in two
-    /// servers that both use `:blobcat:` has two catalog entries with two ids
-    /// and one name. Offering the reader the same picture twice is a choice
-    /// with no difference in it.
-    @Test("The same emoji in two servers is offered once")
+    /// Two servers that both have `:blobcat:` give two names, as Discord's
+    /// do: this server's keeps the name, the other's is `blobcat~1`.
+    @Test("The same name in two servers is two names")
     func duplicateAcrossServers() {
-        let first = ExpressionSection(
-            id: "g1", title: "One", badge: .glyph("😀"),
-            items: [ExpressionItem(
-                id: "1", art: .image(nil, animated: false),
-                name: "blobcat", pick: .insert("<:blobcat:1>")
-            )]
-        )
-        let second = ExpressionSection(
-            id: "g2", title: "Two", badge: .glyph("😀"),
-            items: [ExpressionItem(
-                id: "2", art: .image(nil, animated: false),
-                name: "blobcat", pick: .insert("<:blobcat:2>")
-            )]
-        )
-        let matches = EmojiAutocomplete.matches(for: "blob", custom: [first, second])
-        #expect(matches.filter { $0.name == "blobcat" }.count == 1)
-    }
-
-    /// What the composer actually hands over: the account's own emoji first,
-    /// then Unicode's categories — which is what `EmojiCatalog` builds.
-    private static var catalog: [ExpressionSection] {
-        let server = ExpressionSection(
-            id: "g",
-            title: "Server",
-            badge: .glyph("😀"),
-            items: [ExpressionItem(
-                id: "1", art: .image(nil, animated: false),
-                name: "sobbing_cat", pick: .insert("<:sobbing_cat:1>")
-            )]
-        )
-        return [server] + AppModel.unicodeSections(tone: .default)
+        let table = Self.table(custom: [("blobcat", 1, Self.server), ("blobcat", 2, Self.other)])
+        let names = EmojiAutocomplete.matches(for: "blob", table: table).map(\.name)
+        #expect(names.contains("blobcat"))
+        #expect(names.contains("blobcat~1"))
     }
 
     /// A locked server's emoji cannot be used in this channel, so offering them
     /// is offering a completion that sends as raw text.
-    @Test("A locked server contributes nothing")
-    func lockedSectionsAreSkipped() {
-        let section = ExpressionSection(
-            id: "g",
-            title: "Server",
-            badge: .glyph("😀"),
-            items: [ExpressionItem(
-                id: "1", art: .image(nil, animated: false), name: "sobbing_cat", pick: .insert("<:sobbing_cat:1>")
-            )],
-            isLocked: true
-        )
-        let matches = EmojiAutocomplete.matches(for: "sob", custom: [section])
+    @Test("What can't be used here is not offered")
+    func lockedAreSkipped() {
+        let table = Self.table(custom: [("sobbing_cat", 1, Self.other)])
+        let matches = EmojiAutocomplete.matches(for: "sob", table: table, offers: { $0.id != 1 })
         #expect(!matches.contains { $0.name == "sobbing_cat" })
     }
 
     @Test("The list is bounded")
     func listIsBounded() {
-        let matches = EmojiAutocomplete.matches(for: "a", custom: [], limit: 5)
+        let matches = EmojiAutocomplete.matches(for: "a", table: Self.table(custom: []), limit: 5)
         #expect(matches.count <= 5)
+    }
+
+    private static let server = GuildID(rawValue: 1_400_000_000_000_000_911)
+    private static let other = GuildID(rawValue: 1_400_000_000_000_000_912)
+
+    /// What the composer hands over: every Unicode name, then the servers'.
+    private static func table(custom: [(String, UInt64, GuildID)]) -> EmojiNameTable {
+        EmojiNameTable(
+            unicode: AppModel.unicodeEmojiNames,
+            custom: custom.map { EmojiNameTable.Custom(id: $0.1, name: $0.0, isAnimated: false, owner: .guild($0.2)) }
+        )
     }
 }
 

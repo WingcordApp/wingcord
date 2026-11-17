@@ -126,6 +126,11 @@ public nonisolated enum UnicodeEmoji {
 
     // MARK: Lookups
 
+    /// Every emoji with every name it answers to — the primary first — in the
+    /// table's order. What `EmojiNameTable` reserves before any server's
+    /// emoji is named.
+    public static var namedItems: [(item: Item, names: [String])] { parsed.named }
+
     /// The emoji in one category, in the order the source orders them — which is
     /// the order every other client's picker shows.
     public static func items(in category: Category) -> [Item] { grouped[category.rawValue] }
@@ -242,6 +247,8 @@ public nonisolated enum UnicodeEmoji {
         var byName: [String: Item] = [:]
         var byGlyph: [String: String] = [:]
         var sortedNames: [(name: String, item: Item)] = []
+        /// Every emoji with all of its names, in the table's order.
+        var named: [(item: Item, names: [String])] = []
     }
 
     private static let parsed: Parsed = {
@@ -271,6 +278,7 @@ public nonisolated enum UnicodeEmoji {
 
             let item = Item(glyph: glyph, name: primary, takesSkinTone: takesSkinTone)
             out.grouped[category.rawValue].append(item)
+            out.named.append((item, fields.map(String.init)))
             // First name wins: the primary is emitted first, and an alias must
             // not overwrite the name the picker shows for the glyph.
             if out.byGlyph[glyph] == nil { out.byGlyph[glyph] = primary }

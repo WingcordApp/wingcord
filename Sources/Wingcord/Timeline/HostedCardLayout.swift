@@ -61,6 +61,8 @@ nonisolated enum HostedCardKey: Hashable, Sendable {
     case activity(ActivityCardKey)
     /// A Spotify link's card (one height, laid out without measuring).
     case spotify(SpotifyCardKey)
+    /// A reply's activity — Discord's component 16 (one height).
+    case contentEntry(ContentEntryCardKey)
 }
 
 /// What a hosted card measured itself at.

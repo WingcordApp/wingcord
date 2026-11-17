@@ -132,6 +132,11 @@ final class ProfileEditor {
     /// account and asks for Nitro at Apply; here the card shows the pick, the
     /// save bar does not come up for it, and a save leaves the name as it was.
     var appliesNameStyle = true
+    /// Whether the Vice City font may be saved by this account even without
+    /// Nitro — Discord's campaign (`AppModel.offersViceCityFont`).
+    var allowsCampaignFont = false
+    /// Joins the campaign before a save that puts its font on the account.
+    var enrollCampaignFont: (@MainActor () async throws -> Void)?
     /// The custom typing indicator — the emoji, the movement and the word others
     /// see while the reader types alone. Nil is the plain one, which clears the
     /// key. Account scope only: there is no per-server indicator.
@@ -397,8 +402,9 @@ final class ProfileEditor {
             profileEffectSKU: profileEffectSKU,
             profileFrameSKU: profileFrameSKU,
             avatarDecorationSKU: avatarDecorationSKU,
-            // A try-on is not a change — `appliesNameStyle`.
-            displayNameStyle: appliesNameStyle ? displayNameStyle : original.displayNameStyle,
+            // A try-on is not a change — `appliesNameStyle` — except the
+            // campaign's font, which saves without Nitro (`savedNameStyle`).
+            displayNameStyle: savedNameStyle,
             typingIndicatorStyle: typingIndicatorStyle,
             widgets: widgets
         )
@@ -583,6 +589,9 @@ final class ProfileEditor {
         let decoration = edit(avatarDecorationSKU, original.avatarDecorationSKU)
         let style = styleWrite
         let typing = edit(typingIndicatorStyle, original.typingIndicatorStyle)
+        if style.isDirty, savesCampaignFont, let enrollCampaignFont {
+            try await enrollCampaignFont()
+        }
 
         if name.isDirty || picture.isDirty || recent.isDirty || plate.isDirty
             || decoration.isDirty || style.isDirty || typing.isDirty {
@@ -701,8 +710,9 @@ final class ProfileEditor {
     /// is a half-applied style, so the write type fans it out and clears all
     /// three together — see `DisplayNameStyleWrite`.
     private var styleWrite: FieldEdit<DisplayNameStyleWrite> {
-        guard appliesNameStyle, displayNameStyle != original.displayNameStyle else { return .unchanged }
-        return displayNameStyle.map { worn in
+        let saved = savedNameStyle
+        guard saved != original.displayNameStyle else { return .unchanged }
+        return saved.map { worn in
             .set(
                 DisplayNameStyleWrite(
                     fontID: worn.font.rawValue,
@@ -711,6 +721,32 @@ final class ProfileEditor {
                 )
             )
         } ?? .cleared
+    }
+
+    /// The style a save writes.
+    ///
+    /// **With Nitro, what was picked.** Without it the picker is a try-on —
+    /// except Discord's Vice City font, which the campaign lets any account
+    /// wear: **the font alone**, Solid with no colours, as Discord's own apply
+    /// writes for an account without Nitro (`412409`), and taking it off again
+    /// is a save too.
+    var savedNameStyle: DisplayNameStyle? {
+        if appliesNameStyle { return displayNameStyle }
+        if allowsCampaignFont, displayNameStyle?.font == .hexagon {
+            return DisplayNameStyle(font: .hexagon, effect: .solid, colors: [])
+        }
+        // Remove, on an account wearing the campaign's font: that is a save.
+        // Another face tried on over it is a try-on like any other.
+        if original.displayNameStyle?.font == .hexagon, displayNameStyle == nil {
+            return nil
+        }
+        return original.displayNameStyle
+    }
+
+    /// Whether this save puts the campaign's font on the account, so the
+    /// campaign has to be joined first.
+    private var savesCampaignFont: Bool {
+        savedNameStyle?.font == .hexagon && original.displayNameStyle?.font != .hexagon
     }
 
     /// The profile's collectibles as Discord writes them — the worn list with

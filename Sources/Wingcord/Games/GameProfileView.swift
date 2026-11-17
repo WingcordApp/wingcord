@@ -404,6 +404,9 @@ private struct GameHeaderBar: View {
                 )
                 .fixedSize()
             }
+            if !isCondensed {
+                GameAddToProfileButton(gameID: game.gameID)
+            }
             circle(didCopyLink ? "checkmark" : "link", didCopyLink ? "Copied" : "Copy the game's id", copyLink)
             circle("xmark", "Close", dismiss)
                 .keyboardShortcut(.cancelAction)

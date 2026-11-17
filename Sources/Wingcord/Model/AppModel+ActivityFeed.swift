@@ -23,6 +23,11 @@ struct ActivityFeedState {
 struct ActivityCardRequest: Equatable {
     var entryID: String
     var anchor: CGRect
+    /// Opened by resting the pointer on the card, Discord's way: it closes
+    /// when the pointer leaves card and popout, and has no click-catcher, so
+    /// the list keeps tracking the pointer. A click, a focused or half-typed
+    /// reply, or the emoji picker pins it (docs/ACTIVITY-CARDS.md decision 7).
+    var opensOnHover = false
 }
 
 /// What the section's memo is keyed on.
@@ -109,6 +114,9 @@ extension AppModel {
             capped: AppSettings.shared.activityImpressions.capped(at: now),
             now: now
         )
+        // Discord draws a top artist or top game only over a week, and a
+        // listening session only while the presence still plays it.
+        .filter { ActivityCardRules.isDrawable($0.activity, isStillListening: matchingPresence(for: $0) != nil) }
     }
 
     private func buildActivityBlock(now: Date) -> MemberActivityBlock? {
@@ -125,7 +133,8 @@ extension AppModel {
         )
     }
 
-    /// One card, as Discord's (`322789`, `868065`, `506326`) words it.
+    /// One card, as Discord's (`322789`, `868065`, `506326`) words it —
+    /// docs/ACTIVITY-CARDS.md decisions 5 and 6.
     func activityCard(for entry: ActivityFeedEntry, inGuild guildID: GuildID, now: Date) -> MemberActivityCard {
         let activity = entry.activity
         let author = activity.authorID
@@ -138,62 +147,108 @@ extension AppModel {
         let nameColor = members[guildID]?[author].flatMap { member in
             roles[guildID].flatMap { RoleResolver.nameColorValue(of: member.roleIDs, in: $0) }
         }.flatMap(roleColor)
-
-        var badges: [MemberActivityCard.Badge] = []
-        var art: URL?
-        switch activity.subject {
-        case .game(_, let applicationID), .activity(_, let applicationID):
-            badges.append(.clock(symbol: activity.subject.symbolName))
-            if ActivityCardRules.isNewRelease(applicationID, now: now) {
-                badges.append(.label(symbol: "sparkles", text: "New Release", isPositive: false))
-            }
-            if case .game = activity.subject {
-                for trait in activity.traits {
-                    switch trait {
-                    case .newPlayer:
-                        badges.append(.label(symbol: "person.fill.badge.plus", text: "New Player", isPositive: true))
-                    case .streak(let days)
-                        where ActivityCardRules.showsStreak(days: days, entryDate: entry.snowflakeDate, now: now):
-                        badges.append(.label(symbol: "bolt.fill", text: "\(days)x Streak", isPositive: false))
-                    default:
-                        break
-                    }
-                }
-            }
-            if activity.traits.contains(.trending) {
-                badges.append(.label(symbol: "flame.fill", text: "Trending", isPositive: false))
-            }
-            if case .game = activity.subject,
-               activity.traits.contains(where: { if case .returning = $0 { true } else { false } })
-            {
-                badges.append(.label(symbol: "arrow.clockwise", text: "Returning", isPositive: false))
-            }
-            if activity.traits.contains(.marathon), let duration = activity.duration {
-                let hours = Int((duration / 3600).rounded())
-                if hours > 0 { badges.append(.label(symbol: "clock.fill", text: "\(hours)h Marathon", isPositive: false)) }
-            }
-            art = applicationID.flatMap { id in games[id].flatMap { gameArtURL($0, kind: .mark, side: MemberActivityGeometry.art) } }
-                ?? applicationIconURL(applicationID, side: MemberActivityGeometry.art)
-        case .listening(_, _, let artworkURL):
-            for case .weeklyCount(let count) in activity.traits {
-                badges.append(.label(symbol: "trophy.fill", text: "\(count.formatted()) tracks this week", isPositive: false))
-            }
-            art = artworkURL
-        }
-
+        let context = activityMarkerContext(for: entry, inGuild: guildID, now: now)
         return MemberActivityCard(
             id: entry.id,
             authorID: author,
             faces: Array(faces),
+            extraPeople: max(0, entry.participants.count - 3),
             name: voiceName(of: author, inGuild: guildID),
             nameColor: nameColor,
-            title: activity.subject.title,
-            badges: badges,
-            artURL: art,
+            nameFont: users[author].flatMap { cosmetics(of: $0)?.displayNameStyle?.font }.flatMap { $0 == .default ? nil : $0 },
+            title: cardTitle(for: activity),
+            markers: ActivityMarkers.markers(for: activity, at: .card, context: context),
+            artURL: activityArtURL(for: entry, side: MemberActivityGeometry.art, prefersCover: false),
             artSymbol: activity.subject.symbolName,
-            liveSince: activity.isOngoing(at: now) ? activity.startedAt ?? entry.snowflakeDate : nil,
+            liveSince: activity.isOngoing(at: now)
+                ? matchingPresence(for: entry)?.startedAt ?? activity.startedAt ?? entry.snowflakeDate
+                : nil,
             occurredAt: entry.snowflakeDate
         )
+    }
+
+    /// The card's title — Discord's: a top artist is titled with the artist,
+    /// a listening session with its artists (`363670`), the rest with their
+    /// subject.
+    func cardTitle(for activity: RecentActivity) -> String {
+        switch activity.subject {
+        case .listening(let track, let artist, _): artist ?? track
+        case .listeningSession(let track, let artists, _): artists.isEmpty ? track : artists.joined(separator: ", ")
+        default: activity.subject.title
+        }
+    }
+
+    /// What the markers need beyond the entry: the author's live presence,
+    /// voice channel and stream (`202195`, `299846`).
+    func activityMarkerContext(for entry: ActivityFeedEntry, inGuild guildID: GuildID?, now: Date) -> ActivityMarkers.Context {
+        let activity = entry.activity
+        let presence = activity.isLive ? matchingPresence(for: entry) : nil
+        var voiceName: String?
+        var isStreaming = false
+        if activity.isLive, let state = voiceStates[activity.authorID], let channelID = state.channelID,
+           permissionGate.canView(channelID), let channel = channelIndex[channelID]
+        {
+            voiceName = channel.name
+            isStreaming = state.isStreaming
+        }
+        return ActivityMarkers.Context(
+            party: presence.flatMap { ActivityCardRules.partyText(state: $0.state, size: $0.partySize) },
+            voiceChannelName: voiceName,
+            isStreaming: isStreaming,
+            entryDate: entry.snowflakeDate,
+            now: now
+        )
+    }
+
+    /// The author's presence this entry is the record of, while it is live —
+    /// Discord's `getMatchingActivity`: the same game or activity; for music,
+    /// their Spotify.
+    func matchingPresence(for entry: ActivityFeedEntry) -> Activity? {
+        let activities = presences[entry.activity.authorID]?.activities?.list ?? []
+        switch entry.activity.subject {
+        case .listening, .listeningSession:
+            return activities.first { $0.kind == .listening }
+        default:
+            return activities.first { entry.activity.records($0) }
+        }
+    }
+
+    /// The picture a card or popout draws (`325158`'s `nO`): the live
+    /// presence's own picture first; music and shows their artwork; a game's
+    /// **cover** (portrait box art) in the popout, its square mark on the card;
+    /// the application's icon last.
+    func activityArtURL(for entry: ActivityFeedEntry, side: CGFloat, prefersCover: Bool) -> URL? {
+        let activity = entry.activity
+        if activity.isLive, let live = matchingPresence(for: entry)?.largeImageURL { return live }
+        switch activity.subject {
+        case .listening(_, _, let artwork), .listeningSession(_, _, let artwork):
+            return artwork
+        case .watched(_, _, let applicationID):
+            if let url = Activity.assetURL(activity.details.mediaImage, application: applicationID, side: side) {
+                return url
+            }
+            return applicationIconURL(applicationID, side: side)
+        case .game(_, let applicationID), .activity(_, let applicationID), .topGame(_, let applicationID):
+            if let game = applicationID.flatMap({ games[$0] }) {
+                if prefersCover, gameArtIsCover(game, kind: .cover) {
+                    return gameArtURL(game, kind: .cover, side: side * 2)
+                }
+                if let mark = gameArtURL(game, kind: .mark, side: side) { return mark }
+            }
+            return applicationIconURL(applicationID, side: side)
+        }
+    }
+
+    /// Whether the popout's picture is a portrait cover — drawn at its own
+    /// shape rather than squared (Discord's `aspectRatio: "none"`).
+    func activityArtIsCover(for entry: ActivityFeedEntry) -> Bool {
+        if entry.activity.isLive, matchingPresence(for: entry)?.largeImageURL != nil { return false }
+        switch entry.activity.subject {
+        case .game(_, let applicationID?):
+            return games[applicationID].map { gameArtIsCover($0, kind: .cover) } ?? false
+        default:
+            return false
+        }
     }
 
     // MARK: Acting on the section
@@ -214,8 +269,62 @@ extension AppModel {
         if !hidden { sessionController.loadActivityFeedIfDue() }
     }
 
+    /// A click on a card: its popout, pinned until a click elsewhere or
+    /// Escape. A click on the card already open by hover only pins it.
     func openActivityCard(_ entryID: String, anchor: CGRect) {
+        activityHoverTask?.cancel()
         activityCardRequest = ActivityCardRequest(entryID: entryID, anchor: anchor)
+    }
+
+    /// The pointer rested on a card for 100 ms: its popout — unless another
+    /// one is pinned (a reply being written is not taken away by a pass over
+    /// the list).
+    func hoverActivityCard(_ entryID: String, anchor: CGRect) {
+        activityHoverTask?.cancel()
+        if let open = activityCardRequest {
+            guard open.opensOnHover, open.entryID != entryID else { return }
+        }
+        activityCardRequest = ActivityCardRequest(entryID: entryID, anchor: anchor, opensOnHover: true)
+    }
+
+    /// The pointer left the cards or the popout: a hover-opened popout closes
+    /// a moment later, unless by then the pointer is on it (or back on a card).
+    ///
+    /// **150 ms, a little over the 100 it takes to open** (Discord uses 100
+    /// for both): a pointer going from the popout back onto its card reopens
+    /// it at 100, which cancels this before it fires — at equal delays the two
+    /// raced and the popout blinked shut and open.
+    func endActivityCardHover() {
+        activityHoverTask?.cancel()
+        guard activityCardRequest?.opensOnHover == true else { return }
+        activityHoverTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard let self, !Task.isCancelled,
+                  self.activityCardRequest?.opensOnHover == true,
+                  !self.isActivityPopoutHovered
+            else { return }
+            self.activityCardRequest = nil
+        }
+    }
+
+    /// The popout under the pointer, or not.
+    func setActivityPopoutHovered(_ hovered: Bool) {
+        isActivityPopoutHovered = hovered
+        if hovered { activityHoverTask?.cancel() } else { endActivityCardHover() }
+    }
+
+    /// The reader started using the popout — a focused or typed reply, the
+    /// emoji picker: it stays until they are done with it.
+    func pinActivityCard() {
+        activityHoverTask?.cancel()
+        guard activityCardRequest?.opensOnHover == true else { return }
+        activityCardRequest?.opensOnHover = false
+    }
+
+    /// Whether the popout up now was opened by hover — the member list keeps
+    /// tracking the pointer under it.
+    var isActivityPopoutHoverOpened: Bool {
+        activityCardRequest?.opensOnHover == true
     }
 
     /// The entry a popout is about, wherever the feed holds it.

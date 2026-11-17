@@ -578,8 +578,8 @@ struct MiniProfileCard: View {
             // one arrangement, and a hand-tuned offset here would be right on
             // one of the two profile surfaces at most.
             if ownActions != nil {
-                Button { isEditingStatus = true } label: {
-                    CustomStatusBubble(
+                OwnStatusBubbleButton(
+                    bubble: CustomStatusBubble(
                         text: profile.customStatus,
                         emoji: profile.customStatusEmoji,
                         placeholder: hasCustomStatus ? nil : ownStatusPrompt,
@@ -588,8 +588,7 @@ struct MiniProfileCard: View {
                         fill: ground.statusBubbleFill,
                         ink: ground.statusBubbleInk
                     )
-                }
-                .buttonStyle(.plain)
+                ) { isEditingStatus = true }
                 .accessibilityLabel(
                     Text(hasCustomStatus ? "Edit your custom status" : "Set a custom status")
                 )

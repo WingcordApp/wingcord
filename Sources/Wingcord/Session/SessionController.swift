@@ -61,7 +61,11 @@ final class SessionController {
     unowned let model: AppModel
     /// `internal` alongside `rest` and `socket`: the directory routes are
     /// locale-scoped, and the locale lives here.
-    let metadata = ClientMetadata()
+    ///
+    /// **With the web build Discord's page last said** (`ClientBuildCache`),
+    /// not only the shipped one: Discord refuses its newest routes to an old
+    /// build, which is how Nitro Emoji Packs answered 404.
+    let metadata = ClientMetadata(baseline: ClientBuildCache().baseline)
     let rest: DiscordREST
     /// `internal` for the same reason `rest` and `model` are: a group of
     /// routes lives in an extension in another file. The launch needs the
@@ -120,8 +124,6 @@ final class SessionController {
     /// The private channels whose call this connection has asked about
     /// (`askForCall`), as Discord's CallStore keeps them.
     var callsAsked: Set<ChannelID> = []
-    /// Whether this session has asked for the Nitro Emoji Packs.
-    var hasLoadedEmojiPacks = false
     /// Whether the account's command frecency table has been asked for.
     ///
     /// A flag rather than "is the array empty": an account that has never run a
@@ -803,17 +805,19 @@ final class SessionController {
         model.isNSFWAllowed = account.isNSFWAllowed
         model.entitlements = AccountEntitlements().updated(
             premiumType: account.premiumType,
-            ageVerificationStatus: account.ageVerificationStatus
+            ageVerificationStatus: account.ageVerificationStatus,
+            perks: account.perks
         )
     }
 
     private func connect(token: String) {
-        Self.trace("connecting gateway")
+        Self.trace("connecting gateway (build \(metadata.baseline.webBuildNumber))")
         teardownConnection()
         isTornDown = false
         startGameDetection()
         startLocalRPC()
         startNowPlaying()
+        refreshClientBuildIfStale()
         let socket = GatewaySocket(metadata: metadata)
         self.socket = socket
         voice.attach(socket: socket)
@@ -908,6 +912,10 @@ final class SessionController {
         model.closeDiscovery()
         hasLoadedDiscoveryCategories = false
         hasLoadedAppDirectoryCategories = false
+        // Which packs Discord offers, and which were added, are the account's.
+        model.emojiPacks = []
+        model.pinnedEmojiPackIDs = []
+        model.emojiPacksLoad = .idle
         model.clearAllMessages()
         // A wait is the account's, not the window's: the next account has sent
         // nothing yet.
@@ -1244,7 +1252,8 @@ final class SessionController {
         Self.trace("ready: hubs in_experiment=\(hubServers.count) [\(hubServers.map { "\($0.id)" }.joined(separator: " "))]")
         model.entitlements = model.entitlements.updated(
             premiumType: snapshot.premiumType,
-            ageVerificationStatus: snapshot.ageVerificationStatus
+            ageVerificationStatus: snapshot.ageVerificationStatus,
+            perks: snapshot.perks
         )
         if let verification = snapshot.accountVerification { model.accountVerification = verification }
         model.ageGatedFeatures = snapshot.ageGatedFeatures
@@ -1913,12 +1922,13 @@ final class SessionController {
             model.noteReadStateChanged(in: channelID)
             model.railRevision &+= 1
 
-        case .currentUserUpdated(let user, let premiumType, let ageVerificationStatus, let verification):
+        case .currentUserUpdated(let user, let premiumType, let ageVerificationStatus, let verification, let perks):
             model.users[user.id] = user.merged(over: model.users[user.id])
             rememberAccount(user)
             model.entitlements = model.entitlements.updated(
                 premiumType: premiumType,
-                ageVerificationStatus: ageVerificationStatus
+                ageVerificationStatus: ageVerificationStatus,
+                perks: perks
             )
             // Confirming an e-mail from its link lands here, which is what lets
             // an open application form take its row's tick without reopening.

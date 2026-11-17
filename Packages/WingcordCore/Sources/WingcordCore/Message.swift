@@ -251,6 +251,8 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var activityInvite: ActivityInvite? { payload?.activityInvite }
     /// An invitation to listen along on the author's Spotify.
     public var listenAlong: ListenAlongInvite? { payload?.listenAlong }
+    /// The activity this message replies to — Discord's component 16.
+    public var contentEntry: RecentActivity? { payload?.contentEntry }
     /// Who invoked the command this message answers. Nil for everything a
     /// person typed.
     public var interaction: MessageInteraction? { payload?.interaction }
@@ -376,6 +378,10 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     /// What a Server Hub message (type 69) is about — `guild_space_data`. Nil
     /// for everything else.
     public let guildSpaceData: GuildSpaceMessageData?
+    /// The activity a reply is about — Discord's component 16
+    /// (`content_inventory_entry`), the card a reply to somebody's activity
+    /// carries into the conversation (docs/ACTIVITY-CARDS.md decision 11).
+    public let contentEntry: RecentActivity?
 
     public init(
         attachments: [Attachment] = [],
@@ -399,7 +405,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         thread: MessageThread? = nil,
         sharedTheme: SharedClientTheme? = nil,
         mediaMention: MediaMention? = nil,
-        guildSpaceData: GuildSpaceMessageData? = nil
+        guildSpaceData: GuildSpaceMessageData? = nil,
+        contentEntry: RecentActivity? = nil
     ) {
         self.activityInvite = activityInvite
         self.listenAlong = listenAlong
@@ -423,6 +430,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         self.sharedTheme = sharedTheme
         self.mediaMention = mediaMention
         self.guildSpaceData = guildSpaceData
+        self.contentEntry = contentEntry
     }
 
     /// The same box with one array replaced.
@@ -458,7 +466,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             thread: thread,
             sharedTheme: sharedTheme,
             mediaMention: mediaMention,
-            guildSpaceData: guildSpaceData
+            guildSpaceData: guildSpaceData,
+            contentEntry: contentEntry
         )
     }
 
@@ -486,7 +495,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             thread: thread,
             sharedTheme: sharedTheme,
             mediaMention: mediaMention,
-            guildSpaceData: guildSpaceData
+            guildSpaceData: guildSpaceData,
+            contentEntry: contentEntry
         )
     }
 
@@ -514,7 +524,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             thread: thread,
             sharedTheme: sharedTheme,
             mediaMention: mediaMention,
-            guildSpaceData: guildSpaceData
+            guildSpaceData: guildSpaceData,
+            contentEntry: contentEntry
         )
     }
 
@@ -542,7 +553,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             thread: thread,
             sharedTheme: sharedTheme,
             mediaMention: mediaMention,
-            guildSpaceData: guildSpaceData
+            guildSpaceData: guildSpaceData,
+            contentEntry: contentEntry
         )
     }
 
@@ -555,7 +567,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             && mentionedRoleIDs.isEmpty && !mentionsEveryone
             && reference == nil && forwarded == nil && webhookID == nil && nonce == nil
             && activityInvite == nil && listenAlong == nil && interaction == nil && thread == nil
-            && sharedTheme == nil && mediaMention == nil && guildSpaceData == nil
+            && sharedTheme == nil && mediaMention == nil && guildSpaceData == nil && contentEntry == nil
     }
 
     public static func == (lhs: MessagePayload, rhs: MessagePayload) -> Bool {
@@ -582,7 +594,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
                 && lhs.thread == rhs.thread
                 && lhs.sharedTheme == rhs.sharedTheme
                 && lhs.mediaMention == rhs.mediaMention
-                && lhs.guildSpaceData == rhs.guildSpaceData)
+                && lhs.guildSpaceData == rhs.guildSpaceData
+                && lhs.contentEntry == rhs.contentEntry)
     }
 
     public func hash(into hasher: inout Hasher) {

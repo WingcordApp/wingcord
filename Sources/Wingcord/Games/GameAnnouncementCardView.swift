@@ -64,9 +64,25 @@ struct GameAnnouncementCardView: View {
         let inner = max(0, width - Self.padding * 2)
         return VStack(alignment: .leading, spacing: Self.gap) {
             sourceLine
+            // **The words take only the room the footer leaves** (Alex,
+            // 2026-11-17, Image 89): the line count below is an estimate, and
+            // blank lines, small print and paragraph spacing outgrow it — a
+            // long post pushed its date and reactions out of the card. Held to
+            // the space left and faded at its foot, it reads as a post that
+            // goes on; the footer never moves.
             main(inner: inner)
-            Spacer(minLength: 0)
+                .frame(maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
+                .mask {
+                    VStack(spacing: 0) {
+                        Color.black
+                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 14)
+                    }
+                }
             footer
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
         }
         .padding(Self.padding)
         .frame(width: width, height: GameAnnouncementsShelf.cardHeight, alignment: .topLeading)

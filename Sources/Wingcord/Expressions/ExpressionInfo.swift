@@ -62,6 +62,9 @@ struct ComposerControlRequest: Equatable, Sendable {
     var control: ComposerControl
     /// The sticker section to open at — `ExpressionSection.id`. Nil for a key.
     var stickerSectionID: String?
+    /// The Nitro Emoji Pack to open the packs page at — an emoji card's View
+    /// Set. Nil for everything else.
+    var emojiPackID: UInt64? = nil
     var token: Int
 }
 
@@ -88,6 +91,15 @@ struct ExpressionInfo: Equatable, Sendable {
     var sticker: StickerRef? = nil
     /// The pack, when the sticker is one of Discord's own.
     var pack: Pack? = nil
+    /// The Nitro Emoji Pack an emoji belongs to — Discord's "From {pack}
+    /// Pack" and View Set (docs/ACTIVITY-CARDS.md decision 2).
+    var emojiPack: EmojiPackLink? = nil
+
+    /// A Nitro Emoji Pack, as an emoji's card names it.
+    struct EmojiPackLink: Equatable, Sendable {
+        var id: UInt64
+        var name: String
+    }
 
     /// One of Discord's own sticker packs, as its card shows it.
     struct Pack: Equatable, Sendable {

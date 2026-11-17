@@ -74,8 +74,8 @@ extension SessionController {
         var applications: [ApplicationID] = []
         for entry in inbox.entries {
             switch entry.activity.subject {
-            case .game(_, let id?): games.append(id)
-            case .activity(_, let id?): applications.append(id)
+            case .game(_, let id?), .topGame(_, let id?): games.append(id)
+            case .activity(_, let id?), .watched(_, _, let id?): applications.append(id)
             default: break
             }
         }
@@ -93,6 +93,27 @@ extension SessionController {
         let missing = Array(Set(inbox.entries.map(\.activity.authorID)).filter { held[$0] == nil })
         guard !missing.isEmpty else { return }
         Task { await socket.requestGuildMembers(guildID: guildID, userIDs: missing) }
+    }
+
+    /// Shares somebody's activity into a channel with a line of the reader's
+    /// own — Discord's @ / # switch in the popout (`cj`, decision 10): the same
+    /// message as a reply, carrying the entry, sent where the reader is.
+    func shareActivity(_ entry: ActivityFeedEntry, content: String, in channelID: ChannelID) async -> Bool {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        do {
+            _ = try await rest.sendMessage(
+                in: channelID,
+                content: trimmed,
+                nonce: Self.nonce(),
+                inventoryEntry: entry.raw
+            )
+            return true
+        } catch {
+            Self.trace("activity share \(entry.id) failed: \(Self.describe(error))")
+            model.reportActionFailure(Self.describe(error))
+            return false
+        }
     }
 
     /// Answers somebody's activity in a direct message, carrying the entry —

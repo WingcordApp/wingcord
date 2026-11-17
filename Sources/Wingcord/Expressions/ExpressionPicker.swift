@@ -35,6 +35,9 @@ struct ExpressionPicker: View {
     /// The section to open at — a stock sticker's pack, from its card's "View
     /// More Stickers". Nil opens where the picker always opens.
     var initialSectionID: String? = nil
+    /// The Nitro Emoji Pack to open the packs page at — an emoji card's View
+    /// Set. Nil opens the grid.
+    var initialEmojiPackID: UInt64? = nil
     /// The tabs offered, in Discord's order (GIFs, Stickers, Emoji). Empty for
     /// a picker that does one thing — a reaction's, a status's.
     var tabs: [ExpressionMode] = []
@@ -56,6 +59,7 @@ struct ExpressionPicker: View {
     init(
         mode: ExpressionMode,
         initialSectionID: String? = nil,
+        initialEmojiPackID: UInt64? = nil,
         tabs: [ExpressionMode] = [],
         onPick: @escaping (ExpressionItem) -> Void,
         onPickGIF: @escaping (GIF) -> Void,
@@ -64,12 +68,14 @@ struct ExpressionPicker: View {
     ) {
         self.mode = mode
         self.initialSectionID = initialSectionID
+        self.initialEmojiPackID = initialEmojiPackID
         self.tabs = tabs
         self.onPick = onPick
         self.onPickGIF = onPickGIF
         self.onPickSuperReaction = onPickSuperReaction
         self.reactingIn = reactingIn
         _shown = State(initialValue: mode)
+        _showsPacks = State(initialValue: mode == .emoji && initialEmojiPackID != nil)
     }
 
     @Environment(AppModel.self) private var model
@@ -99,7 +105,7 @@ struct ExpressionPicker: View {
     /// opens, as Discord's does.
     @State private var isSuperReaction = false
     /// The Nitro Emoji Packs page is up in place of the grid (decision 16).
-    @State private var showsPacks = false
+    @State private var showsPacks: Bool
 
     /// The panel's size. A popover has no natural one, and a grid inside a
     /// container that sizes to its content has no width to lay out against.
@@ -153,13 +159,13 @@ struct ExpressionPicker: View {
                                 topSection = index
                             }
                         )
-                        // Discord's Nitro Emoji Packs, at the rail's foot.
+                        // Discord's Nitro Emoji Packs, at the rail's foot: its
+                        // Nitro mark, as wide as the rail's pill above it
+                        // (Alex, 2026-11-17, Image 85).
                         if shown == .emoji, reactingIn == nil {
-                            Button("Nitro Emoji Packs", systemImage: "sparkles") { showsPacks.toggle() }
-                                .labelStyle(.iconOnly)
-                                .buttonStyle(.glass)
-                                .buttonBorderShape(.circle)
-                                .help("View Emoji Packs")
+                            EmojiPacksRailButton(isShowing: showsPacks, width: Self.railSide + Spacing.tight * 2) {
+                                showsPacks.toggle()
+                            }
                         }
                     }
                     .padding(.top, chromeHeight + Spacing.tight)
@@ -169,7 +175,12 @@ struct ExpressionPicker: View {
                 }
                 Group {
                     if shown == .emoji, showsPacks {
-                        EmojiPacksPage(topInset: chromeHeight) { showsPacks = false }
+                        EmojiPacksPage(
+                            topInset: chromeHeight,
+                            focusPackID: initialEmojiPackID,
+                            close: { showsPacks = false },
+                            onPick: onPick
+                        )
                     } else if shown == .gifs {
                         GIFBoard(query: $query, showsSearchField: false, topInset: chromeHeight, onPick: onPickGIF)
                             .environment(model)
@@ -186,6 +197,13 @@ struct ExpressionPicker: View {
         }
         .frame(width: Self.width, height: Self.height)
         .animation(motion.standard, value: shown)
+        .animation(motion.standard, value: showsPacks)
+        // View Set while the picker is already up: onto the packs page.
+        .onChange(of: initialEmojiPackID) { _, packID in
+            guard packID != nil else { return }
+            shown = .emoji
+            showsPacks = true
+        }
         // No background: the popover's own material IS the panel, and painting
         // over it is what turns liquid glass into a flat dark rectangle.
         .task(id: shown) {

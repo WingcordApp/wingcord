@@ -5,7 +5,7 @@ import SwiftUI
 import WingcordCore
 
 /// The member list's Activity section, as the column draws it — Discord's
-/// content feed at the head of the list (`946228`): "Activity — 5", then three
+/// content feed at the head of the list (`946228`): "Activity · 5", then three
 /// cards until it is expanded.
 nonisolated struct MemberActivityBlock: Equatable, Sendable {
     /// How many cards there are in all.
@@ -44,16 +44,23 @@ nonisolated struct MemberActivityBlock: Equatable, Sendable {
     }
 }
 
-/// One card: who, what, the chips, and the picture.
+/// One card: who, what, the markers, and the picture (docs/ACTIVITY-CARDS.md
+/// decision 6; Discord's `868065`, `322789`).
 nonisolated struct MemberActivityCard: Equatable, Sendable, Identifiable {
     var id: String
     var authorID: UserID
     /// Up to three faces — the author's, then whoever was with them.
     var faces: [Face]
+    /// Everyone past those three — Discord's "+2" chip.
+    var extraPeople: Int
     var name: String
     var nameColor: UInt32?
+    /// The author's display-name face, as Discord sets the card's name
+    /// (`displayNameStylesFont`): the face, in the role's colour.
+    var nameFont: DisplayNameFont?
     var title: String
-    var badges: [Badge]
+    /// Discord's markers for the card (`ActivityMarkers`), first two drawn.
+    var markers: [ActivityMarker]
     var artURL: URL?
     /// The glyph in the picture's place where there is no picture.
     var artSymbol: String
@@ -67,29 +74,27 @@ nonisolated struct MemberActivityCard: Equatable, Sendable, Identifiable {
         var monogram: String
     }
 
-    /// One chip under the title — Discord's badges (`506326`), in its order.
-    enum Badge: Equatable, Sendable {
-        /// The clock: a running time while it is on, "3h ago" after.
-        case clock(symbol: String)
-        case label(symbol: String, text: String, isPositive: Bool)
-    }
-
     var isLive: Bool { liveSince != nil }
 }
 
-/// The section's measurements — Discord's (`438692`'s `nS` and the card's
-/// stylesheet): a card is 72 points with its margin, 8 points in from the
-/// column, padded by 8, with a 48-point picture.
+/// The section's measurements — Discord's card stylesheet (`g7esM5`): a card
+/// 70 points tall with 8 between cards, 8 in from the column, padded by 8,
+/// with a 48-point picture; names and titles 14, markers 12.
 nonisolated enum MemberActivityGeometry {
     static let headerHeight = MemberSectionGeometry.height
-    static let cardHeight: CGFloat = 72
+    static let cardHeight: CGFloat = 78
     static let inset: CGFloat = 8
     static let padding: CGFloat = 8
     static let art: CGFloat = 48
     static let face: CGFloat = 16
     static let corner: CGFloat = 8
+    static let nameSize: CGFloat = 14
+    static let lineHeight: CGFloat = 18
+    static let markerSize: CGFloat = 12
+    /// How many markers a card shows — Discord's `nth-child(n+3)` rule.
+    static let cardMarkerLimit = 2
 
-    /// The card's own rectangle inside its 72-point band.
+    /// The card's own rectangle inside its band.
     static func plate(in band: CGRect) -> CGRect {
         CGRect(
             x: band.minX + inset,
@@ -118,11 +123,33 @@ nonisolated enum MemberActivityGeometry {
             height: side
         )
     }
+
+    /// Where each drawn marker sits on a card, for its tooltip.
+    static func markerRects(
+        _ card: MemberActivityCard, in band: CGRect, now: Date
+    ) -> [(rect: CGRect, marker: ActivityMarker)] {
+        let plate = plate(in: band)
+        let left = plate.minX + padding
+        let right = plate.maxX - padding - art - padding
+        let y = plate.minY + padding + lineHeight + 2 + lineHeight
+        var x = left
+        var placed: [(CGRect, ActivityMarker)] = []
+        for marker in card.markers.prefix(cardMarkerLimit) {
+            let text = MemberActivityPainter.words(marker, card: card, now: now)
+            let width = min(right - x, 12 + 4 + ceil((text as NSString).size(withAttributes: [.font: MemberActivityPainter.markerFont]).width))
+            guard width > 16 else { break }
+            placed.append((CGRect(x: x, y: y, width: width, height: 16), marker))
+            x += width + 8
+        }
+        return placed
+    }
 }
 
 /// Draws the section. `nonisolated` and free of the model, as the row
 /// painter is: everything it needs arrives on the card.
 nonisolated enum MemberActivityPainter {
+
+    static var markerFont: NSFont { NSFont.systemFont(ofSize: MemberActivityGeometry.markerSize) }
 
     static func drawHeader(
         _ block: MemberActivityBlock,
@@ -155,15 +182,18 @@ nonisolated enum MemberActivityPainter {
         }
     }
 
+    // swiftlint:disable:next function_parameter_count
     static func drawCard(
         _ card: MemberActivityCard,
         in band: CGRect,
         context: CGContext,
         style: MessageTextStyle,
         isHovered: Bool,
+        isSelected: Bool,
         images: ImageStore,
         scale: CGFloat,
-        now: Date
+        now: Date,
+        nameFace: NSFont?
     ) {
         let ink = ThemeInk.current
         let plate = MemberActivityGeometry.plate(in: band)
@@ -173,13 +203,13 @@ nonisolated enum MemberActivityPainter {
             cornerHeight: MemberActivityGeometry.corner,
             transform: nil
         )
-        // Discord's card: a raised ground, a muted hairline, lighter under the
-        // pointer.
+        // Discord's card: a raised ground with a muted hairline, lighter under
+        // the pointer, lighter still while its popout is open.
         context.addPath(path)
-        context.setFillColor(ink.lift(isHovered ? 0.09 : 0.05))
+        context.setFillColor(ink.lift(isSelected ? 0.12 : isHovered ? 0.09 : 0.05))
         context.fillPath()
         context.addPath(path)
-        context.setStrokeColor(ink.lift(0.08))
+        context.setStrokeColor(ink.lift(isSelected ? 0.14 : 0.08))
         context.setLineWidth(1)
         context.strokePath()
 
@@ -195,77 +225,102 @@ nonisolated enum MemberActivityPainter {
 
         let left = plate.minX + padding
         let maxWidth = art.minX - padding - left
+        let line = MemberActivityGeometry.lineHeight
         var y = plate.minY + padding
 
-        // Who: their faces, then their name in their role's colour.
+        // Who: their faces, their name in their face and their role's colour,
+        // and "+2" for the rest.
         let face = MemberActivityGeometry.face
         var x = left
         for (index, entry) in card.faces.prefix(3).enumerated() {
-            let rect = CGRect(x: x, y: y, width: face, height: face)
+            let rect = CGRect(x: x, y: y + (line - face) / 2, width: face, height: face)
             drawFace(entry, in: rect, context: context, style: style, images: images, scale: scale)
-            x += face - (index < card.faces.count - 1 ? 3 : 0)
+            x += face - (index < min(card.faces.count, 3) - 1 ? 3 : 0)
         }
         x += 6
-        let nameFont = NSFont.systemFont(ofSize: 12, weight: .medium)
-        TimelineRowPainter.drawText(
+        let nameFont = nameFace ?? NSFont.systemFont(ofSize: MemberActivityGeometry.nameSize, weight: .medium)
+        let chipWidth: CGFloat = card.extraPeople > 0 ? extraChipWidth(card.extraPeople) + 4 : 0
+        let drawn = TimelineRowPainter.drawText(
             card.name,
             font: nameFont,
             color: card.nameColor.map { NSColor(Color(hex: $0)) } ?? style.secondaryColor,
-            at: CGPoint(x: x, y: TimelineRowPainter.capCenteredY(of: nameFont, in: CGRect(x: x, y: y, width: 0, height: face))),
-            maxWidth: max(0, left + maxWidth - x),
+            at: CGPoint(x: x, y: TimelineRowPainter.capCenteredY(of: nameFont, in: CGRect(x: x, y: y, width: 0, height: line))),
+            maxWidth: max(0, min((left + maxWidth - x) * 0.85, left + maxWidth - x - chipWidth)),
+            tracking: (card.nameFont?.letterSpacing ?? 0) * nameFont.pointSize,
             context: context
         )
-        y += face + 2
+        if card.extraPeople > 0 {
+            drawExtraChip(card.extraPeople, at: CGPoint(x: x + drawn + 4, y: y + (line - 14) / 2), context: context, style: style)
+        }
+        y += line + 2
 
-        // What: the title on one line.
-        let titleFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        // What: the title on one line — brighter under the pointer, as
+        // Discord's `interactive-text-hover`.
+        let titleFont = NSFont.systemFont(ofSize: MemberActivityGeometry.nameSize, weight: .medium)
         TimelineRowPainter.drawText(
             card.title,
             font: titleFont,
-            color: style.primaryColor,
-            at: CGPoint(x: left, y: y),
+            color: isHovered || isSelected ? style.primaryColor : style.primaryColor.withAlphaComponent(0.92),
+            at: CGPoint(x: left, y: TimelineRowPainter.capCenteredY(of: titleFont, in: CGRect(x: left, y: y, width: 0, height: line))),
             maxWidth: maxWidth,
             context: context
         )
-        y += ceil(titleFont.ascender - titleFont.descender) + 1
+        y += line
 
-        // The chips, as many as fit.
-        let chipFont = NSFont.systemFont(ofSize: 10.5)
-        var chipX = left
-        for badge in card.badges {
-            let (symbol, text, isPositive) = resolve(badge, card: card, now: now)
-            let color = isPositive ? NSColor(Palette.presenceOnline) : style.tertiaryColor
-            let textWidth = ceil((text as NSString).size(withAttributes: [.font: chipFont]).width)
-            let needed = 11 + 3 + textWidth
-            guard chipX + needed <= left + maxWidth else { break }
-            drawSymbol(symbol, in: CGRect(x: chipX, y: y + 1, width: 11, height: 11), pointSize: 9, color: color, context: context)
-            TimelineRowPainter.drawText(
-                text,
-                font: chipFont,
-                color: isPositive ? color : style.tertiaryColor,
-                at: CGPoint(x: chipX + 14, y: y),
-                maxWidth: textWidth,
+        // The markers, two at most, the second shortened to fit.
+        for (rect, marker) in MemberActivityGeometry.markerRects(card, in: band, now: now) {
+            let text = words(marker, card: card, now: now)
+            let positive = NSColor(Palette.presenceOnline)
+            let symbolColor = marker.tintsSymbol ? positive : style.tertiaryColor
+            let textColor = marker.tintsText ? positive : style.tertiaryColor
+            drawSymbol(
+                marker.symbol,
+                in: CGRect(x: rect.minX, y: rect.minY + 2, width: 12, height: 12),
+                pointSize: 9,
+                color: symbolColor,
                 context: context
             )
-            chipX += needed + 8
+            TimelineRowPainter.drawText(
+                text,
+                font: markerFont,
+                color: textColor,
+                at: CGPoint(x: rect.minX + 16, y: TimelineRowPainter.capCenteredY(of: markerFont, in: rect)),
+                maxWidth: max(0, rect.width - 16),
+                context: context
+            )
         }
     }
 
-    /// A clock chip's words at the moment of drawing.
-    static func resolve(
-        _ badge: MemberActivityCard.Badge,
-        card: MemberActivityCard,
-        now: Date
-    ) -> (symbol: String, text: String, isPositive: Bool) {
-        switch badge {
-        case .clock(let symbol):
-            if let since = card.liveSince {
-                return (symbol, ActivityCardRules.elapsed(since: since, now: now), true)
-            }
-            return (symbol, card.occurredAt.map { ActivityCardRules.timeAgo(since: $0, now: now) } ?? "", false)
-        case .label(let symbol, let text, let isPositive):
-            return (symbol, text, isPositive)
+    /// A marker's words at the moment of drawing — the clock runs.
+    static func words(_ marker: ActivityMarker, card: MemberActivityCard, now: Date) -> String {
+        switch marker.text {
+        case .words(let text):
+            return text
+        case .clock:
+            if let since = card.liveSince { return ActivityCardRules.elapsed(since: since, now: now) }
+            return card.occurredAt.map { ActivityCardRules.timeAgo(since: $0, now: now) } ?? ""
         }
+    }
+
+    private static var chipFont: NSFont { NSFont.systemFont(ofSize: 10, weight: .medium) }
+
+    private static func extraChipWidth(_ count: Int) -> CGFloat {
+        ceil(("+\(count)" as NSString).size(withAttributes: [.font: chipFont]).width) + 9
+    }
+
+    private static func drawExtraChip(_ count: Int, at origin: CGPoint, context: CGContext, style: MessageTextStyle) {
+        let rect = CGRect(x: origin.x, y: origin.y, width: extraChipWidth(count), height: 14)
+        context.addPath(CGPath(roundedRect: rect, cornerWidth: 7, cornerHeight: 7, transform: nil))
+        context.setFillColor(ThemeInk.current.lift(0.1))
+        context.fillPath()
+        TimelineRowPainter.drawText(
+            "+\(count)",
+            font: chipFont,
+            color: style.secondaryColor,
+            at: CGPoint(x: rect.minX + 4.5, y: TimelineRowPainter.capCenteredY(of: chipFont, in: rect)),
+            maxWidth: rect.width,
+            context: context
+        )
     }
 
     private static func drawArt(
@@ -318,7 +373,7 @@ nonisolated enum MemberActivityPainter {
     }
 
     /// An SF Symbol, rasterised into a square in the given colour.
-    private static func drawSymbol(
+    static func drawSymbol(
         _ name: String,
         in rect: CGRect,
         pointSize: CGFloat,

@@ -600,9 +600,31 @@ struct RecentActivityRow: View {
                 }
                 .foregroundStyle(entry.isLive ? Palette.presenceOnline : InkColor.tertiary)
             }
-            ActivityTraitChips(traits: entry.traits)
+            // Discord's markers in their profile wording — the same engine as
+            // the member list's cards (docs/ACTIVITY-CARDS.md decision 5); the
+            // clock is the row's own, written just before.
+            ForEach(Array(profileMarkers.enumerated()), id: \.offset) { _, marker in
+                if case .words(let words) = marker.text {
+                    HStack(spacing: 4) {
+                        Image(systemName: marker.symbol)
+                            .font(.system(size: 9))
+                            .foregroundStyle(marker.tintsSymbol ? Palette.presenceOnline : InkColor.tertiary)
+                        Text(words)
+                            .font(.system(.caption))
+                            .foregroundStyle(InkColor.tertiary)
+                    }
+                    .help(marker.tooltip ?? "")
+                }
+            }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var profileMarkers: [ActivityMarker] {
+        let entryDate: Date? = UInt64(entry.id).flatMap { value in
+            value > (1 << 32) ? Date(timeIntervalSince1970: Double((value >> 22) + 1_420_070_400_000) / 1000) : nil
+        }
+        return ActivityMarkers.markers(for: entry, at: .profile, context: .init(entryDate: entryDate, now: .now))
     }
 
     /// "Playing now", "1d ago", "3h ago".

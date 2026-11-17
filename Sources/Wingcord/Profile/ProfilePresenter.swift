@@ -313,6 +313,15 @@ struct ProfilePresenter: ViewModifier {
             typingIndicatorStyle: model.ownTypingIndicatorStyle
         )
         editor.appliesNameStyle = model.profileEditCapability(for: scope).canApplyNameStyle
+        // Discord's Vice City font: any account may wear it while the campaign
+        // runs, joining the campaign on save (docs/ACTIVITY-CARDS.md decision 4).
+        // Account scope only — the campaign's perk is the account's.
+        if case .account = scope {
+            editor.allowsCampaignFont = model.offersViceCityFont
+            editor.enrollCampaignFont = { [weak model] in
+                try await model?.sessionController.enrollInViceCityCampaignIfNeeded()
+            }
+        }
         return editor
     }
 

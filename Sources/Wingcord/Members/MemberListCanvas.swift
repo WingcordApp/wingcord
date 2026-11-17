@@ -137,6 +137,11 @@ final class MemberListCanvas: NSView {
     var onOpenRoom: ((ChannelID) -> Void)?
     /// An Activity card clicked: its popout, beside it.
     var onOpenActivity: ((String, CGRect) -> Void)?
+    /// The pointer rested on a card for 100 ms — Discord opens its popout on
+    /// hover (`420018`'s `uN`; docs/ACTIVITY-CARDS.md decision 7).
+    var onHoverActivity: ((String, CGRect) -> Void)?
+    /// The pointer left the cards.
+    var onHoverActivityEnded: (() -> Void)?
     /// The Activity heading clicked: fold, unfold, or bring back.
     var onToggleActivity: (() -> Void)?
     /// The Activity heading's gear, or a right-click on the heading.
@@ -149,6 +154,10 @@ final class MemberListCanvas: NSView {
     /// pushed down by the section's height.
     private(set) var activity: MemberActivityBlock?
     private var hoveredCard: Int?
+    /// The 100 ms between resting on a card and its popout.
+    private var activityHoverTask: Task<Void, Never>?
+    /// The card whose popout is open, drawn selected — Discord's `selected`.
+    private var selectedActivityID: String?
     /// Redraws the live cards' clocks once a second, and only while one is
     /// drawn — `INVARIANTS.md`'s rule about clocks: subscribed while needed,
     /// never left running.
@@ -270,11 +279,55 @@ final class MemberListCanvas: NSView {
             setNeedsDisplay(CGRect(x: 0, y: 0, width: bounds.width, height: activityHeight))
         }
         updateLiveClock()
+        refreshActivityToolTips()
         return contentHeight
+    }
+
+    /// Tooltips on the markers that carry one — Discord's "Played 8 days in a
+    /// row" under "8x Streak" (`ActivityMarker.tooltip`).
+    private func refreshActivityToolTips() {
+        removeAllToolTips()
+        guard let activity else { return }
+        let now = Date()
+        for (index, card) in activity.cards.enumerated() {
+            for (rect, marker) in MemberActivityGeometry.markerRects(card, in: activityCardFrame(at: index), now: now)
+            where marker.tooltip != nil {
+                addToolTip(rect, owner: self, userData: nil)
+            }
+        }
     }
 
     private func activityCardFrame(at index: Int) -> CGRect {
         activity?.cardFrame(at: index, width: bounds.width) ?? .zero
+    }
+
+    /// Rest on a card 100 ms and its popout opens; leave the cards and the
+    /// popout is told (it decides, since the pointer may be on its way to it).
+    private func scheduleActivityHover(_ card: Int?, leaving: Bool) {
+        activityHoverTask?.cancel()
+        activityHoverTask = nil
+        guard let card, let entry = activity?.cards[safe: card] else {
+            if leaving { onHoverActivityEnded?() }
+            return
+        }
+        let id = entry.id
+        activityHoverTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard let self, !Task.isCancelled, self.hoveredCard == card,
+                  self.activity?.cards[safe: card]?.id == id
+            else { return }
+            self.onHoverActivity?(id, self.anchorInHostingRoot(MemberActivityGeometry.plate(in: self.activityCardFrame(at: card))))
+        }
+    }
+
+    /// The card whose popout is open, drawn selected.
+    func apply(selectedActivity id: String?) {
+        guard id != selectedActivityID else { return }
+        let indices = [selectedActivityID, id].compactMap { wanted in
+            activity?.cards.firstIndex { $0.id == wanted }
+        }
+        selectedActivityID = id
+        for index in indices { setNeedsDisplay(activityCardFrame(at: index)) }
     }
 
     private var activityHeaderFrame: CGRect {
@@ -320,9 +373,14 @@ final class MemberListCanvas: NSView {
                 context: context,
                 style: style,
                 isHovered: hoveredCard == index && !isScrolling,
+                isSelected: card.id == selectedActivityID,
                 images: ImageStore.shared,
                 scale: scale,
-                now: now
+                now: now,
+                // Resolved here: the registry is main-actor state.
+                nameFace: card.nameFont.flatMap {
+                    DisplayNameFontRegistry.font($0, size: MemberActivityGeometry.nameSize)
+                }
             )
         }
     }
@@ -363,7 +421,10 @@ final class MemberListCanvas: NSView {
     override func setFrameSize(_ newSize: NSSize) {
         let previousWidth = frame.width
         super.setFrameSize(newSize)
-        if abs(previousWidth - newSize.width) >= 1 { onWidthChange?(newSize.width) }
+        if abs(previousWidth - newSize.width) >= 1 {
+            onWidthChange?(newSize.width)
+            refreshActivityToolTips()
+        }
     }
 
     /// Wires the hover film to this view. Called once, from `init`.
@@ -845,6 +906,7 @@ final class MemberListCanvas: NSView {
             hoveredCard = card
             if let previous { setNeedsDisplay(activityCardFrame(at: previous)) }
             if let card { setNeedsDisplay(activityCardFrame(at: card)) }
+            scheduleActivityHover(card, leaving: previous != nil)
         }
         let index = bounds.contains(point) && point.y >= activityHeight ? rowIndex(at: point.y) : nil
         let hoverable = index.flatMap { candidate in
@@ -887,6 +949,7 @@ final class MemberListCanvas: NSView {
         if let previous = hoveredCard {
             hoveredCard = nil
             setNeedsDisplay(activityCardFrame(at: previous))
+            scheduleActivityHover(nil, leaving: true)
         }
         if hoveredRoom != nil {
             hoveredRoom = nil
@@ -1154,12 +1217,33 @@ extension MemberListCanvas {
         let cards = activity.cards.enumerated().map { index, card -> NSAccessibilityElement in
             let element = NSAccessibilityElement()
             element.setAccessibilityRole(.button)
-            let chips = card.badges.map { MemberActivityPainter.resolve($0, card: card, now: now).text }
+            let chips = card.markers.prefix(MemberActivityGeometry.cardMarkerLimit).map { marker in
+                marker.accessibilityText ?? MemberActivityPainter.words(marker, card: card, now: now)
+            }
             element.setAccessibilityLabel(([card.name, card.title] + chips).joined(separator: ", "))
             element.setAccessibilityParent(self)
             element.setAccessibilityFrameInParentSpace(activity.cardFrame(at: index, width: bounds.width))
             return element
         }
         return [heading] + cards
+    }
+}
+
+extension MemberListCanvas: NSViewToolTipOwner {
+    /// The tooltip of the marker under the pointer.
+    func view(
+        _ view: NSView,
+        stringForToolTip tag: NSView.ToolTipTag,
+        point: NSPoint,
+        userData data: UnsafeMutableRawPointer?
+    ) -> String {
+        guard let activity, let index = activity.cardIndex(at: point.y), let card = activity.cards[safe: index] else {
+            return ""
+        }
+        for (rect, marker) in MemberActivityGeometry.markerRects(card, in: activityCardFrame(at: index), now: Date())
+        where rect.contains(point) {
+            return marker.tooltip ?? ""
+        }
+        return ""
     }
 }

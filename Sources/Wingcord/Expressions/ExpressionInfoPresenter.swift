@@ -32,7 +32,10 @@ struct ExpressionInfoPresenter: ViewModifier {
                 openStickerPack: model.canOpenStickerPicker
                     ? { model.openStickerPicker(at: $0) }
                     : nil,
-                previewGuild: { model.previewFromExpression($0) }
+                previewGuild: { model.previewFromExpression($0) },
+                openEmojiPack: model.canOpenStickerPicker
+                    ? { model.openEmojiPack($0) }
+                    : nil
             )
             // The card supplies its own material, so the popover must supply
             // none — two in series read as frost rather than as glass.

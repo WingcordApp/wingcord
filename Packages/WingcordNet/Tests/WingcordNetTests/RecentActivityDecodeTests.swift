@@ -99,10 +99,14 @@ struct RecentActivityDecodeTests {
         #expect(entry.subject.title == "God & Earrings")
         #expect(entry.subject.subtitle == "Devon Hendryx")
         #expect(entry.subject.applicationID == nil)
-        // **Trait types 4 and 10 are decoded as nothing on purpose.** They are
-        // on the wire and nothing names what they mean, and a chip with the
-        // wrong words in it is worse than a chip that is missing.
-        #expect(entry.traits.isEmpty)
+        // Type 4 is Discord's `AGGREGATE_RANGE`, range 1 a week — what lets a
+        // top artist card show at all (`420018`). Type 10
+        // (`TOP_ITEM_TOTAL_COUNT`) draws nothing in Discord's cards, so it
+        // decodes as nothing.
+        #expect(entry.traits == [.week])
+        #expect(entry.details.album == "The Rockwood Escape Plan")
+        #expect(entry.details.artistExternalID == "551")
+        #expect(entry.details.provider == 1)
     }
 
     /// An entry whose `extra.type` this client has never seen is dropped whole
@@ -133,6 +137,38 @@ struct RecentActivityDecodeTests {
         #expect(urls.count == 2)
         #expect(urls.first?.host == "medal.tv")
         #expect(urls.first?.path == "/u/Browhiskey")
+    }
+    /// The three kinds Discord's member list draws that no capture has shown
+    /// yet, read off Discord's own switch on `content_type` (`420018`).
+    @Test("Top game, watched media and a listening session decode by content type")
+    func newKinds() throws {
+        let payload = try decoded(
+            """
+            {"entries":[
+            {"id":"1","author_id":"2","content_type":3,"traits":[{"type":4,"range":1},{"type":2,"duration_seconds":43200}],
+             "extra":{"game_name":"Some Game","application_id":"1400000000000000501","platform":1}},
+            {"id":"3","author_id":"2","content_type":2,"extra":{"media_title":"A Show","media_subtitle":"The Episode",
+             "media_assets_large_text":"Season 1, Episode 3","url":"https://example.com/show","application_id":"1400000000000000502"}},
+            {"id":"4","author_id":"2","content_type":5,"traits":[{"type":3,"is_live":true}],
+             "extra":{"entries":[{"media":{"title":"A Track","provider":1,"image_url":"https://example.com/a.jpg",
+             "artists":[{"name":"One"},{"name":"Two"}]}}]}}]}
+            """,
+            as: ContentOutboxDTO.self
+        )
+        let entries: [RecentActivity] = try #require(payload.entries).compactMap { $0.domain }
+        #expect(entries.count == 3)
+        #expect(entries[0].subject == RecentActivity.Subject.topGame(name: "Some Game", applicationID: ApplicationID(rawValue: 1_400_000_000_000_000_501)))
+        #expect(entries[0].isWeekly)
+        #expect(entries[0].duration == 43200)
+        #expect(entries[0].details.platform == 1)
+        #expect(entries[1].subject.title == "A Show")
+        #expect(entries[1].subject.subtitle == "The Episode")
+        #expect(entries[1].details.episodeMarker == "S1E3")
+        #expect(entries[2].subject == RecentActivity.Subject.listeningSession(
+            track: "A Track", artists: ["One", "Two"], artworkURL: URL(string: "https://example.com/a.jpg")
+        ))
+        #expect(entries[2].subject.subtitle == "One, Two")
+        #expect(entries[2].isLive)
     }
 }
 
@@ -179,4 +215,5 @@ struct PresenceActivityDecodeTests {
         #expect(activity.endsAt == nil)
         #expect(activity.largeText == nil)
     }
+
 }

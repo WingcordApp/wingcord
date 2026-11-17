@@ -50,16 +50,17 @@ extension AppModel {
             )
         }
 
-        // A Nitro Emoji Pack's (decision 16): Discord's card says whose pack and
-        // that it's Nitro's, in its own words.
+        // A Nitro Emoji Pack's: Discord's card says whose pack and that it's
+        // Nitro's, in its own words (`/jdd/7`, `VEfeux`), with View Set.
         if let pack = emojiPacks.first(where: { $0.emojis.contains { $0.id == id.rawValue } }) {
             return ExpressionInfo(
                 artURL: CDN.emoji(id: id, animated: emoji.isAnimated, side: Self.expressionArtSide),
                 isVector: false,
                 glyph: nil,
                 title: ":\(emoji.name):",
-                detail: "From \(pack.name) Pack. Nitro-exclusive emoji: it\u{2019}s in Beta and only available to select Nitro members.",
-                source: nil
+                detail: "This emoji is from a Nitro Emoji Pack. It\u{2019}s in Beta and only available to select Nitro members.",
+                source: nil,
+                emojiPack: ExpressionInfo.EmojiPackLink(id: pack.id, name: pack.name)
             )
         }
         let owner = guildEmojis.first { _, emojis in emojis.contains { $0.id == id } }?.key
@@ -260,6 +261,21 @@ extension AppModel {
             channelID: channelID,
             control: .sticker,
             stickerSectionID: sectionID,
+            token: composerControlToken
+        )
+        expressionInfoRequest = nil
+    }
+
+    /// Opens the selected conversation's emoji picker on the Nitro Emoji Packs
+    /// page, at one pack — an emoji card's View Set — and closes the card.
+    func openEmojiPack(_ packID: UInt64) {
+        guard let channelID = selectedChannelID else { return }
+        composerControlToken &+= 1
+        composerControlRequest = ComposerControlRequest(
+            channelID: channelID,
+            control: .emoji,
+            stickerSectionID: nil,
+            emojiPackID: packID,
             token: composerControlToken
         )
         expressionInfoRequest = nil

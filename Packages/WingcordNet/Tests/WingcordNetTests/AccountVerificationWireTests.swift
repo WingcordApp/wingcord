@@ -42,7 +42,7 @@ struct AccountVerificationWireTests {
         let update = try Self.update("""
         {"op": 0, "s": 4, "t": "USER_UPDATE", "d": {"id": "1", "username": "reader", "verified": true}}
         """)
-        guard case .currentUserUpdated(_, _, _, let verification) = update else {
+        guard case .currentUserUpdated(_, _, _, let verification, _) = update else {
             Issue.record("not a user update")
             return
         }

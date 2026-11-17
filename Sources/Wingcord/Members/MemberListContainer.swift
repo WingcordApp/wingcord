@@ -55,10 +55,13 @@ struct MemberListContainer: View {
             // roster lights rows under an open card. The profiled row keeps its
             // plate moving regardless — `platedRow` prefers the card's subject
             // over the pointer's.
-            isCovered: model.isWindowCovered,
+            isCovered: model.isWindowCovered && !model.isActivityPopoutHoverOpened,
             // Nothing above the answers to a search.
             activity: searchRoster == nil ? model.memberActivityBlock : nil,
             openActivity: { id, frame in model.openActivityCard(id, anchor: frame) },
+            hoverActivity: { id, frame in model.hoverActivityCard(id, anchor: frame) },
+            endActivityHover: { model.endActivityCardHover() },
+            selectedActivityID: model.activityCardRequest?.entryID,
             toggleActivity: { model.toggleActivitySection() },
             activityMenu: { frame in model.activityMenuAnchor = frame },
             noteActivityShown: { model.noteActivityCardsShown($0) }

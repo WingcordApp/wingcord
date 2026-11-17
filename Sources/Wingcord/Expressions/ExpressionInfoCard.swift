@@ -20,6 +20,9 @@ struct ExpressionInfoCard: View {
     var openStickerPack: ((String) -> Void)? = nil
     /// Previews a discoverable source server — see `ExpressionSourceRow`.
     var previewGuild: ((GuildID) -> Void)? = nil
+    /// Opens the Nitro Emoji Packs page at a pack — View Set. Nil where there
+    /// is no composer to open; the button is then absent.
+    var openEmojiPack: ((UInt64) -> Void)? = nil
 
     private static let width: CGFloat = 300
     private static let artSide: CGFloat = 48
@@ -63,6 +66,11 @@ struct ExpressionInfoCard: View {
 
             if let pack = info.pack {
                 PackSection(pack: pack, openStickerPack: openStickerPack)
+            }
+
+            if let emojiPack = info.emojiPack {
+                Divider().opacity(0.35)
+                EmojiPackRow(pack: emojiPack, open: openEmojiPack)
             }
 
             if let source = info.source {
@@ -373,4 +381,33 @@ struct ExpressionSourceRow: View {
     }
 
     private static let sampleSide: CGFloat = 24
+}
+
+/// "From {pack} Pack" and View Set — Discord's footer on a Nitro Emoji Pack
+/// emoji's card (`VEfeux`, `DtK5IG`).
+private struct EmojiPackRow: View {
+    var pack: ExpressionInfo.EmojiPackLink
+    var open: ((UInt64) -> Void)?
+
+    var body: some View {
+        HStack(spacing: Spacing.base) {
+            BrandGlyph(service: BrandMark.nitro)
+                .fill(InkColor.secondary)
+                .frame(width: 16, height: 16)
+                .accessibilityHidden(true)
+            Text("From \(Text(pack.name).fontWeight(.semibold)) Pack")
+                .font(.system(.caption))
+                .foregroundStyle(InkColor.secondary)
+                .lineLimit(1)
+            Spacer(minLength: Spacing.base)
+            if let open {
+                Button("View Set") { open(pack.id) }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, Spacing.margin)
+        .padding(.vertical, Spacing.snug)
+    }
 }

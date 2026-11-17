@@ -134,6 +134,29 @@ struct ProfileEditGatingTests {
         #expect(editor.isDirty)
     }
 
+    /// Discord's Vice City campaign (docs/ACTIVITY-CARDS.md decision 4): the
+    /// one style an account without Nitro can save, as the font alone.
+    @Test("Without Nitro the Vice City font saves, as the font alone")
+    func viceCityFontSavesWithoutNitro() throws {
+        let demo = AppModel()
+        DemoFixtures.populate(demo)
+        let me = try #require(demo.currentUserID)
+        let base = try #require(demo.profileEditBase(for: .account, userID: me))
+        let editor = ProfileEditor(profile: base, widgets: [], scope: .account, accountName: base.displayName)
+        editor.appliesNameStyle = false
+        editor.allowsCampaignFont = true
+        editor.displayNameStyle = DisplayNameStyle(font: .hexagon, effect: .neon, colors: [0xFF0000])
+        #expect(editor.isDirty)
+        #expect(editor.savedNameStyle == DisplayNameStyle(font: .hexagon, effect: .solid, colors: []))
+        // Any other face stays a try-on.
+        editor.displayNameStyle = DisplayNameStyle(font: .sakura, effect: .solid, colors: [])
+        #expect(editor.savedNameStyle == base.displayNameStyle)
+        // Outside the campaign, the font is a try-on like the rest.
+        editor.allowsCampaignFont = false
+        editor.displayNameStyle = DisplayNameStyle(font: .hexagon, effect: .solid, colors: [])
+        #expect(editor.savedNameStyle == base.displayNameStyle)
+    }
+
     @Test("One colour on a free account, the theme pair on Nitro")
     func colourGate() {
         let free = model(tier: .none).profileEditCapability(for: .account)

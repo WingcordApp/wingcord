@@ -1113,6 +1113,13 @@ final class AppModel {
     var activityExpanded = false
     /// A card's popout, open beside it.
     var activityCardRequest: ActivityCardRequest?
+    /// The 100 ms grace after the pointer leaves a hover-opened popout's card.
+    @ObservationIgnored var activityHoverTask: Task<Void, Never>?
+    /// Whether the pointer is on the activity popout.
+    @ObservationIgnored var isActivityPopoutHovered = false
+    /// Half-written replies, by entry — kept when a popout closes, as HIG asks
+    /// of a popover that closes by itself.
+    @ObservationIgnored var activityReplyDrafts: [String: String] = [:]
     /// The Activity heading's menu, open at its gear.
     var activityMenuAnchor: CGRect?
     var isActivityAboutShown = false
@@ -1509,9 +1516,12 @@ final class AppModel {
     /// The running activity is in its own window (Pop Out).
     var isActivityPoppedOut = false
     /// Discord's Nitro Emoji Packs this account may see, and the ones added to
-    /// the picker (decision 16). Empty where Discord answered 404.
+    /// the picker (decision 16; docs/ACTIVITY-CARDS.md decision 2).
     var emojiPacks: [EmojiPack] = []
     var pinnedEmojiPackIDs: [UInt64] = []
+    /// Where asking for them stands — the packs page says "not available"
+    /// only for Discord's 404, and offers to try again after a failure.
+    var emojiPacksLoad: EmojiPacksLoad = .idle
     /// A running activity's Invite, Share Link or Share Moment (decision 7).
     var activityShareRequest: ActivityShareRequest?
     /// Joining found the activity gone: Discord's "Activity has ended. Start
@@ -1818,6 +1828,8 @@ final class AppModel {
     /// beside the channel does not evict the composer's.
     @ObservationIgnored var reactionEmojiCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
     @ObservationIgnored var stickerCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
+    /// Discord's emoji names for the selected server — see `emojiNameTable`.
+    @ObservationIgnored var emojiNameTableCache: (key: EmojiNameTableKey, value: EmojiNameTable)?
     @ObservationIgnored var activitySectionsCache: (key: ActivityMemoKey, value: [ActivitySection])?
     @ObservationIgnored var commandSectionsCache: (key: CommandMemoKey, value: [CommandSection])?
     @ObservationIgnored
@@ -2451,6 +2463,7 @@ final class AppModel {
         channelsAndRolesCache = nil
         emojiCatalogCache = nil
         reactionEmojiCatalogCache = nil
+        emojiNameTableCache = nil
         usageCatalogCache = [:]
         invokedCommands.removeAll()
         stickerCatalogCache = nil

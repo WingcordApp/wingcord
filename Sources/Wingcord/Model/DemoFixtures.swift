@@ -868,6 +868,10 @@ enum DemoFixtures {
                 model.noteHostedCardSize(HostedCardHosts.measure(key, model: model), for: key)
             }
         }
+
+        // **Last**, after the voice rooms and presences, so the live entries'
+        // own presence (a party, a Spotify session) and room are what stand.
+        populateActivityFeed(model, in: firstGuild)
     }
 
     /// A game in front, for `--overlay`.

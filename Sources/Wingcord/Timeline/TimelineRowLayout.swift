@@ -2320,6 +2320,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 y = slot.rect.maxY
             }
 
+            // The activity a reply is about — Discord's component 16, at one
+            // height, under the words (docs/ACTIVITY-CARDS.md decision 11).
+            if let entry = message.contentEntry {
+                y += gap
+                let width = min(Metrics.embedMaxWidth, cardWidth).rounded(.down)
+                let slot = HostedCardSlot(
+                    rect: CGRect(x: cardX, y: y, width: width, height: ActivityEntryCard.height),
+                    key: .contentEntry(ContentEntryCardKey(messageID: message.id, entry: entry, guildID: input.guildID))
+                )
+                content.hostedCards.append(slot)
+                holds(slot.rect)
+                y = slot.rect.maxY
+            }
+
             // The invites the text links to — Discord's invite card, one per
             // code, once the answer has arrived. Until then the link is only a
             // link. An invite that brought an event not yet over is that

@@ -163,6 +163,32 @@ extension AppModel {
         return isHome || canUseExternalEmoji(in: channelID)
     }
 
+    /// Whether a Nitro Emoji Pack's emoji can be sent: Nitro proper
+    /// (Discord asks `TIER_2`, not the animated-emoji perk), or Fake Nitro's
+    /// links.
+    var emojiPacksUsable: Bool {
+        entitlements.has(.emojiPacks) || AppSettings.shared.fakeNitro
+    }
+
+    /// A pack emoji's picture: Discord's CDN, or in `--demo` a drawn one
+    /// (`DemoEmojiPacks`), since the demo's packs have made-up ids.
+    func packEmojiURL(_ emoji: EmojiPack.Emoji, side: CGFloat) -> URL? {
+        if LaunchOptions.current.usesDemoFixtures, let drawn = DemoEmojiPacks.artURL(for: emoji.id) { return drawn }
+        return CDN.emoji(id: EmojiID(rawValue: emoji.id), animated: emoji.isAnimated, side: side)
+    }
+
+    /// One pack emoji as the picker offers it — the grid's section and the
+    /// packs page send the same thing.
+    func packEmojiItem(_ emoji: EmojiPack.Emoji, isLocked: Bool) -> ExpressionItem {
+        ExpressionItem(
+            id: String(emoji.id),
+            art: .image(packEmojiURL(emoji, side: Self.emojiCellSide), animated: emoji.isAnimated),
+            name: emoji.name.lowercased(),
+            pick: .insert(emoji.messageToken),
+            isLocked: isLocked
+        )
+    }
+
     /// The emoji sections, locked by the rule the caller states.
     private func buildEmojiCatalog(
         home: GuildID?,
@@ -172,29 +198,26 @@ extension AppModel {
         guildTable: [GuildID: Guild]
     ) -> ExpressionCatalog {
         var sections: [ExpressionSection] = []
+        // Discord's names for them here — a duplicate's tooltip says
+        // `:blob~1:`, the name that types it (`EmojiNameTable`). Only for the
+        // selected server's table: a reaction elsewhere keeps the plain names.
+        let names: EmojiNameTable? = home == selectedGuildID ? emojiNameTable : nil
         // The Nitro Emoji Packs the reader added, first (decision 16). Nitro's
         // to use; Fake Nitro sends them as links like any other emoji.
-        let packsUsable = entitlements.has(.animatedEmoji) || AppSettings.shared.fakeNitro
+        let packsUsable = emojiPacksUsable
         for packID in pinnedEmojiPackIDs {
             guard let pack = emojiPacks.first(where: { $0.id == packID }), pack.isAvailable else { continue }
             sections.append(ExpressionSection(
                 id: "pack-\(pack.id)",
                 title: "\(pack.name) Pack",
                 badge: .image(
-                    pack.cover.flatMap { CDN.emoji(id: EmojiID(rawValue: $0.id), animated: $0.isAnimated, side: Self.emojiCellSide) },
+                    pack.cover.flatMap { packEmojiURL($0, side: Self.emojiCellSide) },
                     monogram: String(pack.name.prefix(1)).uppercased()
                 ),
                 items: pack.emojis.filter(\.isAvailable).map { emoji in
-                    ExpressionItem(
-                        id: String(emoji.id),
-                        art: .image(
-                            CDN.emoji(id: EmojiID(rawValue: emoji.id), animated: emoji.isAnimated, side: Self.emojiCellSide),
-                            animated: emoji.isAnimated
-                        ),
-                        name: emoji.name.lowercased(),
-                        pick: .insert(emoji.messageToken),
-                        isLocked: !packsUsable
-                    )
+                    var item = packEmojiItem(emoji, isLocked: !packsUsable)
+                    if let name = names?.name(ofCustom: emoji.id) { item.name = name.lowercased() }
+                    return item
                 },
                 isLocked: !packsUsable
             ))
@@ -215,7 +238,7 @@ extension AppModel {
                         CDN.emoji(id: id, animated: emoji.isAnimated, side: Self.emojiCellSide),
                         animated: emoji.isAnimated
                     ),
-                    name: emoji.name.lowercased(),
+                    name: (names?.name(ofCustom: id.rawValue) ?? emoji.name).lowercased(),
                     pick: .insert(emoji.messageToken),
                     isLocked: emoji.isAnimated && !allowsAnimated
                 ))

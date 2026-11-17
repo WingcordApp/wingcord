@@ -201,6 +201,10 @@ struct ContentOutboxDTO: Decodable, Sendable {
 struct ContentEntryDTO: Decodable, Sendable {
     var id: String?
     var author_id: UserID?
+    /// Discord's own switch (`681154`): 1 played game, 2 watched media, 3 top
+    /// game, 5 listening session, 6 top artist, 8 launched activity.
+    var content_type: Int?
+    var channel_id: ChannelID?
     var participants: [UserID]?
     var traits: [TraitDTO]?
     var extra: ExtraDTO?
@@ -224,6 +228,8 @@ struct ContentEntryDTO: Decodable, Sendable {
         /// rather than a lost entry.
         var resurrected_last_played: LenientDate?
         var count: Int?
+        /// `AGGREGATE_RANGE`: 1 is a week.
+        var range: Int?
 
         /// Nil for a type this client has never seen. Ten of the twelve appear
         /// in the capture and four of those are counts on a music entry that
@@ -238,6 +244,7 @@ struct ContentEntryDTO: Decodable, Sendable {
             case 8: streak_count_days.map { RecentActivity.Trait.streak(days: $0) }
             case 9: (trending ?? 0) > 0 ? .trending : nil
             case 12: count.map { RecentActivity.Trait.weeklyCount($0) }
+            case 4: range == 1 ? .week : nil
             default: nil
             }
         }
@@ -248,21 +255,41 @@ struct ContentEntryDTO: Decodable, Sendable {
         var game_name: String?
         var activity_name: String?
         var application_id: ApplicationID?
+        var platform: Int?
         var artist: ArtistDTO?
         var media: MediaDTO?
+        // Watched media (`content_type` 2).
+        var media_title: String?
+        var media_subtitle: String?
+        var media_assets_large_image: String?
+        var media_assets_large_text: String?
+        var url: String?
+        // A listening session (`content_type` 5): the tracks, first first.
+        var entries: [SessionEntryDTO]?
 
         struct ArtistDTO: Decodable, Sendable {
             var name: String?
+            var external_id: String?
         }
 
         struct MediaDTO: Decodable, Sendable {
             var title: String?
+            var parent_title: String?
             var image_url: String?
+            var provider: Int?
+            var external_id: String?
+            var external_parent_id: String?
+            var artists: [ArtistDTO]?
+        }
+
+        struct SessionEntryDTO: Decodable, Sendable {
+            var media: MediaDTO?
         }
     }
 
     var domain: RecentActivity? {
-        guard let id, let authorID = author_id, let subject = extra?.domain else { return nil }
+        guard let id, let authorID = author_id, let subject = extra?.subject(contentType: content_type)
+        else { return nil }
         return RecentActivity(
             id: id,
             authorID: authorID,
@@ -270,12 +297,55 @@ struct ContentEntryDTO: Decodable, Sendable {
             traits: (traits ?? []).compactMap(\.domain),
             startedAt: started_at,
             endedAt: ended_at,
-            expiresAt: expires_at
+            expiresAt: expires_at,
+            details: RecentActivity.Details(
+                platform: extra?.platform,
+                album: extra?.media?.parent_title,
+                artistExternalID: extra?.artist?.external_id,
+                albumExternalID: extra?.media?.external_parent_id,
+                provider: extra?.media?.provider ?? extra?.entries?.first?.media?.provider,
+                episodeText: extra?.media_assets_large_text,
+                mediaImage: extra?.media_assets_large_image,
+                url: extra?.url.flatMap(URL.init(string:)),
+                channelID: channel_id
+            )
         )
     }
 }
 
 extension ContentEntryDTO.ExtraDTO {
+    /// The subject, by `extra.type` where it names one this client knows and
+    /// by `content_type` otherwise — Discord's own switch, which is what names
+    /// the three kinds no capture has shown yet (`420018`'s `uy`).
+    func subject(contentType: Int?) -> RecentActivity.Subject? {
+        if let known = domain { return known }
+        switch contentType {
+        case 1:
+            guard let name = game_name, !name.isEmpty else { return nil }
+            return .game(name: name, applicationID: application_id)
+        case 2:
+            guard let title = media_title, !title.isEmpty else { return nil }
+            return .watched(title: title, subtitle: media_subtitle, applicationID: application_id)
+        case 3:
+            guard let name = game_name, !name.isEmpty else { return nil }
+            return .topGame(name: name, applicationID: application_id)
+        case 5:
+            guard let media = entries?.first?.media,
+                  let track = media.title ?? media.artists?.first?.name, !track.isEmpty
+            else { return nil }
+            return .listeningSession(
+                track: track,
+                artists: (media.artists ?? []).compactMap(\.name),
+                artworkURL: media.image_url.flatMap(URL.init(string:))
+            )
+        case 8:
+            guard let name = activity_name, !name.isEmpty else { return nil }
+            return .activity(name: name, applicationID: application_id)
+        default:
+            return nil
+        }
+    }
+
     var domain: RecentActivity.Subject? {
         switch type {
         case "played_game_extra":
@@ -294,6 +364,12 @@ extension ContentEntryDTO.ExtraDTO {
                 artist: media?.title == nil ? nil : artist?.name,
                 artworkURL: media?.image_url.flatMap(URL.init(string:))
             )
+        case "top_game_extra":
+            guard let name = game_name, !name.isEmpty else { return nil }
+            return .topGame(name: name, applicationID: application_id)
+        case "watched_media_extra":
+            guard let title = media_title, !title.isEmpty else { return nil }
+            return .watched(title: title, subtitle: media_subtitle, applicationID: application_id)
         default:
             return nil
         }

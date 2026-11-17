@@ -562,10 +562,14 @@ struct ComposerContainer: View {
     /// places that can each change the answer.
     private var completions: [ExpressionItem] {
         guard let completionQuery else { return [] }
+        let usage = model.expressionUsage?.emojis.history
         return EmojiAutocomplete.matches(
             for: completionQuery,
-            custom: model.emojiCatalog.sections
+            table: model.emojiNameTable,
+            offers: model.emojiOfferRule(),
+            score: { usage?[$0]?.score }
         )
+        .map(model.completionItem(for:))
     }
 
     /// Turns a shortcode the reader typed all the way through into its emoji.
@@ -575,18 +579,17 @@ struct ComposerContainer: View {
     /// is the reader saying they are finished; taking them at their word is the
     /// whole feature.
     ///
-    /// **Only on an exact name, and only when one thing owns it.** A prefix
-    /// match would turn `:so:` into whatever happened to sort first, and two
-    /// servers with an emoji of the same name is a coin toss this has no
-    /// business making — it leaves those alone and the list still offers them.
+    /// **Only on an exact name, and Discord's names are unique**
+    /// (`EmojiNameTable`): `:sob:` is the built-in 😭 and a server's own `sob`
+    /// is `:sob~1:` — GitHub #25, where the closing colon used to take the
+    /// server's. A name that can't be used here is left as typed.
     private func applyClosedShortcode() {
         let text = activeText
-        guard let name = EmojiAutocomplete.closedShortcode(in: text) else { return }
-        let exact = EmojiAutocomplete.matches(
-            for: name,
-            custom: model.emojiCatalog.sections
-        ).filter { $0.name.lowercased() == name }
-        guard exact.count == 1, case .insert(let replacement) = exact[0].pick else { return }
+        guard let name = EmojiAutocomplete.closedShortcode(in: text),
+              let entry = model.emojiNameTable.entry(named: name),
+              model.emojiOfferRule()(entry),
+              case .insert(let replacement) = model.completionItem(for: entry).pick
+        else { return }
         model.mutateBox(channelID) { box in
             if let existing = box.editing?.text, existing == text {
                 box.editing?.text = EmojiAutocomplete.applyingClosed(replacement, to: existing)

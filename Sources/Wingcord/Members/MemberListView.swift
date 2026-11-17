@@ -41,6 +41,12 @@ struct MemberListView: NSViewRepresentable {
     /// The Activity section at the head of the list, or nil for none.
     var activity: MemberActivityBlock?
     var openActivity: (String, CGRect) -> Void = { _, _ in }
+    /// The pointer rested on a card, and left the cards — the popout opens on
+    /// hover (docs/ACTIVITY-CARDS.md decision 7).
+    var hoverActivity: (String, CGRect) -> Void = { _, _ in }
+    var endActivityHover: () -> Void = {}
+    /// The card whose popout is open.
+    var selectedActivityID: String?
     var toggleActivity: () -> Void = {}
     var activityMenu: (CGRect) -> Void = { _ in }
     /// Cards that stayed on screen long enough to count as seen.
@@ -61,6 +67,8 @@ struct MemberListView: NSViewRepresentable {
         context.coordinator.openMenu = openMenu
         context.coordinator.showRows = showRows
         context.coordinator.openActivity = openActivity
+        context.coordinator.hoverActivity = hoverActivity
+        context.coordinator.endActivityHover = endActivityHover
         context.coordinator.toggleActivity = toggleActivity
         context.coordinator.activityMenu = activityMenu
         context.coordinator.noteActivityShown = noteActivityShown
@@ -72,6 +80,7 @@ struct MemberListView: NSViewRepresentable {
         context.coordinator.setShowsRowActions(noteHover != nil)
         context.coordinator.setPinnedUser(pinnedUserID)
         context.coordinator.update(activity: activity)
+        context.coordinator.setSelectedActivity(selectedActivityID)
         // The one environment value a drawn canvas cannot read for itself. See
         // `MemberListCanvas.animatesPlate`.
         context.coordinator.setAnimatesPlate(!motion.reduceMotion)
@@ -135,6 +144,8 @@ final class MemberListCoordinator: NSObject {
     var openRoom: (ChannelID) -> Void = { _ in }
     var needApplications: ([ApplicationID]) -> Void = { _ in }
     var openActivity: (String, CGRect) -> Void = { _, _ in }
+    var hoverActivity: (String, CGRect) -> Void = { _, _ in }
+    var endActivityHover: () -> Void = {}
     var toggleActivity: () -> Void = {}
     var activityMenu: (CGRect) -> Void = { _ in }
     var noteActivityShown: ([String]) -> Void = { _ in }
@@ -151,6 +162,12 @@ final class MemberListCoordinator: NSObject {
         }
         canvas.onOpenActivity = { [weak self] id, frame in
             self?.openActivity(id, frame)
+        }
+        canvas.onHoverActivity = { [weak self] id, frame in
+            self?.hoverActivity(id, frame)
+        }
+        canvas.onHoverActivityEnded = { [weak self] in
+            self?.endActivityHover()
         }
         canvas.onToggleActivity = { [weak self] in
             self?.toggleActivity()
@@ -315,6 +332,8 @@ final class MemberListCoordinator: NSObject {
         canvas?.onOpenProfile = nil
         canvas?.onOpenMenu = nil
         canvas?.onOpenActivity = nil
+        canvas?.onHoverActivity = nil
+        canvas?.onHoverActivityEnded = nil
         canvas?.onToggleActivity = nil
         canvas?.onActivityMenu = nil
         canvas?.onToggleSection = nil
@@ -339,6 +358,10 @@ final class MemberListCoordinator: NSObject {
 
     func setCovered(_ isCovered: Bool) {
         canvas?.apply(isCovered: isCovered)
+    }
+
+    func setSelectedActivity(_ id: String?) {
+        canvas?.apply(selectedActivity: id)
     }
 
     /// Takes a new Activity section. Its height moves every row below it, so

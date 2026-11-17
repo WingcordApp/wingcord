@@ -1385,6 +1385,8 @@ public struct ReadySnapshot: Sendable {
     /// and the session trace prints which one READY sent.
     public var premiumType: Int?
     public var ageVerificationStatus: Int?
+    /// The reader's perks, off READY's own `user`; nil where it did not say.
+    public var perks: AccountPerks?
     /// Whether the reader has confirmed an e-mail and holds a phone — off
     /// READY's own `user`, nil where it did not say. See `AccountVerification`.
     public var accountVerification: AccountVerification?
@@ -1510,6 +1512,7 @@ public struct ReadySnapshot: Sendable {
             experiments: payload.experiments, guild: payload.guild_experiments, apex: payload.apex_experiments
         )
         ageVerificationStatus = payload.user.age_verification_status
+        perks = payload.user.perks?.domain
         accountVerification = payload.user.accountVerification
         ageGatedFeatures = AgeGatedFeatures(rawValue: payload.regional_feature_config?.ageGatedFeatures ?? 0)
 
@@ -1912,7 +1915,8 @@ public enum GatewayUpdate: Sendable {
     /// beside the user rather than on it — see `AccountEntitlements` — and are
     /// nil where this update did not carry them.
     case currentUserUpdated(
-        User, premiumType: Int?, ageVerificationStatus: Int?, verification: AccountVerification?
+        User, premiumType: Int?, ageVerificationStatus: Int?, verification: AccountVerification?,
+        perks: AccountPerks? = nil
     )
     /// A mention was acknowledged somewhere. The inbox drops the row.
     case recentMentionDeleted(MessageID)
@@ -2289,7 +2293,8 @@ public enum GatewayUpdate: Sendable {
                 dto.domain,
                 premiumType: dto.premium_type,
                 ageVerificationStatus: dto.age_verification_status,
-                verification: dto.accountVerification
+                verification: dto.accountVerification,
+                perks: dto.perks?.domain
             )
         case .recentMentionDelete(let dto):
             self = .recentMentionDeleted(dto.message_id)

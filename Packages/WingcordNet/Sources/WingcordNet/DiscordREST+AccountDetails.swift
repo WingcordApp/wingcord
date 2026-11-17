@@ -18,6 +18,8 @@ public struct CurrentAccount: Sendable {
     public var typingIndicatorStyle: TypingIndicatorStyle?
     /// Cleared for age-restricted content, where the answer said.
     public var isNSFWAllowed: Bool?
+    /// The account's perks, where the answer carried them.
+    public var perks: AccountPerks? = nil
 }
 
 extension DiscordREST {

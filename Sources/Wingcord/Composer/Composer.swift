@@ -226,6 +226,8 @@ struct Composer: View {
     /// the moment the picker is not the one showing, so opening it by hand
     /// later starts where the picker always starts.
     @State private var stickerSection: String?
+    /// The Nitro Emoji Pack the emoji picker opens at — View Set.
+    @State private var emojiPackFocus: UInt64?
     @State private var completionSelection = 0
     @State private var mentionSelection = 0
     /// The mention query the reader dismissed with Escape. Held so the list
@@ -348,6 +350,11 @@ struct Composer: View {
             if let section = request.stickerSectionID {
                 stickerSection = section
                 openControl = .sticker
+            } else if let packID = request.emojiPackID {
+                // An emoji card's View Set: the emoji picker, on the packs
+                // page, at that pack. Reopened if it was up, so it lands there.
+                emojiPackFocus = packID
+                openControl = .emoji
             } else {
                 // A key toggles, as Discord's do.
                 openControl = openControl == request.control ? nil : request.control
@@ -361,6 +368,7 @@ struct Composer: View {
         }
         .onChange(of: openControl) { _, control in
             if control != .sticker { stickerSection = nil }
+            if control != .emoji { emojiPackFocus = nil }
         }
     }
 
@@ -1159,6 +1167,7 @@ struct Composer: View {
             ExpressionPicker(
                 mode: mode,
                 initialSectionID: control == .sticker ? stickerSection : nil,
+                initialEmojiPackID: control == .emoji ? emojiPackFocus : nil,
                 // The composer's own expression controls, as tabs in Discord's
                 // order — a channel that offers no stickers offers no tab.
                 tabs: [.gifs, .stickers, .emoji].filter { mode in

@@ -67,7 +67,11 @@ nonisolated enum EmojiAutocomplete {
         guard token.count >= minimumQueryLength,
               !token.contains(where: { $0.isWhitespace || $0 == ":" })
         else { return nil }
-        return String(token).lowercased()
+        // **Case kept**: Discord's names are case-sensitive (`:Wave:` and
+        // `:wave:` can be two emoji); `EmojiNameTable.entry(named:)` tries the
+        // exact name first and falls back to a case-blind one only when it is
+        // unique.
+        return String(token)
     }
 
     /// The text with a finished `:name:` replaced by what it names.
@@ -91,45 +95,19 @@ nonisolated enum EmojiAutocomplete {
         return text[..<colon] + replacement + " "
     }
 
-    /// What to offer for a query: the account's own emoji first, then Unicode.
-    ///
-    /// Custom emoji lead because they are the ones a shortcode is *needed* for —
-    /// a Unicode emoji can also be typed straight into the field, and a server's
-    /// cannot. The catalog is already in that order, so one walk gives it.
-    ///
-    /// **One pass over the catalog, and a set, and each fixes a real
-    /// duplicate.**
-    ///
-    /// This used to walk the catalog and *then* append
-    /// `UnicodeEmoji.prefixed(by:)`, on the reading that the catalog held the
-    /// account's custom emoji and Unicode had to be added. It has not held
-    /// only custom emoji for a long time: `EmojiCatalog` appends the nine
-    /// Unicode category sections itself, so every Unicode match was found
-    /// twice and `:cry` listed `:cry:`, `:crying_cat_face:` and
-    /// `:crystal_ball:` two times each. The second pass is gone.
-    ///
-    /// The `seen` set covers the other duplicate, which is not the same bug
-    /// and would have survived the fix: **the same custom emoji in two
-    /// servers**. An account in two servers that both use `:blobcat:` has two
-    /// catalog entries with two ids and one name, and a list offering the
-    /// reader the same picture twice is a choice with no difference in it.
+    /// What to offer for a query, in Discord's order — `EmojiNameTable`'s
+    /// search (GitHub #25): a match anywhere in the name, the exact name first,
+    /// lifted by how much the reader uses it, and every duplicate under its
+    /// own `name~1`. Only what may be used here is offered, as Discord offers
+    /// only its unlocked matches.
     static func matches(
         for query: String,
-        custom: [ExpressionSection],
-        limit: Int = limit
-    ) -> [ExpressionItem] {
-        var results: [ExpressionItem] = []
-        results.reserveCapacity(limit)
-        var seen = Set<String>()
-
-        for section in custom where !section.isLocked {
-            for item in section.items where !item.isLocked && item.name.hasPrefix(query) {
-                guard seen.insert(item.name).inserted else { continue }
-                results.append(item)
-                if results.count == limit { return results }
-            }
-        }
-        return results
+        table: EmojiNameTable,
+        limit: Int = limit,
+        offers: (EmojiNameTable.Entry) -> Bool = { _ in true },
+        score: (String) -> Int? = { _ in nil }
+    ) -> [EmojiNameTable.Entry] {
+        table.search(query, limit: limit, offers: offers, score: score)
     }
 }
 

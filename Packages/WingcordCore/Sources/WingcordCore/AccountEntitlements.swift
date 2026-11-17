@@ -22,17 +22,22 @@ public struct AccountEntitlements: Hashable, Sendable {
     /// `age_verification_status`, verbatim. Nil until an account-scoped answer
     /// has carried it.
     public private(set) var ageVerificationStatus: Int?
+    /// The account's `perks` — nil until an answer has carried them. See
+    /// `AccountPerks`.
+    public private(set) var perks: AccountPerks?
 
-    public init(premiumTier: PremiumTier = .none, ageVerificationStatus: Int? = nil) {
+    public init(premiumTier: PremiumTier = .none, ageVerificationStatus: Int? = nil, perks: AccountPerks? = nil) {
         self.premiumTier = premiumTier
         self.ageVerificationStatus = ageVerificationStatus
+        self.perks = perks
     }
 
     /// This answer, keeping whatever an earlier one knew that it does not.
-    public func updated(premiumType: Int?, ageVerificationStatus: Int?) -> AccountEntitlements {
+    public func updated(premiumType: Int?, ageVerificationStatus: Int?, perks: AccountPerks? = nil) -> AccountEntitlements {
         AccountEntitlements(
             premiumTier: premiumType.flatMap(PremiumTier.init(rawValue:)) ?? premiumTier,
-            ageVerificationStatus: ageVerificationStatus ?? self.ageVerificationStatus
+            ageVerificationStatus: ageVerificationStatus ?? self.ageVerificationStatus,
+            perks: perks ?? self.perks
         )
     }
 
@@ -80,6 +85,11 @@ public enum PremiumPerk: Hashable, Sendable, CaseIterable {
     /// gifted, free, Orbs and quest-reward collectibles need no perk at all
     /// (`993408`'s `gA`: only `purchase_type` 7 locks).
     case collectibles
+    /// Nitro Emoji Packs' emoji, used anywhere. **Nitro proper only**: Discord
+    /// asks `isPremiumAtLeast(user, TIER_2)` for a pack emoji (its
+    /// `getEmojiUnavailableReason`, 2026-11-17), not the animated-emoji perk
+    /// Basic and Classic carry.
+    case emojiPacks
 }
 
 extension PremiumTier {
@@ -102,13 +112,13 @@ extension PremiumTier {
             switch perk {
             case .animatedEmoji, .emojiEverywhere, .stickersEverywhere: true
             case .soundboardEverywhere, .profileCustomization, .serverProfile,
-                 .streamMidQuality, .streamHighQuality, .animatedAvatar, .collectibles: false
+                 .streamMidQuality, .streamHighQuality, .animatedAvatar, .collectibles, .emojiPacks: false
             }
         case .classic:
             switch perk {
             case .animatedEmoji, .emojiEverywhere, .streamMidQuality, .animatedAvatar: true
             case .stickersEverywhere, .soundboardEverywhere, .profileCustomization,
-                 .serverProfile, .streamHighQuality, .collectibles: false
+                 .serverProfile, .streamHighQuality, .collectibles, .emojiPacks: false
             }
         }
     }

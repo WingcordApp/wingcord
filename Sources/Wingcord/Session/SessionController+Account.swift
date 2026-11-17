@@ -37,7 +37,8 @@ extension SessionController {
             model.accountDetails = answer.details
             model.entitlements = model.entitlements.updated(
                 premiumType: answer.account.premiumType,
-                ageVerificationStatus: answer.account.ageVerificationStatus
+                ageVerificationStatus: answer.account.ageVerificationStatus,
+                perks: answer.account.perks
             )
             if let verification = answer.account.verification { model.accountVerification = verification }
         } catch {

@@ -50,6 +50,9 @@ struct UserDTO: Decodable, Sendable {
     /// Whether the account is cleared for age-restricted content: what a friend
     /// request's note falls back on. The reader's own object only.
     var nsfw_allowed: Bool?
+    /// Which perks the account holds and where each came from — the reader's
+    /// own object only. See `AccountPerks`.
+    var perks: PerksDTO?
     // **Only ever populated by `GET /users/@me`.** Every other route that
     // carries a user carries a *public* one, so these are nil for everybody
     // else and that is not a failure to decode — see `AccountDetails`.
@@ -66,7 +69,8 @@ struct UserDTO: Decodable, Sendable {
             ageVerificationStatus: age_verification_status,
             verification: accountVerification,
             typingIndicatorStyle: typing_indicator_style.map(\.domain).flatMap { $0.isPlain ? nil : $0 },
-            isNSFWAllowed: nsfw_allowed
+            isNSFWAllowed: nsfw_allowed,
+            perks: perks?.domain
         )
     }
 
@@ -1539,7 +1543,8 @@ struct MessageDTO: Decodable, Sendable {
             thread: thread.map(\.threadSummary),
             sharedTheme: shared_client_theme?.domain,
             mediaMention: media_mention?.domain,
-            guildSpaceData: guild_space_data?.data
+            guildSpaceData: guild_space_data?.data,
+            contentEntry: ComponentDTO.contentEntry(components)
         )
         return Message(
             id: id,
@@ -2579,6 +2584,9 @@ struct ComponentDTO: Decodable, Sendable {
         description = try container.decodeIfPresent(String.self, forKey: .description)
         `default` = try container.decodeIfPresent(Bool.self, forKey: .default)
         component = try container.decodeIfPresent(ComponentDTO.self, forKey: .component).map { [$0] }
+        // Lenient: an entry in a shape this client can't read costs the card,
+        // never the message.
+        content_inventory_entry = try? container.decodeIfPresent(ContentEntryDTO.self, forKey: .content_inventory_entry)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2586,6 +2594,7 @@ struct ComponentDTO: Decodable, Sendable {
         case components, content, accent_color, divider, spacing, items, media, accessory
         case options, min_values, max_values
         case min_length, max_length, required, value, description, `default`, component
+        case content_inventory_entry
     }
 
     var type: Int?
@@ -2625,6 +2634,14 @@ struct ComponentDTO: Decodable, Sendable {
     var description: String?
     var `default`: Bool?
     var component: [ComponentDTO]?
+    /// Component 16's activity — what a reply to somebody's activity carries
+    /// (Discord's `CONTENT_INVENTORY_ENTRY`).
+    var content_inventory_entry: ContentEntryDTO?
+
+    /// The activity a message is a reply to, from its top-level component 16.
+    static func contentEntry(_ payload: [ComponentDTO]?) -> RecentActivity? {
+        payload?.lazy.compactMap { $0.type == 16 ? $0.content_inventory_entry?.domain : nil }.first
+    }
 
     struct SelectOptionDTO: Decodable, Sendable {
         var label: String?
@@ -3074,5 +3091,22 @@ struct MediaMentionDTO: Codable, Sendable {
 
     var domain: MediaMention? {
         UInt64(attachment_id).map { MediaMention(attachmentID: AttachmentID(rawValue: $0), timestampMS: timestamp ?? 0) }
+    }
+}
+
+/// `user.perks` — `{active_perks_bitmask, config_by_perk: {"2": {source: [4], kind}}, rules_version}`.
+struct PerksDTO: Decodable, Sendable {
+    var config_by_perk: [String: ConfigDTO]?
+
+    struct ConfigDTO: Decodable, Sendable {
+        var source: [Int]?
+    }
+
+    var domain: AccountPerks {
+        var sources: [String: Set<Int>] = [:]
+        for (perk, config) in config_by_perk ?? [:] {
+            if let list = config.source { sources[perk] = Set(list) }
+        }
+        return AccountPerks(sources: sources)
     }
 }
