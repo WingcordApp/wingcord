@@ -178,13 +178,15 @@ struct SampleProfileCard: View {
                 // in it is selected or opened.
                 ProseText(
                     markdown: bio,
-                    font: .system(.subheadline),
+                    font: .system(.body),
+                    pointSize: ProseText.bioPointSize,
                     color: InkColor.primary,
+                    emojiSide: ProseText.bioEmojiSide,
                     isSelectable: false
                 )
                 .lineLimit(2)
                 Text("…")
-                    .font(.system(.subheadline))
+                    .font(.system(size: ProseText.bioPointSize))
                     .foregroundStyle(InkColor.primary)
             }
         }

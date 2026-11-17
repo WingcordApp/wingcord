@@ -82,7 +82,12 @@ struct NewPostSheet: View {
                 title: isMedia ? "New Media Post" : "New Post",
                 subtitle: Text("in #\(channel?.name ?? "")"),
                 close: { model.cancelForumPost() }
-            )
+            ) {
+                // **The guidelines are a flyout** (Alex, 2026-11-17: "the long
+                // post guidelines should probably be a flyout"): a long topic
+                // pushed the message box half off the card.
+                if channel?.topic?.isEmpty == false { guidelinesButton }
+            }
             // A tall form scrolls, a short one doesn't: `FormSheet`'s rule.
             ViewThatFits(in: .vertical) {
                 fields
@@ -107,7 +112,6 @@ struct NewPostSheet: View {
             if isDropTargeted { DropHalo() }
         }
         .animation(motion.standard, value: isDropTargeted)
-        .animation(motion.reposition, value: isGuidelinesOpen)
         .animation(motion.standard, value: refusal)
         .modalDismissDisabled(isSubmitting)
         .fileImporter(
@@ -121,8 +125,6 @@ struct NewPostSheet: View {
             model.forumPostDrafts[channelID, default: ForumPostDraft()].thumbnail = file
         }
         .onAppear {
-            // Discord's: guidelines open on a first post in a forum.
-            isGuidelinesOpen = !model.hasSeenForumGuidelines(in: channelID)
             // A title already there, from a search or a draft: on to the message. With
             // none, the title is the card's first field, which it's given as it lands.
             if !draft.title.isEmpty { messageFocus = 1 }
@@ -141,9 +143,8 @@ struct NewPostSheet: View {
     // MARK: The fields
 
     private var fields: some View {
-        VStack(alignment: .leading, spacing: Spacing.margin) {
+        VStack(alignment: .leading, spacing: Spacing.group) {
             titleField
-            if channel?.topic?.isEmpty == false { guidelines }
             if isMedia { mediaNote }
             message
             if !offeredTags.isEmpty { tags }
@@ -156,18 +157,21 @@ struct NewPostSheet: View {
     private var titleField: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
             HStack(alignment: .top, spacing: Spacing.snug) {
-                TextField("Title", text: Binding(
+                TextField("Give your post a title", text: Binding(
                     get: { draft.title },
                     set: { model.forumPostDrafts[channelID, default: ForumPostDraft()].title = String($0.prefix(Self.titleLimit)) }
                 ))
                 .textFieldStyle(.plain)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 20, weight: .semibold))
                 .focused($isTitleFocused)
                 // Return moves on: Discord's title never sends.
                 .onSubmit { messageFocus = (messageFocus ?? 0) + 1 }
-                .padding(.horizontal, Spacing.snug)
-                .frame(height: 44)
-                .modalFieldGround(isFocused: isTitleFocused)
+                .padding(.horizontal, Spacing.margin)
+                .frame(height: 52)
+                // **The message's own glass**, at its corner: the two fields
+                // of one post are one kind of thing (Alex, 2026-11-17, "liquid
+                // glass"), where a well over a plate read as two apps.
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: Radius.chip))
                 .accessibilityLabel(Text("Post Title"))
                 if isMedia { thumbnailTile }
             }
@@ -215,49 +219,40 @@ struct NewPostSheet: View {
         }
     }
 
-    /// Discord's collapsible panel (`nJ`): open on a first post here.
-    private var guidelines: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                isGuidelinesOpen.toggle()
-            } label: {
-                HStack(spacing: Spacing.base) {
-                    Image(systemName: isGuidelinesOpen ? "text.book.closed.fill" : "text.book.closed")
-                        .font(.system(size: 13, weight: .medium))
-                    Text("Post Guidelines")
-                        .font(.system(.subheadline, weight: .semibold))
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .rotationEffect(.degrees(isGuidelinesOpen ? 90 : 0))
-                }
-                .foregroundStyle(Ink.primary)
-                .padding(.horizontal, Spacing.snug)
-                .frame(height: 34)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityValue(Text(isGuidelinesOpen ? "Expanded" : "Collapsed"))
-
-            if isGuidelinesOpen {
-                ScrollView {
-                    ProseText(
-                        markdown: channel?.topic ?? "",
-                        font: .system(.subheadline),
-                        color: InkColor.primary,
-                        mentions: model.mentionContext(),
-                        onLink: { model.openLink($0) }
-                    )
-                    .padding(.horizontal, Spacing.snug)
-                    .padding(.bottom, Spacing.snug)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 160)
-                .fixedSize(horizontal: false, vertical: true)
-                .transition(.opacity)
+    /// The guidelines' button, beside the card's ✕: a glass capsule whose
+    /// flyout is the forum toolbar's own, holding the whole topic.
+    ///
+    /// **It never opens by itself.** Discord opens its panel on a first post,
+    /// but a flyout that lands while the title is being typed takes the
+    /// keyboard with it; the dot says there is something to read instead,
+    /// until a post here has been made.
+    private var guidelinesButton: some View {
+        Button {
+            isGuidelinesOpen.toggle()
+        } label: {
+            Label("Guidelines", systemImage: isGuidelinesOpen ? "text.book.closed.fill" : "text.book.closed")
+                .labelStyle(.titleAndIcon)
+                .font(.system(.subheadline, weight: .semibold))
+                .padding(.horizontal, Spacing.tight)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+        .controlSize(.large)
+        .overlay(alignment: .topTrailing) {
+            if !model.hasSeenForumGuidelines(in: channelID) {
+                Circle()
+                    .fill(Palette.accent)
+                    .frame(width: 8, height: 8)
+                    .offset(x: -2, y: 2)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
         }
-        .background(Palette.groupedFill, in: .rect(cornerRadius: Radius.row + 2, style: .continuous))
+        .help("Post Guidelines")
+        .accessibilityHint(model.hasSeenForumGuidelines(in: channelID) ? Text("") : Text("Not read yet"))
+        .popover(isPresented: $isGuidelinesOpen, arrowEdge: .bottom) {
+            ForumGuidelinesPopover(channelID: channelID)
+        }
     }
 
     @ViewBuilder
@@ -327,24 +322,27 @@ struct NewPostSheet: View {
     }
 
     private var tags: some View {
-        VStack(alignment: .leading, spacing: Spacing.tight + Spacing.hair) {
-            HStack(spacing: Spacing.tight) {
+        VStack(alignment: .leading, spacing: Spacing.snug) {
+            HStack(spacing: Spacing.tight + 2) {
                 Image(systemName: "tag.fill")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                 Text("Tags")
-                    .font(.system(.subheadline, weight: .semibold))
+                    .font(.system(.headline))
                 if channel?.requiresTag == true {
-                    Text("*").foregroundStyle(Palette.destructive)
+                    Text("Required")
+                        .font(.system(.caption, weight: .semibold))
+                        .foregroundStyle(Palette.destructive)
                 }
                 Spacer(minLength: 0)
-                if draft.tags.count >= Self.tagLimit {
-                    Text("\(Self.tagLimit) of \(Self.tagLimit)")
-                        .font(.system(.caption))
-                        .foregroundStyle(Ink.secondary)
-                }
+                Text("\(draft.tags.count) of \(Self.tagLimit)")
+                    .font(.system(.caption, weight: .medium))
+                    .foregroundStyle(Ink.secondary)
+                    .monospacedDigit()
             }
             .foregroundStyle(Ink.primary)
-            FlowLayout(spacing: Spacing.tight) {
+            // **Bigger, and glass** (Alex, 2026-11-17: "making the tags bigger"):
+            // a tag is the one choice on the card besides the words.
+            FlowLayout(spacing: Spacing.base) {
                 ForEach(offeredTags) { tag in
                     let isOn = draft.tags.contains(tag.id)
                     let isFull = !isOn && draft.tags.count >= Self.tagLimit
@@ -353,7 +351,7 @@ struct NewPostSheet: View {
                         if isOn { next.tags.remove(tag.id) } else if !isFull { next.tags.insert(tag.id) }
                         model.forumPostDrafts[channelID] = next
                     } label: {
-                        ForumTagChip(tag: tag, isOn: isOn)
+                        ForumTagPill(tag: tag, isOn: isOn)
                     }
                     .buttonStyle(.plain)
                     .disabled(isFull)
@@ -361,6 +359,7 @@ struct NewPostSheet: View {
                     .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
                 }
             }
+            .animation(motion.standard, value: draft.tags)
             if let error = refusal?.tagError { errorLine(error) }
         }
     }

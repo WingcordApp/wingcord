@@ -38,9 +38,12 @@ struct ComposerContainer: View {
         Composer(
             channelName: model.channelIndex[channelID].map(model.displayName(of:)) ?? "",
             channelSigil: model.channelIndex[channelID]?.kind.isPrivate == true ? "@" : "#",
-            shape: settings.chromeShape,
+            // **A post's message is one plate** (Alex, 2026-11-17: "the weird
+            // composer"): the + and the expression buttons inside the box,
+            // boxy, whatever the bar in a conversation is set to.
+            shape: post == nil ? settings.chromeShape : .boxy,
             controls: settings.composerControls,
-            inlineControls: settings.composerControlsInline,
+            inlineControls: post == nil ? settings.composerControlsInline : true,
             // Vencord's SilentTyping icon (decision 17), when the plugin is on
             // and its "Show icon" is.
             silentTyping: settings.silentTyping && settings.silentTypingShowsIcon

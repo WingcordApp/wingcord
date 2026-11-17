@@ -1997,7 +1997,8 @@ public enum GatewayUpdate: Sendable {
     /// carries their voice states, which are the only word a client that
     /// just connected gets about who's sitting in a call.
     case callChanged(DirectCall, voiceStates: [VoiceState])
-    case callEnded(ChannelID)
+    /// `CALL_DELETE`. `isUnavailable` is an outage, not an ending.
+    case callEnded(ChannelID, isUnavailable: Bool)
     case soundboardSoundsChanged(GuildID?, sounds: [SoundboardSound])
     /// Who is watching one person's screen share, and — on the `STREAM_CREATE`
     /// that opens it — where its media session lives.
@@ -2385,7 +2386,7 @@ public enum GatewayUpdate: Sendable {
             }
             self = .callChanged(dto.domain, voiceStates: states)
         case .callDelete(let dto):
-            self = .callEnded(dto.channel_id)
+            self = .callEnded(dto.channel_id, isUnavailable: dto.unavailable == true)
         case .guildSoundboardSounds(let payload):
             self = .soundboardSoundsChanged(payload.guild_id, sounds: payload.catalog)
         case .streamUpsert(let dto):

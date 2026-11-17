@@ -37,6 +37,14 @@ struct VoiceTile: View {
     var watch: ((UserID) -> Void)?
     /// Raises the person menu from the tile's ⋯, at the button's frame.
     var openMenu: ((CGRect) -> Void)?
+    /// A double-click on the picture: fill the stage, or let go of it.
+    ///
+    /// **On the picture, under the chips and controls — never around the
+    /// whole tile.** Wrapped around it, every button on the tile waited out the
+    /// double-click interval before answering, in case the press was the first
+    /// of two: the ⋯ opened its menu 355 ms after the click (measured, with the
+    /// system's 500 ms interval; Alex, 2026-11-17: "it's not instant").
+    var toggleSpotlight: (() -> Void)?
     /// How big the face is drawn, as a fraction of the tile's short side.
     var isCompact = false
 
@@ -64,12 +72,19 @@ struct VoiceTile: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipShape(.rect(cornerRadius: radius))
+            .contentShape(.rect(cornerRadius: radius))
+            // Before the overlays, so the buttons in them aren't inside it —
+            // see `toggleSpotlight`.
+            .onTapGesture(count: 2) { toggleSpotlight?() }
             .overlay { edge }
             .overlay(alignment: .bottomLeading) {
                 HStack(spacing: Spacing.tight) {
                     namePill
                     if let game = participant.game { gameChip(game) }
                 }
+                // Labels, not controls: a double-click on them is the
+                // picture's.
+                .allowsHitTesting(false)
                 .padding(chipInset)
                 .opacity(isCallIdle ? 0 : 1)
                 .animation(motion.standard, value: isCallIdle)
@@ -77,6 +92,7 @@ struct VoiceTile: View {
             .overlay(alignment: .topLeading) {
                 if participant.isStreaming {
                     CallLiveBadge(isCompact: isCompact)
+                        .allowsHitTesting(false)
                         .padding(chipInset)
                         .transition(.materialize(from: .topLeading, blurring: false))
                 }
@@ -158,7 +174,11 @@ struct VoiceTile: View {
                     .buttonStyle(.plain)
                     .help("More")
                     .accessibilityLabel(Text("More"))
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuAnchor = $0 }
+                    // **In the window root's space**, which is where the menu's
+                    // presenter hangs it: `.global` is the window's, one
+                    // titlebar strip lower, and the menu opened that far below
+                    // the button (Alex, 2026-11-17: "not in the right place").
+                    .reportsPresentationAnchor { menuAnchor = $0 }
                 }
             }
             .padding(chipInset)
@@ -409,6 +429,7 @@ struct VoiceTile: View {
             .padding(.horizontal, Spacing.base + 2)
             .frame(height: chipHeight - 2)
             .tileGlass(tint: Palette.accent.opacity(0.7))
+            .allowsHitTesting(false)
             .padding(.top, chipInset)
             .transition(.materialize(from: .top, blurring: false))
         }

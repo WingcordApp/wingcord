@@ -274,7 +274,7 @@ extension AppModel {
             authorID: author,
             content: request.content,
             kind: reference == nil ? .default : .reply,
-            flags: request.isVoiceMessage ? .isVoiceMessage : [],
+            flags: request.flags,
             payload: MessagePayload(
                 attachments: request.isVoiceMessage ? files.compactMap { file in
                     file.voice.map { voice in

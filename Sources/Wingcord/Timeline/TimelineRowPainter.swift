@@ -665,6 +665,15 @@ nonisolated enum TimelineRowPainter {
                     context: context
                 )
             }
+            // "This is a @silent message." — Discord's bell beside the time.
+            if row.silentMarkRect != .zero {
+                drawSymbol(
+                    "bell.slash.fill",
+                    tint: style.tertiaryColor,
+                    in: row.silentMarkRect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY),
+                    context: context
+                )
+            }
         }
 
         // Body text.
@@ -2436,24 +2445,37 @@ nonisolated enum TimelineRowPainter {
         let text = voice.isOnAccent ? NSColor.white : style.primaryColor
         let glyphTint = voice.isOnAccent ? themeAccent : NSColor.white
         let isDiscLit = hover == voice.disc.origin
-        context.setFillColor(
-            (hasFailed ? NSColor.systemRed : accent).withAlphaComponent(isDiscLit ? 0.85 : 1).cgColor
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            || LaunchOptions.current.forcesReducedMotion
+        drawVoiceDisc(
+            disc,
+            tint: hasFailed ? .systemRed : accent,
+            isLit: isDiscLit,
+            // Still, under Reduce Motion: there, but not breathing.
+            level: isPlaying ? (reduceMotion ? 0.5 : voiceLevel(voice, at: position)) : nil,
+            context: context
         )
-        context.fillEllipse(in: disc)
         if isLoading {
             drawVoiceSpinner(in: disc, tint: glyphTint, clock: clock, context: context)
         } else {
             let symbol = hasFailed ? "arrow.clockwise" : isPlaying ? "pause.fill" : "play.fill"
-            let side: CGFloat = 14
+            let side: CGFloat = symbol == "play.fill" ? 15 : 14
             // A play triangle's weight sits left of its box, so it looks centred a
             // point to the right.
             let nudge: CGFloat = symbol == "play.fill" ? 1 : 0
+            // Lifted off the bead by a shadow, the way a glyph sits on glass.
+            context.saveGState()
+            context.setShadow(
+                offset: .zero, blur: 2,
+                color: NSColor.black.withAlphaComponent(voice.isOnAccent ? 0.12 : 0.28).cgColor
+            )
             drawSymbol(
                 symbol,
                 tint: hasFailed ? .white : glyphTint,
                 in: CGRect(x: disc.midX - side / 2 + nudge, y: disc.midY - side / 2, width: side, height: side),
                 context: context
             )
+            context.restoreGState()
         }
 
         // The bars.
@@ -2463,8 +2485,6 @@ nonisolated enum TimelineRowPainter {
             guard voice.duration > 0 else { return 0 }
             return Int((seconds / voice.duration * Double(count)).rounded())
         } ?? 0
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            || LaunchOptions.current.forcesReducedMotion
         let rate = Double(playback?.rate ?? 1)
         func addBar(_ index: Int, height: CGFloat) {
             let barRect = CGRect(
@@ -2562,6 +2582,99 @@ nonisolated enum TimelineRowPainter {
         )
         NSGraphicsContext.restoreGraphicsState()
         return context.makeImage()
+    }
+
+    /// How far past the slot the playing disc's halo can reach, which is how far the
+    /// canvas repaints around a playing note each frame.
+    static let voiceHaloReach: CGFloat = 8
+
+    /// The play disc (Alex, 2026-11-17: "smth cool and beautiful"): the accent lit from
+    /// above like a bead of glass — a gradient down it, a sheen over its top and a rim
+    /// that catches the light at the top and fades round to the foot — brighter, not
+    /// fainter, under the pointer. **While the note plays, a halo breathes with the
+    /// voice**: it swells with how loud the bars under the playhead are and settles in
+    /// the pauses, so the control says it's playing, and what.
+    ///
+    /// All drawn, since the canvas is: Liquid Glass is a view's material and this is a
+    /// row's paint. One radial and three linear gradients, on one disc.
+    private static func drawVoiceDisc(
+        _ disc: CGRect, tint: NSColor, isLit: Bool, level: CGFloat?, context: CGContext
+    ) {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return }
+        let tint = tint.usingColorSpace(.sRGB) ?? tint
+        let center = CGPoint(x: disc.midX, y: disc.midY)
+        let radius = disc.width / 2
+        func gradient(_ colors: [NSColor], _ locations: [CGFloat]) -> CGGradient? {
+            CGGradient(colorsSpace: space, colors: colors.map(\.cgColor) as CFArray, locations: locations)
+        }
+
+        // The halo, behind it.
+        if let level {
+            let reach = 2 + (voiceHaloReach - 3) * level
+            if let halo = gradient(
+                [tint.withAlphaComponent(0.5 * (0.4 + 0.6 * level)), tint.withAlphaComponent(0)], [0, 1]
+            ) {
+                context.drawRadialGradient(
+                    halo, startCenter: center, startRadius: radius - 0.5,
+                    endCenter: center, endRadius: radius + reach, options: []
+                )
+            }
+        }
+
+        context.saveGState()
+        context.addEllipse(in: disc)
+        context.clip()
+        // The body: lighter where the light lands, deeper at the foot.
+        let top = tint.blended(withFraction: 0.30, of: .white) ?? tint
+        let foot = tint.blended(withFraction: 0.18, of: .black) ?? tint
+        if let body = gradient([top, tint, foot], [0, 0.55, 1]) {
+            context.drawLinearGradient(
+                body, start: CGPoint(x: disc.midX, y: disc.minY), end: CGPoint(x: disc.midX, y: disc.maxY), options: []
+            )
+        }
+        // The sheen: a soft lens of light across the top half.
+        let sheen = CGRect(
+            x: disc.minX + radius * 0.28, y: disc.minY + radius * 0.1,
+            width: radius * 1.44, height: radius * 0.78
+        )
+        context.saveGState()
+        context.addEllipse(in: sheen)
+        context.clip()
+        if let gloss = gradient([NSColor.white.withAlphaComponent(0.38), NSColor.white.withAlphaComponent(0)], [0, 1]) {
+            context.drawLinearGradient(
+                gloss, start: CGPoint(x: sheen.midX, y: sheen.minY), end: CGPoint(x: sheen.midX, y: sheen.maxY), options: []
+            )
+        }
+        context.restoreGState()
+        if isLit {
+            context.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+            context.fill(disc)
+        }
+        context.restoreGState()
+
+        // The rim: bright where the light lands, gone by the foot.
+        context.saveGState()
+        context.addEllipse(in: disc.insetBy(dx: 0.5, dy: 0.5))
+        context.setLineWidth(1)
+        context.replacePathWithStrokedPath()
+        context.clip()
+        if let rim = gradient([NSColor.white.withAlphaComponent(0.55), NSColor.white.withAlphaComponent(0.04)], [0, 1]) {
+            context.drawLinearGradient(
+                rim, start: CGPoint(x: disc.midX, y: disc.minY), end: CGPoint(x: disc.midX, y: disc.maxY), options: []
+            )
+        }
+        context.restoreGState()
+    }
+
+    /// How loud the note is under the playhead, 0…1: the bars either side of it, eased
+    /// between, so the halo swells and settles rather than stepping bar to bar.
+    private static func voiceLevel(_ voice: VoiceNoteSlot, at position: Double?) -> CGFloat {
+        guard let position, voice.duration > 0, !voice.bars.isEmpty else { return 0 }
+        let exact = max(0, position / voice.duration * Double(voice.bars.count))
+        let index = min(voice.bars.count - 1, Int(exact))
+        let next = min(voice.bars.count - 1, index + 1)
+        let t = Float(exact - Double(index))
+        return CGFloat(max(0, min(1, voice.bars[index] * (1 - t) + voice.bars[next] * t)))
     }
 
     /// What the pill says: Discord's numbers, with its leading zero gone.

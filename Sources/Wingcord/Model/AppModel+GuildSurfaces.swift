@@ -188,6 +188,8 @@ struct ChannelsAndRolesPresentation: Hashable, Sendable {
         var title: String
         var guidance: String
         var isRequired: Bool
+        /// One answer, not several: its options are radios, not checkboxes.
+        var isSingleSelect = false
         var options: [Option]
     }
 
@@ -228,7 +230,8 @@ struct ChannelsAndRolesPresentation: Hashable, Sendable {
         var id: ChannelID
         var name: String
         var symbolName: String
-        var topic: String?
+        /// The topic, its markup drawn: see `ChannelTopicPreview`.
+        var topic: AttributedString?
         /// When something was last said here. From the channel's newest message
         /// id, so it costs no request and cannot disagree with the transcript.
         var lastActivity: Date?
@@ -604,6 +607,7 @@ extension AppModel {
                 title: prompt.title,
                 guidance: prompt.guidance,
                 isRequired: prompt.isRequired,
+                isSingleSelect: prompt.isSingleSelect,
                 options: options
             ))
         }
@@ -707,6 +711,15 @@ extension AppModel {
 
         var result: [ChannelsAndRolesPresentation.BrowseCategory] = []
         result.reserveCapacity(categories.count + 1)
+        // One table for every topic on the page, memoized on what it names.
+        let mentions = mentionContextWithoutPeople(guildID: guildID)
+        let guildMembers = members[guildID]
+        let browseChannel = { (channel: Channel) in
+            self.browseChannel(channel, mentions: mentions) { userID in
+                guard let user = self.users[userID] else { return nil }
+                return guildMembers?[userID]?.nickname ?? user.preferredName
+            }
+        }
 
         if let loose = byParent[nil], !loose.isEmpty {
             result.append(ChannelsAndRolesPresentation.BrowseCategory(
@@ -732,7 +745,11 @@ extension AppModel {
         return result
     }
 
-    private func browseChannel(_ channel: Channel) -> ChannelsAndRolesPresentation.BrowseChannel {
+    private func browseChannel(
+        _ channel: Channel,
+        mentions: MentionContext,
+        userName: @escaping (UserID) -> String?
+    ) -> ChannelsAndRolesPresentation.BrowseChannel {
         let topic = channel.topic.flatMap { $0.isEmpty ? nil : $0 }
         var key = channel.name.lowercased()
         if let topic {
@@ -743,7 +760,7 @@ extension AppModel {
             id: channel.id,
             name: channel.name,
             symbolName: channel.kind.symbolName,
-            topic: topic,
+            topic: topic.map { ChannelTopicPreview.attributed($0, mentions: mentions, userName: userName) },
             // The snowflake already carries the millisecond, so "active three
             // hours ago" costs no request and cannot disagree with the
             // transcript.

@@ -53,8 +53,10 @@ struct VoiceCallLobby: View {
         }
         .padding(.horizontal, Spacing.margin)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Frosted, as the band is (Alex, 2026-11-17: "i wanted blur").
-        .background { CallBandGround() }
+        // Frosted, as the band is (Alex, 2026-11-17: "i wanted blur"), and up
+        // under the toolbar so the two read as one header with no strip of
+        // transcript between them.
+        .background { CallBandGround().ignoresSafeArea(.container, edges: .top) }
         .accessibilityElement(children: .contain)
     }
 

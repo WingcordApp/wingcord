@@ -261,8 +261,10 @@ struct ProfileIdentityPanel: View {
                     .tracking(0.9)
                 ProseText(
                     markdown: bio,
-                    font: .system(.subheadline),
+                    font: .system(.body),
+                    pointSize: ProseText.bioPointSize,
                     color: InkColor.primary,
+                    emojiSide: ProseText.bioEmojiSide,
                     mentions: model.mentionContext(),
                     // The card opens on the emoji, from the prose.
                     inspectsEmoji: true,

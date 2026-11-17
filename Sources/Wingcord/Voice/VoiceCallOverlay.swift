@@ -113,7 +113,10 @@ struct VoiceCallOverlay: View {
             ) {
                 controls
             }
-            .background { CallBandGround() }
+            // **Up under the toolbar** (Alex, 2026-11-17: "the toolbar and the
+            // voice bar creating a weird space"): stopped at the toolbar's
+            // edge, the transcript showed through between the two.
+            .background { CallBandGround().ignoresSafeArea(.container, edges: .top) }
             .overlay(alignment: .bottom) { grabber }
             .onHover { hovering in
                 guard isPointerInBand != hovering else { return }

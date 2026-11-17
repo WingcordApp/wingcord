@@ -229,32 +229,53 @@ private nonisolated enum RailButtonInk {
 
 /// Read All, in the rail and atop the Servers page: one small glass capsule,
 /// there only while some server has something unread.
+///
+/// **It says when it's working** (Alex, 2026-11-17): Read All takes about a
+/// second for every hundred channels, and a button that looked untouched in
+/// the meantime invited a second press — the same requests again, through the
+/// same rate limit. While it runs the capsule shows how far it has got and
+/// takes no press; the toast over the window says the same in words.
 struct ReadAllCapsule: View {
     var action: () -> Void
 
+    @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
     @State private var isHovering = false
 
     var body: some View {
+        let progress = model.readAllProgress
         Button(action: action) {
-            Text("Read All")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(InkColor.primary)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, Spacing.base)
-                .frame(height: 22)
-                .contentShape(.capsule)
+            ZStack {
+                Text("Read All")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(InkColor.primary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .opacity(progress == nil ? 1 : 0)
+                if let progress {
+                    ProgressView(value: progress.fraction)
+                        .progressViewStyle(.circular)
+                        .controlSize(.mini)
+                        .tint(Palette.accent)
+                        .transition(.opacity)
+                }
+            }
+            .padding(.horizontal, Spacing.base)
+            .frame(height: 22)
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
+        .disabled(progress != nil)
         .glassEffect(.regular.interactive(), in: .capsule)
-        .scaleEffect(isHovering ? 1.04 : 1)
+        .scaleEffect(isHovering && progress == nil ? 1.04 : 1)
         .onHover { hovering in
             guard isHovering != hovering else { return }
             isHovering = hovering
         }
         .animation(motion.hover, value: isHovering)
-        .help("Mark every server as read")
-        .accessibilityLabel(Text("Mark All Servers as Read"))
+        .animation(motion.standard, value: progress == nil)
+        .help(progress == nil ? "Mark every server as read" : "Marking everything as read\u{2026}")
+        .accessibilityLabel(Text(progress == nil ? "Mark All Servers as Read" : "Marking All Servers as Read"))
+        .accessibilityValue(progress.map { Text("\($0.done) of \($0.total)") } ?? Text(""))
     }
 }

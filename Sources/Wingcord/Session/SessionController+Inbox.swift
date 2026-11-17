@@ -160,11 +160,25 @@ extension SessionController {
     /// Marks many servers' channels read — Read All. The read states move on
     /// the socket's `MESSAGE_ACK`s, as for every other ack; a refusal is said.
     func acknowledgeServers(_ updates: [ReadStateUpdate]) {
+        // **One Read All at a time** (Alex, 2026-11-17): it runs a hundred
+        // channels a second, and a second press while the first is still going
+        // sends everything again through the same rate limit.
+        guard model.readAllProgress == nil else { return }
+        model.readAllProgress = ReadAllProgress(done: 0, total: updates.count)
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await rest.bulkAcknowledge(updates)
+                try await rest.bulkAcknowledge(updates) { done, total in
+                    Task { @MainActor [weak self] in
+                        guard let self, model.readAllProgress != nil else { return }
+                        model.readAllProgress = ReadAllProgress(done: done, total: total)
+                    }
+                }
+                model.readAllProgress = nil
+                let count = updates.count
+                model.reportSuccess(count == 1 ? "Marked 1 channel as read" : "Marked \(count) channels as read")
             } catch {
+                model.readAllProgress = nil
                 Self.trace("read all failed: \(Self.describe(error))")
                 model.reportActionFailure(Self.describe(error))
             }

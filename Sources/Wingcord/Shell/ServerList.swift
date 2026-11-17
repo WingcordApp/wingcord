@@ -222,7 +222,9 @@ private struct ServerListRow: View {
             .contentShape(.rect)
         }
         .buttonStyle(ServerListRowStyle(isSelected: isSelected))
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+        // In the root's space, where Server Options is hung — `.global` is a
+        // titlebar strip lower (`reportsPresentationAnchor`).
+        .reportsPresentationAnchor { frame = $0 }
         .contextMenu {
             Button("Server Options…") { openMenu(frame) }
         }

@@ -192,6 +192,10 @@ struct VoiceTileGrid: View {
             reportVideoPixels: model.reportVideoPixels,
             watch: watch,
             openMenu: { openMenu(for: participant.id, at: $0) },
+            // Double-click to fill the stage, and again to let go of it. A
+            // single click would fight the pointer's own hover, and a button
+            // over a video tile is chrome nobody asked for.
+            toggleSpotlight: { spotlight(spotlightUserID == participant.id ? nil : participant.id) },
             isCompact: isCompact
         )
         // The whole of the travel. Keyed on the person, so a tile moving from
@@ -210,12 +214,6 @@ struct VoiceTileGrid: View {
         // what a photograph of the running app showed. §4, and the rule that
         // anything rasterising glass destroys it.
         .transition(.materialize(from: .center, blurring: false))
-        .onTapGesture(count: 2) {
-            // Double-click to fill the stage, and again to let go of it. A
-            // single click would fight the pointer's own hover, and a button
-            // over a video tile is chrome nobody asked for.
-            spotlight(spotlightUserID == participant.id ? nil : participant.id)
-        }
         // **The person menu, as Discord's call tile raises it** — with the
         // call's own items, User Volume first. Double-click still fills the
         // stage.

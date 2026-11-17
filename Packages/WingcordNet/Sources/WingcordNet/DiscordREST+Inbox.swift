@@ -382,7 +382,12 @@ extension DiscordREST {
     ///    with no error. Filtered here rather than at the call site.
     ///  - **It takes no `manual` flag**, so it must never be used to move a read
     ///    cursor *backwards*. Marking read only ever moves it forward.
-    public func bulkAcknowledge(_ updates: [ReadStateUpdate]) async throws {
+    public func bulkAcknowledge(
+        _ updates: [ReadStateUpdate],
+        /// How many of how many have been sent, after each batch — Read All's
+        /// progress, since a long list takes a second a hundred.
+        progress: (@Sendable (_ done: Int, _ total: Int) -> Void)? = nil
+    ) async throws {
         struct Entry: Encodable {
             var channel_id: String
             var message_id: String
@@ -408,6 +413,7 @@ extension DiscordREST {
                 route: "read-states/ack-bulk",
                 body: Body(read_states: Array(entries[start..<end]))
             )
+            progress?(end - entries.startIndex, entries.count)
             start = end
         }
     }

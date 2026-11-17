@@ -560,11 +560,21 @@ final class VoiceController {
         model.voiceRevision &+= 1
     }
 
-    func applyCallEnded(_ channelID: ChannelID) {
+    func applyCallEnded(_ channelID: ChannelID, isUnavailable: Bool = false) {
+        // An outage, not an ending: the call is still there once its server
+        // comes back, and so is everybody in it.
+        guard !isUnavailable else { return }
         if model.connectedVoiceChannelID == channelID { stopRinging() }
         model.directCalls[channelID] = nil
         if model.incomingCallChannelID == channelID { model.incomingCallChannelID = nil }
         if model.connectedVoiceChannelID == channelID { leaveLocally() }
+        // **Nobody is in a call that has ended.** A reader who left first
+        // stops hearing the others' voice states, so the last one standing
+        // stayed in the table and the conversation went on offering to join
+        // them (Alex, 2026-11-17: "In the call" over a call deleted five
+        // minutes before — joining it started a new one, alone).
+        let stale = model.voiceStates.filter { $0.value.channelID == channelID && $0.key != model.currentUserID }
+        for userID in stale.keys { model.voiceStates[userID] = nil }
         model.voiceRevision &+= 1
     }
 

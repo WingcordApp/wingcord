@@ -220,6 +220,9 @@ struct CallDTO: Decodable, Sendable {
 
 struct CallDeleteDTO: Decodable, Sendable {
     var channel_id: ChannelID
+    /// The call's voice server went away: the call is unreachable, not over,
+    /// and the people in it are still in it.
+    var unavailable: Bool?
 }
 
 /// `STREAM_CREATE` / `STREAM_UPDATE` / `STREAM_DELETE`.

@@ -404,7 +404,8 @@ struct EditableBioField: View {
                 text: $text,
                 isFocused: $isFocused,
                 placeholder: "Tell people about yourself",
-                font: NSFont.preferredFont(forTextStyle: .subheadline),
+                // The size it's read at, so the words don't jump on Edit.
+                font: NSFont.systemFont(ofSize: ProseText.bioPointSize),
                 lines: 3...6,
                 characterLimit: Self.limit
             )

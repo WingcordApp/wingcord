@@ -237,11 +237,13 @@ struct MiniProfileCard: View {
                         // **Markdown, not a plain string.** A bio is the one place
                         // in the app where people write `<:emoji:id>` and `<t:…>` by
                         // hand, and a `Text` renders both as literal angle brackets.
+                        // Discord's size, in its brightest ink (`text-strong`).
                         ProseText(
                             markdown: bio,
-                            font: .system(.caption),
-                            color: InkColor.secondary,
-                            emojiSide: 16,
+                            font: .system(.body),
+                            pointSize: ProseText.bioPointSize,
+                            color: InkColor.primary,
+                            emojiSide: ProseText.bioEmojiSide,
                             mentions: model.mentionContext(),
                             onEmoji: openEmoji,
                             // The card opens on the emoji, from the prose.
@@ -293,7 +295,11 @@ struct MiniProfileCard: View {
                 if !profile.isLoading {
                     connections
                     // Streamer Mode's personal information: the reader's notes.
-                    if !profile.isSelf, !StreamerMode.shared.hidesPersonalInformation {
+                    // **Not on the mini profile** (Alex, 2026-11-17: "remove
+                    // the Note from mini profiles"): the card is a glance; the
+                    // note stays in the conversation's profile column and in
+                    // the full profile.
+                    if form == .column, !profile.isSelf, !StreamerMode.shared.hidesPersonalInformation {
                         ProfileNoteField(
                             userID: profile.userID,
                             note: profile.note,

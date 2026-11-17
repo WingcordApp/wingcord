@@ -398,6 +398,21 @@ struct Composer: View {
             ComposerSection { scheduleBanner(scheduledAt) }
                 .transition(.materialize(from: .bottom))
         }
+        // **`@silent`, said where it's typed**: Discord styles the prefix in
+        // its editor; here the bar says what it will do, and its × takes the
+        // prefix off again.
+        if !isEditing, SilentMessage.parse(text).isSilent {
+            ComposerSection {
+                ComposerBanner(
+                    symbolName: "bell.slash.fill",
+                    text: "Silent message \u{2014} nobody will be notified",
+                    cancelLabel: "Send normally",
+                    cancelHelp: "Send normally, with notifications",
+                    cancel: removeSilentPrefix
+                )
+            }
+            .transition(.materialize(from: .bottom))
+        }
         if showsTray {
             ComposerSection {
                 AttachmentTray(
@@ -1051,6 +1066,12 @@ struct Composer: View {
 
     /// "Scheduling message for October 3 at 9:00 AM": the line opens the time
     /// and the cross leaves scheduling, as Discord's bar does.
+    /// Takes `@silent` off the front of the draft.
+    private func removeSilentPrefix() {
+        guard SilentMessage.parse(text).isSilent else { return }
+        text = String(text.dropFirst(SilentMessage.prefix.count).drop(while: \.isWhitespace))
+    }
+
     private func scheduleBanner(_ date: Date) -> some View {
         ComposerBanner(
             symbolName: "clock",

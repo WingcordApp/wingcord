@@ -840,7 +840,9 @@ private struct MemberTableRow: View {
             .buttonStyle(.plain)
             .foregroundStyle(Ink.secondary)
             .help("More Options")
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuAnchor = $0 }
+            // In the root's space, where the menu's presenter hangs it —
+            // `.global` is a titlebar strip lower (`reportsPresentationAnchor`).
+            .reportsPresentationAnchor { menuAnchor = $0 }
         }
     }
 }

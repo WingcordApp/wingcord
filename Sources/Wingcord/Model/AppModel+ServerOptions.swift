@@ -494,6 +494,8 @@ extension AppModel {
     /// already hidden, but its unread still counts in the inbox and on a phone.
     /// Conversations are left alone — Read All is about the servers.
     func markAllServersRead() {
+        // Already running: a press now would send it all again.
+        guard readAllProgress == nil else { return }
         var updates: [ReadStateUpdate] = []
         for guildID in guilds.keys {
             for channelID in channelIndex.channelIDs(inGuild: guildID) {

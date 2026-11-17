@@ -1057,6 +1057,9 @@ final class AppModel {
     /// because the reader is looking at the thing they just did and a backlog of
     /// stale notices is noise. Cleared by the notice's own timer.
     var actionNotice: ActionNotice?
+    /// Read All under way — how far it has got, so its button and its toast can
+    /// say so and a second press does nothing. Nil when it isn't running.
+    var readAllProgress: ReadAllProgress?
     /// Distinguishes two identical notices. `@ObservationIgnored` because
     /// nothing reads it — it exists only to make `actionNotice` differ.
     @ObservationIgnored var actionNoticeToken: UInt64 = 0
@@ -2521,6 +2524,16 @@ struct ActionNotice: Hashable, Sendable, Identifiable {
     var text: String
     var kind: Kind
     var id: UInt64
+}
+
+/// How far Read All has got: channels acknowledged out of those it set out to.
+struct ReadAllProgress: Hashable, Sendable {
+    var done: Int
+    var total: Int
+
+    var fraction: Double {
+        total > 0 ? min(1, Double(done) / Double(total)) : 0
+    }
 }
 
 /// How a report submission went.

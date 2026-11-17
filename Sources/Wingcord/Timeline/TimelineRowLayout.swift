@@ -142,6 +142,9 @@ nonisolated struct MessageRow: @unchecked Sendable {
     var authorRect: CGRect
     var timestampText: String
     var timestampRect: CGRect
+    /// Discord's mark on a `@silent` message, after its time — zero when it
+    /// wasn't sent silently.
+    var silentMarkRect: CGRect = .zero
     /// The compact `HH:mm` shown in the gutter on hover, for a continuation row.
     var gutterTimestampText: String
 
@@ -1842,6 +1845,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var avatarRect: CGRect?
         var authorRect = CGRect(x: contentX, y: y, width: 0, height: 0)
         var timestampRect = CGRect.zero
+        var silentMarkRect = CGRect.zero
 
         // The quoted line, above everything. A reply always breaks its run — see
         // `TimelineReducer` — so the header and the author line below it are
@@ -1977,6 +1981,16 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     ),
                     height: TimelineMetrics.headerHeight
                 )
+                // Discord's bell on a `@silent` message, after its time.
+                if message.flags.contains(.suppressNotifications) {
+                    let side: CGFloat = 12
+                    silentMarkRect = CGRect(
+                        x: timestampRect.maxX + 4,
+                        y: y + (TimelineMetrics.headerHeight - side) / 2,
+                        width: side,
+                        height: side
+                    )
+                }
             }
             if isCaption { captionSpan = authorRect.minX...afterName }
             y += nameLine + (isCaption ? BubbleMetrics.captionGap : TimelineMetrics.headerGap)
@@ -2702,6 +2716,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 ? input.settings.timestampLabel(message.sentAt, calendar: input.calendar)
                 : "",
             timestampRect: timestampRect,
+            silentMarkRect: silentMarkRect,
             gutterTimestampText: input.settings.time(message.sentAt),
             authorTag: authorTag,
             isCrosspost: message.isCrosspost,

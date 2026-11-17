@@ -39,6 +39,16 @@ struct OutgoingMessage: Identifiable, Equatable, Sendable {
         var mediaMention: MediaMention?
         /// A voice message: its one file is the message.
         var isVoiceMessage = false
+        /// Sent with `@silent`: nobody is notified (`SilentMessage`).
+        var isSilent = false
+
+        /// What the message is besides its words, as the route takes it.
+        var flags: MessageFlags {
+            var flags: MessageFlags = []
+            if isVoiceMessage { flags.insert(.isVoiceMessage) }
+            if isSilent { flags.insert(.suppressNotifications) }
+            return flags
+        }
     }
 
     enum State: Hashable, Sendable {

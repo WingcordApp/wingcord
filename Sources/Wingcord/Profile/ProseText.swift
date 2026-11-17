@@ -24,6 +24,10 @@ import WingcordCore
 struct ProseText: View {
     var markdown: String
     var font: Font
+    /// The words' size in points, where none of the text styles is the right
+    /// one — a bio is Discord's 14 against this platform's 13-point body (see
+    /// `bioPointSize`). Wins over `font`'s size.
+    var pointSize: CGFloat?
     var color: Color
     /// The side an inline custom emoji is drawn at. Derived by the caller from
     /// the text size, so a picture in a line of prose grows with the words.
@@ -78,9 +82,10 @@ struct ProseText: View {
     }
 
     var body: some View {
+        let face = pointSize.map { NSFont.systemFont(ofSize: $0) } ?? NSFont.resolved(font)
         ProseCanvasHost(
             markdown: markdown,
-            pointSize: NSFont.resolved(font).pointSize,
+            pointSize: face.pointSize,
             weight: weight,
             color: color,
             isLight: colorScheme == .light,
@@ -97,7 +102,7 @@ struct ProseText: View {
         // **An `NSView` has no baseline to offer**, so a row that lines up on first
         // baselines (an icon beside an event's place) would use its foot. The font's
         // ascent is where the first line's baseline falls.
-        .alignmentGuide(.firstTextBaseline) { [ascent = NSFont.resolved(font).ascender] in $0[.top] + ascent }
+        .alignmentGuide(.firstTextBaseline) { [ascent = face.ascender] in $0[.top] + ascent }
         .accessibilityElement(children: .ignore)
         // One plain string for one node, exactly as a transcript row carries.
         .accessibilityLabel(Text(ProseCache.shared.document(for: markdown).plainText))
@@ -131,6 +136,24 @@ struct ProseText: View {
                 model?.openGameProfile(gameID)
             }
         }
+    }
+}
+
+extension ProseText {
+    /// A profile's bio: Discord's `body-sm` — 14 px on 18 px lines, the popout's
+    /// and the full profile's alike — a point above the system's body, so it
+    /// keeps that relation if the body ever moves.
+    ///
+    /// **It was the caption on the card and the subheadline on the full
+    /// profile** (Alex, 2026-11-17: "small compared to discord"), 10 and 11
+    /// points against Discord's 14, on a card 20 points wider than Discord's.
+    @MainActor static var bioPointSize: CGFloat {
+        NSFont.preferredFont(forTextStyle: .body).pointSize + 1
+    }
+
+    /// An emoji in a bio: Discord's inline `1.375em` of the words.
+    @MainActor static var bioEmojiSide: CGFloat {
+        (bioPointSize * 1.375).rounded()
     }
 }
 

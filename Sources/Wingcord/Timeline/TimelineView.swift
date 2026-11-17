@@ -1494,7 +1494,16 @@ final class TimelineCoordinator: NSObject {
             head: head,
             postActions: postActions,
             postOwnerID: { if case .post = head { channel?.ownerID } else { nil } }(),
-            channelSymbol: channel?.kind.symbolName ?? "number",
+            // **A forum post wears its forum's mark, not a thread's** (Alex,
+            // 2026-11-17): it is a thread on the wire, and its start drew the
+            // threads glyph over the post's own title.
+            channelSymbol: {
+                if case .post = head,
+                   let parent = channel?.parentID.flatMap({ model.channelIndex[$0] }) {
+                    return parent.kind.symbolName
+                }
+                return channel?.kind.symbolName ?? "number"
+            }(),
             channelTopic: channel?.topic,
             // **The channel being drawn, not the one that is selected.** See
             // `AppModel.authorInfo` — an overlay chat window is open while a

@@ -1658,8 +1658,8 @@ final class SessionController {
                 voice.apply(state: state, member: nil, user: nil)
             }
 
-        case .callEnded(let channelID):
-            voice.applyCallEnded(channelID)
+        case .callEnded(let channelID, let isUnavailable):
+            voice.applyCallEnded(channelID, isUnavailable: isUnavailable)
 
         case .soundboardSoundsChanged(let guildID, let sounds):
             voice.applySoundboard(guildID: guildID, sounds: sounds)
@@ -3193,20 +3193,24 @@ final class SessionController {
         mediaMention: MediaMention? = nil,
         isVoiceMessage: Bool = false
     ) -> MessageID? {
+        // **`@silent` is Discord's, and it's taken off before anything else
+        // looks at the words** — "@silent" alone is nothing to send.
+        let silent = SilentMessage.parse(content.trimmingCharacters(in: .whitespacesAndNewlines))
         guard Self.isSendable(
-            content, stickerIDs: stickerIDs, attachments: attachments, poll: poll, listenAlong: listenAlong
+            silent.content, stickerIDs: stickerIDs, attachments: attachments, poll: poll, listenAlong: listenAlong
         ), let author = model.currentUserID
         else { return nil }
         let attachments = PendingAttachment.anonymising(attachments)
         let request = OutgoingMessage.Request(
-            content: content.trimmingCharacters(in: .whitespacesAndNewlines),
+            content: silent.content,
             replyingTo: replyingTo,
             pingsRepliedAuthor: pingsRepliedAuthor,
             stickerIDs: stickerIDs,
             poll: poll,
             listenAlong: listenAlong,
             mediaMention: mediaMention,
-            isVoiceMessage: isVoiceMessage
+            isVoiceMessage: isVoiceMessage,
+            isSilent: silent.isSilent
         )
         // **Sending from older messages brings the reader back** — first, so
         // the echo lands in the window the reader is going to. Somebody who has
@@ -3346,7 +3350,7 @@ final class SessionController {
                     poll: entry.request.poll,
                     listenAlong: listenAlong,
                     mediaMention: entry.request.mediaMention,
-                    flags: entry.request.isVoiceMessage ? .isVoiceMessage : []
+                    flags: entry.request.flags
                 )
             }
             // Discord's copy is newer than the echo the cursor was moved to.

@@ -337,7 +337,7 @@ private struct MyProfileAside: View {
                         if let accountName = me.accountName {
                             Text(accountName)
                                 .font(.system(.caption))
-                                .foregroundStyle(Ink.tertiary)
+                                .foregroundStyle(Ink.secondary)
                                 .lineLimit(1)
                         }
                     }
@@ -345,8 +345,10 @@ private struct MyProfileAside: View {
                     if let bio = me.bio {
                         ProseText(
                             markdown: bio,
-                            font: .system(.callout),
-                            color: InkColor.secondary
+                            font: .system(.body),
+                            pointSize: ProseText.bioPointSize,
+                            color: InkColor.primary,
+                            emojiSide: ProseText.bioEmojiSide
                         )
                         .lineLimit(6)
                     }
@@ -356,7 +358,7 @@ private struct MyProfileAside: View {
                             .padding(.vertical, Spacing.tight)
                         Text("Roles")
                             .font(Typeface.sectionHeader)
-                            .foregroundStyle(Ink.tertiary)
+                            .foregroundStyle(Ink.secondary)
                         SurfaceRoleFlow(roles: me.roles)
                     }
                 }
@@ -376,7 +378,7 @@ private struct PromptSection: View {
     /// room. Adaptive rather than a fixed count, so an accessibility size gets
     /// wider chips instead of clipped ones.
     private static let columns = [
-        GridItem(.adaptive(minimum: 260), spacing: Spacing.base, alignment: .top)
+        GridItem(.adaptive(minimum: 280), spacing: Spacing.snug, alignment: .top)
     ]
 
     var body: some View {
@@ -385,9 +387,9 @@ private struct PromptSection: View {
             detail: prompt.guidance,
             note: prompt.isRequired ? "Required" : nil
         ) {
-            LazyVGrid(columns: Self.columns, spacing: Spacing.base) {
+            LazyVGrid(columns: Self.columns, spacing: Spacing.snug) {
                 ForEach(prompt.options) { option in
-                    OptionChip(option: option, toggle: toggleOption)
+                    OptionChip(option: option, isSingleSelect: prompt.isSingleSelect, toggle: toggleOption)
                 }
             }
         }
@@ -396,95 +398,120 @@ private struct PromptSection: View {
 
 /// One answer.
 ///
-/// **The whole chip is the control**, which is why the selected state is the
-/// chip's own fill and stroke rather than only a tick in a corner: at a glance
+/// **The whole card is the control**, which is why the selected state is the
+/// card's own tint and edge rather than only a mark in a corner: at a glance
 /// somebody has to be able to see which of six they picked without reading six
 /// corners.
+///
+/// **Frosted like every card on the page** (Alex, 2026-11-17): it was the
+/// theme's opaque surface, which on a dark theme came out as a black slab
+/// beside the translucent profile card. Checkboxes where a question takes
+/// several answers, radios where it takes one — Discord's own marks.
 private struct OptionChip: View {
     var option: ChannelsAndRolesPresentation.Option
+    var isSingleSelect: Bool
     var toggle: (UInt64, UInt64) -> Void
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
 
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Radius.glass, style: .continuous) }
+
     var body: some View {
         Button {
             toggle(option.id, option.promptID)
         } label: {
-            HStack(alignment: .top, spacing: Spacing.snug) {
-                SurfaceGlyphView(glyph: option.glyph, isEmphasised: option.isSelected)
+            HStack(alignment: .center, spacing: Spacing.snug) {
+                OptionIconTile(glyph: option.glyph, isSelected: option.isSelected)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(option.title)
-                        .font(.system(.body, weight: .medium))
+                        .font(.system(.body, weight: .semibold))
                         .foregroundStyle(Ink.primary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
 
                     if let detail = option.detail {
                         Text(detail)
-                            .font(.system(.caption))
+                            .font(.system(.subheadline))
                             .foregroundStyle(Ink.secondary)
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    if let unlocks = option.unlocks {
-                        HStack(spacing: Spacing.tight) {
-                            // The role's own colour, and the only colour on the
-                            // chip that is not the app's. A role with no colour
-                            // set draws no dot rather than a grey one.
-                            if let value = option.roleColorValue {
-                                Circle()
-                                    .fill(Color(hex: value))
-                                    .frame(width: 6, height: 6)
+                    if option.unlocks != nil || (option.memberCount ?? 0) > 0 {
+                        HStack(spacing: Spacing.base) {
+                            if let unlocks = option.unlocks {
+                                // The role's own colour, the only colour on the
+                                // card that is not the app's.
+                                HStack(spacing: 5) {
+                                    if let value = option.roleColorValue {
+                                        Circle()
+                                            .fill(Color(hex: value))
+                                            .frame(width: 7, height: 7)
+                                    }
+                                    Text(unlocks)
+                                        .font(.system(.caption, weight: .medium))
+                                        .foregroundStyle(Ink.primary)
+                                        .lineLimit(1)
+                                }
+                                .padding(.horizontal, Spacing.base)
+                                .frame(height: 20)
+                                .background(
+                                    (option.roleColorValue.map { Color(hex: $0) } ?? Palette.accent).opacity(0.16),
+                                    in: .capsule
+                                )
                             }
-                            Text(unlocks)
-                                .font(.system(.caption))
-                                .foregroundStyle(Ink.tertiary)
-                                .lineLimit(1)
                             if let count = option.memberCount, count > 0 {
-                                Text("·")
-                                    .font(.system(.caption))
-                                    .foregroundStyle(Ink.quaternary)
-                                Text("\(count, format: .number.notation(.compactName))")
-                                    .font(.system(.caption))
-                                    .foregroundStyle(Ink.quaternary)
+                                Label {
+                                    Text(count, format: .number.notation(.compactName))
+                                } icon: {
+                                    Image(systemName: "person.2.fill")
+                                }
+                                .labelStyle(.titleAndIcon)
+                                .font(.system(.caption, weight: .medium))
+                                .foregroundStyle(Ink.secondary)
+                                .help("\(count) members have this role")
                             }
                         }
-                        .padding(.top, 1)
+                        .padding(.top, 3)
                     }
                 }
 
                 Spacer(minLength: Spacing.tight)
 
-                Image(symbol: option.isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 15))
-                    .foregroundStyle(
-                        option.isSelected ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.quaternary)
-                    )
-                    .contentTransition(.symbolEffect(.replace))
-                    .padding(.top, 4)
+                OptionSelectionMark(isSelected: option.isSelected, isSingleSelect: isSingleSelect, isHighlighted: isHovering)
             }
-            .padding(Spacing.snug)
+            .padding(Spacing.margin)
             // **Fills the grid row's height.** `LazyVGrid` sizes a row to its
-            // tallest child and top-aligns the rest, so an option with no
-            // unlocks line beside one that has both leaves a ragged foot —
-            // which reads as a layout that could not decide rather than as two
-            // chips of different weight.
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background {
-                RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
-                    .fill(fill)
+            // tallest child and top-aligns the rest, so a card with no unlocks
+            // line beside one that has both would leave a ragged foot.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .structuralSurface(in: shape)
+            .overlay {
+                shape.fill(option.isSelected ? Palette.accent.opacity(0.14) : (isHovering ? Palette.hoverFill : .clear))
+                    .allowsHitTesting(false)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
-                    .strokeBorder(
-                        option.isSelected ? AnyShapeStyle(Palette.accent.opacity(0.55)) : AnyShapeStyle(Ink.quaternary),
-                        lineWidth: 1
-                    )
+                shape.strokeBorder(
+                    option.isSelected
+                        ? AnyShapeStyle(Palette.accent.opacity(0.75))
+                        : AnyShapeStyle(isHovering ? Ink.tertiary : Ink.quaternary),
+                    lineWidth: option.isSelected ? 1.5 : 1
+                )
             }
-            .contentShape(.rect(cornerRadius: Radius.glass))
+            // A soft accent glow under a picked card — a fill behind the card,
+            // never a shadow on it: a shadow takes the card offscreen, where its
+            // material has nothing behind it to frost and paints black.
+            .background {
+                if option.isSelected {
+                    shape.fill(Palette.accent.opacity(0.28))
+                        .blur(radius: 12)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -497,10 +524,55 @@ private struct OptionChip: View {
         .accessibilityValue(Text(option.isSelected ? "Selected" : "Not selected"))
         .accessibilityAddTraits(option.isSelected ? [.isButton, .isSelected] : .isButton)
     }
+}
 
-    private var fill: Color {
-        if option.isSelected { return Palette.accent.opacity(0.16) }
-        return isHovering ? Palette.hoverFill : Palette.surface
+/// An answer's emoji or symbol, on a tile that takes the accent once picked.
+private struct OptionIconTile: View {
+    var glyph: SurfaceGlyph
+    var isSelected: Bool
+
+    var body: some View {
+        SurfaceGlyphView(glyph: glyph, isEmphasised: isSelected)
+            .scaleEffect(1.15)
+            .frame(width: 42, height: 42)
+            .background(
+                isSelected ? AnyShapeStyle(Palette.accent.opacity(0.2)) : AnyShapeStyle(Palette.hoverFill),
+                in: .rect(cornerRadius: 11, style: .continuous)
+            )
+    }
+}
+
+/// A checkbox where the question takes several answers, a radio where it takes
+/// one — filled with the accent once picked.
+private struct OptionSelectionMark: View {
+    var isSelected: Bool
+    var isSingleSelect: Bool
+    /// Under the pointer: the empty box's edge comes up.
+    var isHighlighted = false
+
+    private static let side: CGFloat = 20
+
+    var body: some View {
+        let shape = isSingleSelect
+            ? AnyShape(Circle())
+            : AnyShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        ZStack {
+            shape
+                .fill(isSelected ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Color.clear))
+            shape
+                .stroke(isSelected ? Color.clear : isHighlighted ? Ink.secondary : Ink.tertiary, lineWidth: 1.5)
+            if isSelected {
+                if isSingleSelect {
+                    Circle().fill(.white).frame(width: 7, height: 7)
+                } else {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+        }
+        .frame(width: Self.side, height: Self.side)
+        .accessibilityHidden(true)
     }
 }
 
@@ -574,10 +646,24 @@ private struct BrowseSection: View {
     var toggleFollowed: (ChannelID) -> Void
 
     var body: some View {
-        SurfaceSection(title: category.title ?? "Channels") {
+        VStack(alignment: .leading, spacing: Spacing.base) {
+            BrowseCategoryHeader(
+                title: category.title ?? "Channels",
+                count: category.channels.count
+            ) {
+                // Only where the category is real — the loose rows above the
+                // first one belong to nothing, so there is nothing to follow.
+                if offersFollowing, let channelID = category.channelID {
+                    FollowCategoryToggle(
+                        isOn: category.isFollowed,
+                        isWorking: category.isFollowWorking,
+                        action: { toggleFollowed(channelID) }
+                    )
+                }
+            }
             SurfaceCard {
                 ForEach(Array(category.channels.enumerated()), id: \.element.id) { index, channel in
-                    if index > 0 { SurfaceDivider() }
+                    if index > 0 { SurfaceDivider(leading: BrowseRow.textLeading) }
                     BrowseRow(
                         channel: channel,
                         offersFollowing: offersFollowing,
@@ -587,23 +673,43 @@ private struct BrowseSection: View {
                 }
             }
         }
-        // The switch rides the heading, which is where the thing it governs is
-        // named. Only where the category is real — the loose rows above the
-        // first one belong to nothing, so there is nothing to follow.
-        .overlay(alignment: .topTrailing) {
-            if offersFollowing, let channelID = category.channelID {
-                FollowCategoryToggle(
-                    isOn: category.isFollowed,
-                    isWorking: category.isFollowWorking,
-                    action: { toggleFollowed(channelID) }
-                )
-            }
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// "Follow Category" — a real `Toggle`, at the system's size and with the
-/// system's switch.
+/// A category's name, how many channels it holds, and its Follow switch, on
+/// one line over its card.
+///
+/// **The switch is in the line, not laid over it.** It was an overlay on the
+/// section's top corner, which a long category name ran underneath.
+private struct BrowseCategoryHeader<Accessory: View>: View {
+    var title: String
+    var count: Int
+    @ViewBuilder var accessory: Accessory
+
+    var body: some View {
+        HStack(spacing: Spacing.base) {
+            Text(title)
+                .font(.system(.body, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+                .lineLimit(1)
+            Text(count, format: .number)
+                .font(.system(.caption, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Ink.secondary)
+                .padding(.horizontal, 7)
+                .frame(minWidth: 22, minHeight: 18)
+                .background(Palette.hoverFill, in: .capsule)
+                .accessibilityLabel(Text("\(count) channels"))
+            Spacer(minLength: Spacing.base)
+            accessory
+        }
+        .padding(.horizontal, Spacing.tight)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// "Follow" — a real `Toggle`, at the system's size and with the system's
+/// switch.
 ///
 /// **Not a hand-drawn capsule.** A switch is a control macOS already draws, and
 /// one built by hand loses Increase Contrast, the accent colour the reader
@@ -616,18 +722,17 @@ private struct FollowCategoryToggle: View {
     var action: () -> Void
 
     var body: some View {
-        HStack(spacing: Spacing.base) {
-            Text("Follow category")
-                .font(.system(.caption))
-                .foregroundStyle(Ink.tertiary)
-            Toggle("Follow category", isOn: Binding(get: { isOn }, set: { _ in action() }))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .disabled(isWorking)
-                .opacity(isWorking ? 0.5 : 1)
+        Toggle(isOn: Binding(get: { isOn }, set: { _ in action() })) {
+            Text("Follow")
+                .font(.system(.subheadline, weight: .medium))
+                .foregroundStyle(Ink.secondary)
         }
-        .accessibilityElement(children: .combine)
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .disabled(isWorking)
+        .opacity(isWorking ? 0.5 : 1)
+        .help(isOn ? "Unfollow this category" : "Follow this category")
+        .accessibilityLabel(Text("Follow category"))
         .accessibilityHint(Text("Shows new channels added to this category"))
     }
 }
@@ -641,6 +746,10 @@ private struct BrowseRow: View {
     @Environment(\.motion) private var motion
     @State private var isHovering = false
 
+    static let tileSide: CGFloat = 32
+    /// Where a row's words start: what the divider between two rows clears.
+    static let textLeading = Spacing.margin + tileSide + Spacing.snug
+
     var body: some View {
         // **The checkbox is a SIBLING of the row's button, not an overlay on
         // it.** Two reasons, and the first is visible: an overlay does not
@@ -652,38 +761,38 @@ private struct BrowseRow: View {
             Button {
                 openChannel(channel.id)
             } label: {
-                HStack(alignment: .top, spacing: Spacing.snug) {
-                    SurfaceGlyphView(glyph: .symbol(channel.symbolName))
+                HStack(alignment: channel.topic == nil ? .center : .top, spacing: Spacing.snug) {
+                    BrowseChannelTile(symbolName: channel.symbolName, isUnread: channel.isUnread)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(channel.name)
-                            // Unread bolds the name rather than adding a second
-                            // mark, exactly as the sidebar's rows do.
-                            .font(channel.isUnread
-                                ? Typeface.rowTitleUnread
-                                : Font.system(.body, weight: .medium))
-                            .foregroundStyle(Ink.primary)
-                            .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
+                            Text(channel.name)
+                                // Unread bolds the name rather than adding a
+                                // second mark, exactly as the sidebar's rows do.
+                                .font(channel.isUnread
+                                    ? Typeface.rowTitleUnread
+                                    : Font.system(.body, weight: .medium))
+                                .foregroundStyle(Ink.primary)
+                                .lineLimit(1)
+                            Spacer(minLength: Spacing.base)
+                            if let activity = channel.lastActivity {
+                                // `Text` with a relative format, so the phrasing
+                                // is the locale's and the string is built by the
+                                // framework rather than by a formatter this page
+                                // would have to own.
+                                Text(activity, format: .relative(presentation: .named))
+                                    .font(.system(.caption, weight: .medium))
+                                    .foregroundStyle(Ink.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
                         if let topic = channel.topic {
                             Text(topic)
-                                .font(.system(.caption))
+                                .font(.system(.callout))
                                 .foregroundStyle(Ink.secondary)
                                 .lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                    }
-
-                    Spacer(minLength: Spacing.base)
-
-                    if let activity = channel.lastActivity {
-                        // `Text` with a relative format, so the phrasing is the
-                        // locale's and the string is built by the framework
-                        // rather than by a formatter this page would have to own.
-                        Text(activity, format: .relative(presentation: .named))
-                            .font(.system(.caption))
-                            .foregroundStyle(Ink.quaternary)
-                            .lineLimit(1)
-                            .padding(.top, 3)
                     }
                 }
                 .padding(.leading, Spacing.margin)
@@ -708,19 +817,48 @@ private struct BrowseRow: View {
         // On the row rather than on the button, so the highlight runs under the
         // checkbox too and the row still reads as one object.
         .background(Palette.hoverFill.opacity(isHovering ? 1 : 0))
+        // Discord's unread pill, at the card's edge where the sidebar's sits at
+        // the column's: half of it, the card's clip takes the rest.
+        .overlay(alignment: .leading) {
+            if channel.isUnread {
+                Capsule()
+                    .fill(Ink.primary)
+                    .frame(width: 8, height: 8)
+                    .offset(x: -4)
+                    .accessibilityHidden(true)
+            }
+        }
         .onHover { hovering in
             guard isHovering != hovering else { return }
             isHovering = hovering
         }
         .animation(motion.fadeQuick, value: isHovering)
         .accessibilityElement(children: .contain)
+        .accessibilityValue(channel.isUnread ? Text("Unread") : Text(""))
     }
 }
 
-/// The tick beside a browse row.
+/// A channel's mark on a tile, as the sidebar draws it bare: lit while there is
+/// something new in it.
+private struct BrowseChannelTile: View {
+    var symbolName: String
+    var isUnread: Bool
+
+    var body: some View {
+        Image(symbol: symbolName)
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(isUnread ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
+            .frame(width: BrowseRow.tileSide, height: BrowseRow.tileSide)
+            .background(Palette.hoverFill, in: .rect(cornerRadius: 9, style: .continuous))
+            .accessibilityHidden(true)
+    }
+}
+
+/// The tick beside a browse row: the same box the Customize tab's answers
+/// draw, so one page has one checkbox.
 ///
 /// A drawn control rather than a `Toggle(.checkbox)`, and for the one reason
-/// that outweighs the switch's: this sits inside a row that is itself a button,
+/// that outweighs the switch's: this sits beside a row that is itself a button,
 /// and it has to be visibly the *only* thing its own press does. A system
 /// checkbox brings a label slot and a focus ring sized for a form; here the
 /// square is the whole control, and it takes the accent the same way every
@@ -739,26 +877,13 @@ private struct FollowCheckbox: View {
     @Environment(\.motion) private var motion
     @State private var isHovering = false
 
-    private static let side: CGFloat = 18
-
     var body: some View {
         Button(action: action) {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(isOn ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Palette.hoverFill))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .strokeBorder(isOn ? Color.clear : isHovering ? checkEdgeHovered : checkEdge)
-                }
-                .overlay {
-                    if isOn {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white)
-                            .transition(.opacity)
-                    }
-                }
-                .frame(width: Self.side, height: Self.side)
-                .contentShape(.rect(cornerRadius: 5))
+            OptionSelectionMark(isSelected: isOn, isSingleSelect: false, isHighlighted: isHovering)
+                // The press reaches a little past the box, to the 28 points a
+                // pointer needs; the box stays its drawn size.
+                .frame(width: 28, height: 28)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .disabled(isWorking || isLocked)
@@ -807,7 +932,3 @@ private struct CheckboxHover: ViewModifier {
     }
 }
 
-/// An unchecked box's edge, at rest and under the pointer: light in a dark room,
-/// shade in a light one.
-private let checkEdge = Color.relative(dark: 0.18, light: 0.20)
-private let checkEdgeHovered = Color.relative(dark: 0.35, light: 0.32)

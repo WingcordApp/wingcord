@@ -40,8 +40,11 @@ struct RootView: View {
                 ConnectionBanner(state: model.connectionState)
             }
             .overlay(alignment: .top) {
-                ActionNoticeView(notice: model.actionNotice) {
-                    model.actionNotice = nil
+                VStack(spacing: Spacing.base) {
+                    ReadAllProgressToast(progress: model.readAllProgress)
+                    ActionNoticeView(notice: model.actionNotice) {
+                        model.actionNotice = nil
+                    }
                 }
             }
             .animation(.easeOut(duration: 0.2), value: model.showsWorkspace)

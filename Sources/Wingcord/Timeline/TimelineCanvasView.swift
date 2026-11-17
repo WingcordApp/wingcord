@@ -501,7 +501,9 @@ final class TimelineCanvasView: NSView {
             guard case .message(let row) = rows[index].kind else { continue }
             for slot in row.attachments where slot.voice?.attachmentID == current {
                 let frame = rowFrame(at: index)
-                setNeedsDisplay(slot.rect.offsetBy(dx: frame.minX, dy: frame.minY))
+                // With the disc's halo, which reaches a little past the slot.
+                let reach = TimelineRowPainter.voiceHaloReach
+                setNeedsDisplay(slot.rect.insetBy(dx: -reach, dy: -reach).offsetBy(dx: frame.minX, dy: frame.minY))
             }
         }
     }
