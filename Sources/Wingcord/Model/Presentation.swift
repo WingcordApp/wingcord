@@ -462,6 +462,9 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     /// A conversation's newest message, Messages-style (REDESIGN.md R9) — nil
     /// where it is not known yet, and the activity line stands in.
     var preview: Preview? = nil
+    /// Discord's own system account — the conversation whose row wears
+    /// ✓ OFFICIAL (`SidebarOfficialTag`).
+    var isOfficial = false
 
     struct Preview: Hashable, Sendable {
         var text: String

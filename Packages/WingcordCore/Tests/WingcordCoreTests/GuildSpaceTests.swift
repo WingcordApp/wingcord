@@ -212,7 +212,10 @@ struct GuildSpaceSystemTextTests {
             for: message(data), name: "Blåhaj", nameOf: { $0.rawValue == 11 ? "bram" : nil }
         ))
         #expect(sentence.name == "Blåhaj")
-        #expect(sentence.suffix == " took 1st Place from bram on the leaderboard with 44h 45m of game time.")
+        // The one overtaken is a bold run of its own, as Discord sets them.
+        #expect(sentence.suffix == " took 1st Place from ")
+        #expect(sentence.emphasis == "bram")
+        #expect(sentence.tail == " on the leaderboard with 44h 45m of game time.")
         #expect(data.subjectUserID == UserID(rawValue: 10))
     }
 

@@ -179,13 +179,12 @@ struct ComposerAttachButton: View {
 
 /// The send control.
 ///
-/// **Always drawn, tinted only once there is something to send.** It used to
-/// appear on the first keystroke and vanish on the last backspace, which moved
-/// the field's trailing edge under the caret while somebody was typing — and in
-/// the pill arrangement, where it is a body outside the plate, it would have
-/// moved the plate itself. Colour still carries the meaning: the accent is the
-/// one tinted thing in the bar and it arrives exactly when Return will do
-/// something.
+/// **Drawn only once there is something to send** (Alex, 2026-11-18): the
+/// composer materializes it on the first word and the controls beside it glide
+/// over to make room — his call over the old always-drawn rule, which kept the
+/// field's trailing edge still under the caret. In the boxy bar it is a solid
+/// accent tile whose corner is concentric with the plate's; in the pill one, a
+/// glass circle of its own beside the plate, which melts in with it.
 struct ComposerSendButton: View {
     var shape: ChromeShape
     var isArmed: Bool
@@ -216,13 +215,19 @@ struct ComposerSendButton: View {
         .accessibilityLabel(Text("Send"))
     }
 
+    /// The boxy bar's tile: the plate's corner less the inset it sits at, so
+    /// the two curves run parallel (HIG: concentric shapes) — "fix the send
+    /// button, it doesnt look right" was a disc in a box.
     private var enclosedBody: some View {
-        arrow
+        let tile = RoundedRectangle(cornerRadius: Self.tileCorner, style: .continuous)
+        return arrow
             .frame(width: Metrics.composerControl, height: Metrics.composerControl)
-            .background {
-                Circle().fill(isArmed ? Palette.accent.opacity(0.85) : ComposerControlFill.resting)
-            }
-            .contentShape(.circle)
+            .background { tile.fill(isArmed ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(ComposerControlFill.resting)) }
+            .contentShape(tile)
+    }
+
+    private static var tileCorner: CGFloat {
+        max(6, ChromeShape.boxy.cornerRadius(forHeight: Metrics.composerControlHeight) - Metrics.composerControlInset)
     }
 
     private var arrow: some View {
@@ -237,8 +242,7 @@ struct ComposerSendButton: View {
 /// **Monochrome** (REDESIGN.md R7): the room's own ink, white in a dark room,
 /// with the arrow cut out of it — the bubbles are glass now, and an accent disc
 /// would be the one coloured thing left in the conversation. Like
-/// `ComposerSendButton`, always drawn and armed only once there is something
-/// to send, so the field's end never moves under the caret.
+/// `ComposerSendButton`, drawn only once there is something to send.
 struct MessagesSendButton: View {
     var isArmed: Bool
     /// A voice note's send takes Return through the bar's own focus: a shortcut here

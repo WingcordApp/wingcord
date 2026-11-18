@@ -128,6 +128,17 @@ extension AppModel {
     }
 
     /// Goes to the activity's own place (Discord's Return to Activity).
+    /// The sidebar's activity row (`ActivityHUDRow`): the activity the reader
+    /// is in and where it runs. Nil when there is none.
+    var activityHUD: ActivityHUDPresentation? {
+        guard let running = runningActivity else { return nil }
+        return ActivityHUDPresentation(
+            name: running.name,
+            iconURL: running.iconURL,
+            place: channelIndex[running.instance.location.channelID].map { displayName(of: $0) }
+        )
+    }
+
     func returnToActivity() {
         guard let running = runningActivity else { return }
         let channelID = running.instance.location.channelID

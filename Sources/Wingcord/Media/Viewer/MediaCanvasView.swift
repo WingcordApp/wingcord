@@ -463,15 +463,30 @@ final class MediaCanvasView: NSView {
     // MARK: Geometry
 
     private var geometry: MediaStageGeometry {
+        stillGeometry(for: {
+            if case .transformable(let size) = fill { return size }
+            return bounds.size
+        }())
+    }
+
+    /// The stage for a still of this pixel size: kept clear of the controls
+    /// (the bands a video is letterboxed into, and a margin either side) and
+    /// never blown up past its own size — `MediaStageGeometry.fitInset`.
+    private func stillGeometry(for pixels: CGSize) -> MediaStageGeometry {
         MediaStageGeometry(
-            contentPixels: {
-                if case .transformable(let size) = fill { return size }
-                return bounds.size
-            }(),
+            contentPixels: pixels,
             viewport: bounds.size,
-            displayScale: window?.backingScaleFactor ?? 2
+            displayScale: window?.backingScaleFactor ?? 2,
+            fitInset: CGSize(
+                width: Self.stillSideMargin,
+                height: max(letterboxInsets.top, letterboxInsets.bottom)
+            ),
+            capsAtNaturalSize: true
         )
     }
+
+    /// A still's margin from the stage's left and right edges at fit.
+    private static let stillSideMargin: CGFloat = 40
 
     var isTransformable: Bool {
         if case .transformable = fill { return true }
@@ -503,7 +518,9 @@ final class MediaCanvasView: NSView {
 
     /// Where a neighbour sits at fit, before the page offset.
     private func restingFrame(of neighbor: Neighbor) -> CGRect {
-        MediaFlight.aspectFit(neighbor.pixelSize, in: neighbor.isVideo ? videoArea : bounds)
+        neighbor.isVideo
+            ? MediaFlight.aspectFit(neighbor.pixelSize, in: videoArea)
+            : stillGeometry(for: neighbor.pixelSize).contentRect(.fit)
     }
 
     override func layout() {

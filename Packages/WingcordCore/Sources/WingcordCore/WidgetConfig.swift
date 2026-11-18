@@ -593,6 +593,10 @@ public struct WidgetApplication: Hashable, Sendable, Identifiable {
     public var connectionEntrypointURL: URL?
     /// The games this application publishes stats for.
     public var linkedGameIDs: [ApplicationID]
+    /// The game this application is, by Discord's own rule (`getCanonicalGameId`):
+    /// itself when its type is a game, else its first linked game that is one.
+    /// Nil where the record did not say.
+    public var gameID: ApplicationID?
 
     public init(
         id: ApplicationID,
@@ -600,7 +604,8 @@ public struct WidgetApplication: Hashable, Sendable, Identifiable {
         iconHash: String? = nil,
         isVerified: Bool = false,
         connectionEntrypointURL: URL? = nil,
-        linkedGameIDs: [ApplicationID] = []
+        linkedGameIDs: [ApplicationID] = [],
+        gameID: ApplicationID? = nil
     ) {
         self.id = id
         self.name = name
@@ -608,8 +613,11 @@ public struct WidgetApplication: Hashable, Sendable, Identifiable {
         self.isVerified = isVerified
         self.connectionEntrypointURL = connectionEntrypointURL
         self.linkedGameIDs = linkedGameIDs
+        self.gameID = gameID
     }
 
-    /// The game a widget for this application is about, when it names one.
-    public var primaryGameID: ApplicationID? { linkedGameIDs.first }
+    /// The game a widget for this application is about, when it names one —
+    /// Discord's canonical game first (Alex, 2026-11-18: Fortnite's profile
+    /// "could not be loaded" because the first link was not the game).
+    public var primaryGameID: ApplicationID? { gameID ?? linkedGameIDs.first }
 }

@@ -18,6 +18,20 @@ struct TypingIndicatorStyleTests {
         #expect(TypingSentence.make(names: [], style: yapping) == "")
     }
 
+    @Test("Each name is a piece of its own, for the line to set in bold")
+    func namePieces() {
+        func named(_ names: [String]) -> [String] {
+            TypingSentence.pieces(names: names, style: nil).filter { $0.isName }.map { $0.text }
+        }
+        #expect(named(["Ana"]) == ["Ana"])
+        // A name that is also part of the words around it is still just the name.
+        #expect(named(["an", "d"]) == ["an", "d"])
+        #expect(named(["Ana", "Ben", "Cai"]) == ["Ana", "Ben", "Cai"])
+        // Past three nobody is named, so nothing is bold.
+        #expect(named(["A", "B", "C", "D"]).isEmpty)
+        #expect(TypingSentence.pieces(names: [], style: nil).isEmpty)
+    }
+
     @Test("A style is drawn for one typer only, and never a plain one")
     func drawnStyle() {
         let style = TypingIndicatorStyle(emojis: [heart, blob], animation: .pulse)

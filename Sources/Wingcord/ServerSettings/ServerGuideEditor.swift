@@ -312,7 +312,9 @@ struct GuideTaskSheet: View {
                         }
                     ),
                     addLabel: "Choose Emoji",
-                    updateLabel: { "Choose Emoji, \($0.name)" }
+                    updateLabel: { "Choose Emoji, \($0.name)" },
+                    // A task's emoji is a Unicode glyph, so nothing else is offered.
+                    destination: .unicodeOnly
                 )
             }
         }

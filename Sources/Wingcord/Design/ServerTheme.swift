@@ -75,15 +75,23 @@ nonisolated struct ServerTheme: Equatable, Sendable {
     /// The veil over the page — Discord's chat surface under a
     /// `custom-client-theme`: `0.48 + 0.32·m` dark, and a light room's own
     /// `0.95·(0.6 + 0.4·m)`, whose 0.95 is the base the generator sets.
+    ///
+    /// In a dark room it never goes below `InkContrast.legibleVeil` for the
+    /// server's colours: a server's bright pick does not get to wash out the
+    /// reader's text (Alex, 2026-11-18).
     var pageVeil: Double {
-        room == .light ? 0.95 * (0.6 + 0.4 * veilMix) : 0.48 + 0.32 * veilMix
+        room == .light
+            ? 0.95 * (0.6 + 0.4 * veilMix)
+            : max(0.48 + 0.32 * veilMix, InkContrast.legibleVeil(over: stops))
     }
 
     /// The veil over the sidebar — Discord's channel list, `high`: `0.45 +
     /// 0.30·m` dark and `0.42 + 0.28·m` light. The rail's own lighter veil is
     /// not drawn, for `DiscordTheme.sidebarVeil`'s reason.
     var frameVeil: Double {
-        room == .light ? 0.42 + 0.28 * veilMix : 0.45 + 0.30 * veilMix
+        room == .light
+            ? 0.42 + 0.28 * veilMix
+            : max(0.45 + 0.30 * veilMix, InkContrast.legibleVeil(over: stops))
     }
 
     /// How much of `baseColor` goes into every solid surface, in percent.

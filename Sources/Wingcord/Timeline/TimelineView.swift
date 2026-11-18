@@ -303,6 +303,9 @@ final class TimelineCoordinator: NSObject {
     /// it is going and when. See `glideBottomInset`.
     private var insetGlide: (from: CGFloat, to: CGFloat, start: CFTimeInterval)?
     private var insetGlideLink: CADisplayLink?
+    /// A jump being scrolled to, frame by frame (`glideScroll(to:)`).
+    private var jumpGlide: (from: CGFloat, to: CGFloat, start: CFTimeInterval)?
+    private var jumpGlideLink: CADisplayLink?
     /// When that tick was, and how fast the viewport has been moving — the
     /// difference between a reader, whose pictures are fetched ahead of the
     /// scroll, and a fling, whose are not. See `schedulePrefetch`.
@@ -752,7 +755,11 @@ final class TimelineCoordinator: NSObject {
             object: scrollView,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.setScrolling(true) }
+            MainActor.assumeIsolated {
+                // The reader's own scroll wins over a jump in flight.
+                self?.stopJumpGlide()
+                self?.setScrolling(true)
+            }
         }
         scrollEndedObserver = center.addObserver(
             forName: NSScrollView.didEndLiveScrollNotification,
@@ -856,6 +863,7 @@ final class TimelineCoordinator: NSObject {
         // A display link holds its target: one left running would keep this
         // coordinator alive after its window had gone.
         stopInsetGlide()
+        stopJumpGlide()
         stopVoiceNoteOnThisTranscript()
         layoutTask?.cancel()
         layoutTask = nil
@@ -1162,14 +1170,13 @@ final class TimelineCoordinator: NSObject {
             // page lands rather than dropped.
             pendingJump = jump
         }
-        // A request made while the window reaches the present glides there; one
-        // made while it is cut off waits for the newest page and lands at once,
-        // because the rows it would glide across are not the ones it lands on.
-        var glides = false
+        // **Lands at once, never glides** (Alex, 2026-11-18: "Making the arrow
+        // down to jump to recent messages instant"): the glide spent a third of
+        // a second animating across rows the reader asked to leave behind.
+        let glides = false
         if let present, present.channelID == channelID, present.token != appliedPresentToken {
             appliedPresentToken = present.token
             pendingPresent = true
-            glides = self.reachesPresent && reachesPresent
             consume(present)
         }
 
@@ -1234,6 +1241,60 @@ final class TimelineCoordinator: NSObject {
         insetGlideLink?.invalidate()
         insetGlideLink = nil
         insetGlide = nil
+    }
+
+    /// Puts the viewport's top at `y` and re-reads where the reader is.
+    ///
+    /// Landing anywhere is a jump, so `isNearBottom` has to be recomputed
+    /// from where the reader actually ends up — otherwise the next inbound
+    /// message drags them back to the foot of a channel they just left.
+    private func land(at y: CGFloat) {
+        guard let scrollView, let canvas else { return }
+        isApplyingUpdate = true
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        isApplyingUpdate = false
+        lastViewportMinY = scrollView.contentView.bounds.minY
+        isNearBottom = TimelineViewportPolicy.isNearBottom(
+            viewport: scrollView.contentView.bounds,
+            documentHeight: canvas.contentHeight,
+            wasNearBottom: false
+        )
+        positionCanvas()
+    }
+
+    /// A jump, followed on `Motion.reposition` — critically damped, the HIG's
+    /// spring for a move, so it settles on the message without sailing past
+    /// it — one display frame at a time, as the bottom inset glides.
+    /// **Interruptible**: the reader's own scroll stops it where it is.
+    private func glideScroll(to target: CGFloat) {
+        guard let scrollView else { return }
+        jumpGlide = (from: scrollView.contentView.bounds.minY, to: target, start: CACurrentMediaTime())
+        guard jumpGlideLink == nil else { return }
+        let link = scrollView.displayLink(target: self, selector: #selector(stepJumpGlide(_:)))
+        link.add(to: .main, forMode: .common)
+        jumpGlideLink = link
+    }
+
+    @objc private func stepJumpGlide(_ link: CADisplayLink) {
+        guard let glide = jumpGlide, !isTornDown, scrollView?.window != nil else {
+            // Gone from its window mid-glide: finish where it was going.
+            if let glide = jumpGlide, !isTornDown { land(at: glide.to) }
+            stopJumpGlide()
+            return
+        }
+        let spring = Motion.reposition.spring
+        let elapsed = link.targetTimestamp - glide.start
+        let done = elapsed >= spring.settlingDuration
+        let progress = done ? 1 : spring.value(target: 1.0, time: elapsed)
+        land(at: glide.from + (glide.to - glide.from) * progress)
+        if done { stopJumpGlide() }
+    }
+
+    private func stopJumpGlide() {
+        jumpGlideLink?.invalidate()
+        jumpGlideLink = nil
+        jumpGlide = nil
     }
 
     /// Sets both insets and keeps a reader at the foot there.
@@ -1381,20 +1442,35 @@ final class TimelineCoordinator: NSObject {
             0,
             (documentView?.frame.height ?? 0) + scrollView.contentInsets.bottom - viewport.height
         )
-        // Landing anywhere is a jump, so `isNearBottom` has to be recomputed
-        // from where the reader actually ends up — otherwise the next inbound
-        // message drags them back to the foot of a channel they just left.
-        isApplyingUpdate = true
-        scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(maximum, max(0, target))))
-        scrollView.reflectScrolledClipView(scrollView.contentView)
-        isApplyingUpdate = false
-        lastViewportMinY = scrollView.contentView.bounds.minY
-        isNearBottom = TimelineViewportPolicy.isNearBottom(
-            viewport: scrollView.contentView.bounds,
-            documentHeight: canvas.contentHeight,
-            wasNearBottom: false
-        )
-        positionCanvas()
+        let destination = min(maximum, max(0, target))
+        // **Scrolled to, not cut to** (Alex, 2026-11-18: "it should scroll up
+        // to that message, check how discord does it"). Discord's jumps are
+        // animated unless a caller asks otherwise — its store defaults
+        // `jumpType` to ANIMATED — and its scroller animates them unless Reduce
+        // Motion is on (`animate: !!r.animate && !useReducedMotion`). A long
+        // way off, the glide starts a screen and a half short: it still shows
+        // which way the message is, without a ride through the whole channel.
+        let distance = destination - viewport.minY
+        // **Straight there where a glide can't run**: a column that is only
+        // now appearing has no window for a display link to tick in, and a
+        // glide that never ticks leaves the transcript wherever it started.
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            || abs(distance) < 1
+            || scrollView.window == nil {
+            stopJumpGlide()
+            land(at: destination)
+        } else {
+            let reach = viewport.height * 1.5
+            if abs(distance) > reach {
+                // **Clamped to the transcript** (Alex, 2026-11-18: a preview
+                // opened blank, parked past its last message): the lead-in is
+                // a screen and a half short of the target, and short of a
+                // target near either end is outside the document.
+                let leadIn = destination - (distance > 0 ? reach : -reach)
+                land(at: min(maximum, max(0, leadIn)))
+            }
+            glideScroll(to: destination)
+        }
 
         guard jump.highlights else {
             // Consumed all the same, for the reason the task below clears it.
@@ -1540,7 +1616,10 @@ final class TimelineCoordinator: NSObject {
             // bubbles carry neither a name nor a face — Messages' own rule.
             arrangement: settings.usesBubbles
                 ? .bubbles(namesAuthors: channel?.kind != .directMessage)
-                : .columns
+                : .columns,
+            viewerID: model.currentUserID,
+            directPartnerIDs: channelID.flatMap { id in model.directPartner(in: id).map { [id: $0] } } ?? [:],
+            guildName: channelID.flatMap { model.channelIndex.guildID(of: $0) }.flatMap { model.guilds[$0]?.name }
         )
 
         isApplyingUpdate = true

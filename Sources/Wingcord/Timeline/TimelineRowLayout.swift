@@ -941,6 +941,12 @@ nonisolated struct ReplyHeaderSlot: @unchecked Sendable {
     /// Where a click goes. Nil when the quoted message is gone, which is also
     /// when the strip says so instead of quoting anything.
     var targetID: MessageID?
+    /// The quoted author's server tag, after their name, as Discord's reply
+    /// header carries it (Alex, 2026-11-18). Nil where they wear none, or
+    /// where the quote names nobody.
+    var tag: String? = nil
+    var tagRect: CGRect = .zero
+    var tagBadgeURL: URL? = nil
 }
 
 /// "alex used **launch**", above a message an app posted in answer.
@@ -1244,6 +1250,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// is why this is decided by the caller rather than read from the
         /// reader's preference here.
         var arrangement: MessageArrangement = .columns
+        /// The account reading — what turns a friend request line or a call
+        /// into "You accepted …" or "You missed …". Nil where nobody is signed in.
+        var viewerID: UserID? = nil
+        /// The other person in each one-to-one conversation drawn, for the
+        /// lines that name them whoever wrote the row (the friend request).
+        var directPartnerIDs: [ChannelID: UserID] = [:]
+        /// The server the messages are in, for the lines that name it.
+        var guildName: String? = nil
     }
 
     /// `@unchecked` for the same reason `MessageTextStyle` is: it carries a
@@ -1865,12 +1879,22 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     elbowX: TimelineMetrics.replyElbowX, isCompact: compact,
                     style: input.style, author: quoted
                 )
-                : placed({
-                    Self.layoutReplyHeader(
-                        reference, y: y, leadingX: $0, maxX: lane.maxX,
-                        elbowX: nil, isCompact: compact, style: input.style, author: quoted
-                    )
-                }, width: { $0.rect.width })
+                : { () -> ReplyHeaderSlot in
+                    // **Inset from the bubble's outer edge** by the reach of
+                    // the line that joins the quote to its bubble.
+                    let indent = TimelineMetrics.bubbleReplyIndent
+                    let maxX = lane.isTrailing ? lane.maxX - indent : lane.maxX
+                    func build(_ x: CGFloat) -> ReplyHeaderSlot {
+                        Self.layoutReplyHeader(
+                            reference, y: y, leadingX: x, maxX: maxX,
+                            elbowX: nil, isCompact: compact, style: input.style, author: quoted
+                        )
+                    }
+                    let leading = build(lane.minX + (lane.isTrailing ? 0 : indent))
+                    guard lane.isTrailing else { return leading }
+                    let used = leading.rect.width
+                    return used > 0 && used < maxX - lane.minX - 0.5 ? build(maxX - used) : leading
+                }()
             replyHeader = slot
             y = slot.rect.maxY + TimelineMetrics.replyGap
         }
@@ -2849,12 +2873,24 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // A Server Hub line is about somebody other than its author — the
         // leader, the top listener — and draws that person's name in their
         // colour, clicking through to them.
-        let namedID = message.kind == .guildSpace
-            ? message.guildSpaceData?.subjectUserID ?? message.authorID
-            : message.authorID
+        //
+        // A friend request line names the other person whoever wrote it
+        // (Discord's `iH`) — on the reader's own row, their partner.
+        let isOwnFriendLine = message.kind == .friendRequestAccepted && message.authorID == input.viewerID
+        let partnerID = isOwnFriendLine ? input.directPartnerIDs[message.channelID] : nil
+        let namedID: UserID = switch message.kind {
+        case .guildSpace: message.guildSpaceData?.subjectUserID ?? message.authorID
+        case .friendRequestAccepted: partnerID ?? message.authorID
+        default: message.authorID
+        }
         let author = input.authors[namedID]
-        let name = author?.name ?? "Someone"
-        let sentence = SystemMessageText.sentence(for: message, name: name, nameOf: { input.authors[$0]?.name })
+        // Their partner unknown (a card outside the conversation), the reader's
+        // own name would read "You accepted <you>'s friend request".
+        let name = isOwnFriendLine && partnerID == nil ? "someone" : author?.name ?? "Someone"
+        let sentence = SystemMessageText.sentence(
+            for: message, name: name, nameOf: { input.authors[$0]?.name },
+            viewerID: input.viewerID, guildName: input.guildName
+        )
         let y = input.settings.runSpacing
 
         let text = Self.systemText(
@@ -3097,6 +3133,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 .foregroundColor: style.primaryColor,
             ]))
         }
+        if !sentence.tail.isEmpty {
+            output.append(NSAttributedString(string: sentence.tail, attributes: body))
+        }
         output.append(NSAttributedString(string: "  " + time, attributes: [
             .font: style.metadataFont,
             .foregroundColor: style.tertiaryColor,
@@ -3242,9 +3281,23 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // Discord will not show: nobody to show, somebody blocked, or the
         // compact layout (its reply header's `replyBadge`).
         let showsBadge = isUnavailable || author?.isBlocked == true || isCompact
+        // The quoted author's server tag, in the roster's own chip, between
+        // the name and the words — where Discord's reply header puts it.
+        let tag = isUnavailable || author?.isBlocked == true ? nil : author?.tag
+        let tagRect: CGRect = tag.map { tag in
+            CGRect(
+                x: nameRect.maxX + TimelineMetrics.replyItemGap - 2,
+                y: y + (height - MemberRowGeometry.tagChipHeight) / 2,
+                width: MemberRowGeometry.tagChipWidth(
+                    textWidth: measure(tag, font: MemberRowGeometry.tagChipFont),
+                    hasBadge: author?.tagBadgeURL != nil
+                ),
+                height: MemberRowGeometry.tagChipHeight
+            )
+        } ?? .zero
         let excerptX = isUnavailable
             ? avatarRect.maxX + TimelineMetrics.replyItemGap
-            : nameRect.maxX + TimelineMetrics.replyItemGap
+            : (tag == nil ? nameRect.maxX : tagRect.maxX) + TimelineMetrics.replyItemGap
         let excerptRect = CGRect(
             x: excerptX,
             y: y,
@@ -3288,7 +3341,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             isBot: reference.isAuthorBot,
             // Only a quote Discord said is gone goes nowhere: one it never
             // fetched still jumps to where it would be (`m = state !== DELETED`).
-            targetID: isUnavailable && reference.isDeleted ? nil : reference.messageID
+            targetID: isUnavailable && reference.isDeleted ? nil : reference.messageID,
+            tag: tag,
+            tagRect: tagRect,
+            tagBadgeURL: tag == nil ? nil : author?.tagBadgeURL
         )
     }
 
@@ -3455,12 +3511,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         style: MessageTextStyle
     ) -> [ReactionSlot] {
         let height = TimelineMetrics.tapbackSide
-        let corner = TimelineMetrics.tapbackCornerInset
-        let minY = bubble.minY + corner.height - height / 2
-        // The edge of the next badge nearest the bubble.
+        let minY = bubble.minY - TimelineMetrics.tapbackLift - height / 2
+        // The edge of the next badge nearest the bubble: a bite into its
+        // corner, short of where its words begin.
         var edge = side == .trailing
-            ? bubble.minX + corner.width + height / 2
-            : bubble.maxX - corner.width - height / 2
+            ? bubble.minX + TimelineMetrics.tapbackBite
+            : bubble.maxX - TimelineMetrics.tapbackBite
         var slots: [ReactionSlot] = []
 
         func place(_ reaction: Reaction, kind: ReactionKind, imageURL: URL?, palette: SuperReactionPalette?) {

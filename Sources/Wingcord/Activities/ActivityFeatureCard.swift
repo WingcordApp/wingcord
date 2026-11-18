@@ -26,10 +26,24 @@ struct ActivityFeatureCard: View {
                 .overlay { art }
                 .overlay(alignment: .bottomLeading) { caption }
                 .clipShape(.rect(cornerRadius: Radius.glass, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
+                        .strokeBorder(Palette.edge, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+                .overlay(alignment: .topLeading) {
+                    // Discord's badge for a sponsored app (Alex, 2026-11-18).
+                    if row.isPromoted { PromotedBadge().padding(Spacing.snug) }
+                }
                 .contentShape(.rect(cornerRadius: Radius.glass, style: .continuous))
-                .scaleEffect(isHovered ? 1.015 : 1)
+                .scaleEffect(isHovered && !motion.reduceMotion ? 1.012 : 1)
+                .shadow(
+                    color: .black.opacity(isHovered ? 0.34 : 0.2),
+                    radius: isHovered ? 18 : 8,
+                    y: isHovered ? 9 : 4
+                )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ActivityPressStyle())
         .overlay(alignment: .topTrailing) {
             if let onStart, isHovered || isHero {
                 Button("Start", systemImage: "play.fill", action: onStart)
@@ -48,10 +62,7 @@ struct ActivityFeatureCard: View {
 
     private var art: some View {
         RemoteImage(url: row.tileURL, side: isHero ? 600 : Metrics.activityTileWidth * 2, bucket: .artwork) {
-            ZStack {
-                Palette.surfaceRaised
-                ActivityIcon(row: row, side: Metrics.activityHeaderIcon)
-            }
+            ActivityArtFallback(row: row)
         }
         .aspectRatio(contentMode: .fill)
         .overlay {
@@ -67,26 +78,38 @@ struct ActivityFeatureCard: View {
     /// The name over a dimmed foot: legible on any artwork.
     private var caption: some View {
         HStack(spacing: Spacing.base) {
-            ActivityIcon(row: row, side: isHero ? 36 : 26)
-            VStack(alignment: .leading, spacing: 0) {
+            ActivityIcon(row: row, side: isHero ? 44 : 28)
+                .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(row.name)
-                    .font(.system(isHero ? .title3 : .subheadline, weight: .bold))
+                    .font(.system(isHero ? .title2 : .subheadline, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 if !row.subtitle.isEmpty {
                     Text(row.subtitle)
-                        .font(.system(.caption, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .font(.system(isHero ? .subheadline : .caption, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.88))
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, Spacing.snug)
-        .padding(.vertical, Spacing.base)
+        .padding(.horizontal, isHero ? Spacing.margin : Spacing.snug)
+        .padding(.top, isHero ? Spacing.margin * 2 : Spacing.margin)
+        .padding(.bottom, isHero ? Spacing.margin : Spacing.base)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            LinearGradient(colors: [.clear, .black.opacity(0.72)], startPoint: .top, endPoint: .bottom)
+            // **A long, eased fade**, so the words sit on the art rather than
+            // on a band laid over it: nothing, then a breath, then deep.
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.32), location: 0.45),
+                    .init(color: .black.opacity(0.78), location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
     }
 }

@@ -15,6 +15,9 @@ struct EmojiSlotButton: View {
     var updateLabel: (EmojiRef) -> String
     var side: CGFloat = 30
     var isEnabled = true
+    /// What the slot is for, which decides what its picker locks or leaves
+    /// out — a poll's channel, a server's own page, Unicode only.
+    var destination: EmojiDestination = .composer
 
     @State private var isOpen = false
     @State private var isPicking = false
@@ -52,7 +55,8 @@ struct EmojiSlotButton: View {
                     },
                     // A slot holds an emoji, never a GIF; the picker's
                     // signature asks for the closure all the same.
-                    onPickGIF: { _ in }
+                    onPickGIF: { _ in },
+                    destination: destination
                 )
             } else {
                 VStack(spacing: 0) {

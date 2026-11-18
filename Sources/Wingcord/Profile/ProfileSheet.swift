@@ -25,6 +25,17 @@ import WingcordCore
 ///    profile.
 struct ProfileSheet: View {
     var profile: ProfilePresentation
+
+    @Environment(\.colorScheme) private var sheetScheme
+
+    /// Whether the banner's top is bright, for the ✕ laid over it
+    /// (`BannerBrightness`).
+    @State private var measuredBannerBright = false
+
+    private var isBannerBright: Bool {
+        guard let url = shown.bannerURL else { return false }
+        return BannerBrightness.cached(url) ?? measuredBannerBright
+    }
     var board: BoardPresentation?
     var activity: ProfileActivityPresentation
     /// The most room the window can spare. The sheet takes the width and as
@@ -121,7 +132,15 @@ struct ProfileSheet: View {
                 .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
         }
         .overlay(alignment: .topTrailing) {
-            closeButton.padding(Spacing.base)
+            closeButton(dimmed: isBannerBright)
+                // White over a picture banner, on glass dimmed over a bright one.
+                .environment(\.colorScheme, shown.bannerURL != nil ? .dark : sheetScheme)
+                .padding(Spacing.base)
+        }
+        .task(id: shown.bannerURL) {
+            measuredBannerBright = false
+            guard let url = shown.bannerURL else { return }
+            measuredBannerBright = await BannerBrightness.isBright(url)
         }
         .shadow(color: .black.opacity(0.5), radius: 40, y: 16)
         .presentationBackground(.clear)
@@ -340,7 +359,7 @@ struct ProfileSheet: View {
             if !profile.mutualServers.isEmpty, editor == nil, !profile.isSelf, !profile.isBot {
                 mutualCount
             }
-            closeButton
+            closeButton()
         }
         .padding(.leading, Self.gutter)
         .padding(.trailing, Spacing.snug)
@@ -414,7 +433,8 @@ struct ProfileSheet: View {
         .accessibilityLabel(Text("Edit your profile"))
     }
 
-    private var closeButton: some View {
+    /// `dimmed` over a bright banner (`BannerBrightness`).
+    private func closeButton(dimmed: Bool = false) -> some View {
         Button(action: dismiss) {
             Image(systemName: "xmark")
                 .font(.system(.caption, weight: .bold))
@@ -423,7 +443,8 @@ struct ProfileSheet: View {
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .interactiveChromeOverMedia(in: .circle)
+        .chromeOverBanner(in: .circle, dimmed: dimmed, interactive: true)
+        .animation(motion.standard, value: dimmed)
         // See `View.cancelAction(unless:)`: a game profile opened from this
         // sheet's own board, or a tenure badge's page opened from its badge
         // row, sits on top of it and owns Escape while it is there.

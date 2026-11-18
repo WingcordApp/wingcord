@@ -64,6 +64,23 @@ extension AppModel {
             )
         }
         let owner = guildEmojis.first { _, emojis in emojis.contains { $0.id == id } }?.key
+        // **The packs answer before any server is asked** — the sticker card's
+        // rule. They used to arrive only with the emoji picker, so a pack's
+        // emoji clicked before the picker had opened fell through to the server
+        // route and said "a server you are not in" (Alex, 2026-11-18). Until
+        // they are in, the card says it is finding out rather than guessing.
+        // An answer the source route already gave stands (an app's emoji).
+        if owner == nil, expressionSources[id.rawValue] == nil,
+           emojiPacksLoad == .idle || emojiPacksLoad == .loading {
+            return ExpressionInfo(
+                artURL: CDN.emoji(id: id, animated: emoji.isAnimated, side: Self.expressionArtSide),
+                isVector: false,
+                glyph: nil,
+                title: ":\(emoji.name):",
+                detail: "Finding out where this came from…",
+                source: nil
+            )
+        }
         return ExpressionInfo(
             artURL: CDN.emoji(id: id, animated: emoji.isAnimated, side: Self.expressionArtSide),
             isVector: false,
@@ -139,7 +156,8 @@ extension AppModel {
         if owner != nil { return "A custom \(noun) from one of your servers." }
         switch expressionSources[id] {
         case .application(let name, _):
-            return "A custom \(noun) belonging to \(name)."
+            // Discord's own sentence for an app's emoji (Alex, 2026-11-18).
+            return "This \(noun) is from the \(name) app"
         case .guild(let guild) where guild.isPublic:
             return "A custom \(noun) from a server you can join."
         case .guild:
@@ -171,18 +189,11 @@ extension AppModel {
     /// A source the reader is **not** in, resolved from the fetched answer.
     private static func foreignSource(_ source: ExpressionSource) -> ExpressionInfo.Source? {
         switch source {
-        case .application(let name, _):
-            return ExpressionInfo.Source(
-                guildID: nil,
-                name: name,
-                // No icon: an app-owned emoji's source route decodes a hash but
-                // never the application's own id, and the CDN path needs both —
-                // building a URL from the hash alone is exactly the guess that
-                // 404s. The monogram carries this card until that id is captured.
-                iconURL: nil,
-                monogram: AppModel.monogram(of: name),
-                isJoined: false
-            )
+        case .application:
+            // **No server block**: an app's emoji belongs to no server, and
+            // Discord's card for one is its name and "This emoji is from the
+            // {app} app" alone (`detail`), with nothing to join under it.
+            return nil
         case .guild(let guild):
             let isPublic = guild.isPublic
             var sample: [ExpressionInfo.Sample] = []
@@ -230,6 +241,12 @@ extension AppModel {
         case .emoji(let emoji):
             guard let id = emoji.id else { return }
             guard !guildEmojis.contains(where: { _, list in list.contains { $0.id == id } })
+            else { return }
+            // The Nitro Emoji Packs first (see `emojiInfo`): asked for here too,
+            // not only by the picker, so a pack's emoji is named right the first
+            // time its card opens and no server is asked about one of theirs.
+            await sessionController.loadEmojiPacks()
+            guard !emojiPacks.contains(where: { pack in pack.emojis.contains { $0.id == id.rawValue } })
             else { return }
             sessionController.loadExpressionSource(id.rawValue, isSticker: false)
         case .sticker(let sticker):

@@ -48,7 +48,7 @@ struct FocusCustomStatusRow: View {
                     }
                 }
                 .popover(isPresented: $isPickingEmoji, arrowEdge: .bottom) {
-                    ExpressionPicker(mode: .emoji, onPick: pick, onPickGIF: { _ in })
+                    ExpressionPicker(mode: .emoji, onPick: pick, onPickGIF: { _ in }, destination: .personal)
                         .presentationBackground(.clear)
                 }
 

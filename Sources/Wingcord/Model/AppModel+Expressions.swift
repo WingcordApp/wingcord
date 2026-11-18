@@ -104,15 +104,104 @@ extension AppModel {
         // Fake Nitro sends what is locked as a link, so nothing is — the
         // permission included, as the plugin bypasses it too.
         let catalog = buildEmojiCatalog(
-            home: selectedGuildID,
-            allowsExternal: isFakeNitro || selectedChannelID.map(canUseExternalEmoji(in:)) ?? true,
-            // An animated emoji is the subscription's in its own server too.
-            allowsAnimated: isFakeNitro || entitlements.has(.animatedEmoji),
+            emojiAllowance(for: .composer),
             emojiTable: emojiTable,
             guildTable: guildTable
         )
         emojiCatalogCache = (key, catalog)
         return catalog
+    }
+
+    /// The catalog for wherever a picker sends its pick (`EmojiDestination`).
+    func emojiCatalog(for destination: EmojiDestination) -> ExpressionCatalog {
+        switch destination {
+        case .composer:
+            return emojiCatalog
+        case .channel(let channelID):
+            return reactionEmojiCatalog(in: channelID)
+        case .personal, .community, .unicodeOnly:
+            // Memoized as the others are, for their reason: the picker reads
+            // its catalog from four places a frame.
+            let key = ExpressionMemoKey(
+                channelID: nil,
+                expressionRevision: expressionRevision,
+                skinTone: AppSettings.shared.skinTone,
+                entitlements: entitlements,
+                isFakeNitro: false
+            )
+            let emojiTable = guildEmojis
+            let guildTable = guilds
+            if let cached = destinationEmojiCatalogCache[destination], cached.key == key {
+                return cached.value
+            }
+            let catalog = buildEmojiCatalog(
+                emojiAllowance(for: destination),
+                emojiTable: emojiTable,
+                guildTable: guildTable
+            )
+            destinationEmojiCatalogCache[destination] = (key, catalog)
+            return catalog
+        }
+    }
+
+    /// Discord's rule for a destination (`getEmojiUnavailableReason`).
+    ///
+    /// - A **message** in the composer: this server's emoji, another's with
+    ///   Nitro and the channel's `USE_EXTERNAL_EMOJIS`, an animated one with
+    ///   the perk — and Fake Nitro's links stand in for all of it.
+    /// - A **reaction or poll** in a channel: the same, without Fake Nitro.
+    /// - **Nowhere in particular** (a DM from a status or activity, the
+    ///   reader's status, bio or typing indicator): no server is home, so
+    ///   every custom emoji needs Nitro.
+    /// - A **server's own page**: its emoji only, with no Nitro asked.
+    /// - **Unicode only**: nothing custom.
+    func emojiAllowance(for destination: EmojiDestination) -> EmojiAllowance {
+        switch destination {
+        case .composer:
+            let isFakeNitro = AppSettings.shared.sendsFakeEmoji
+            return EmojiAllowance(
+                home: selectedGuildID,
+                allowsExternal: isFakeNitro || selectedChannelID.map(canUseExternalEmoji(in:)) ?? true,
+                // An animated emoji is the subscription's in its own server too.
+                allowsAnimated: isFakeNitro || entitlements.has(.animatedEmoji),
+                packsUsable: emojiPacksUsable
+            )
+        case .channel(let channelID):
+            return EmojiAllowance(
+                home: channelIndex.guildID(of: channelID),
+                allowsExternal: canUseExternalEmoji(in: channelID),
+                allowsAnimated: entitlements.has(.animatedEmoji),
+                // A reaction names the pack's emoji itself; Discord refuses it
+                // without Nitro whatever Fake Nitro says.
+                packsUsable: entitlements.has(.emojiPacks)
+            )
+        case .personal:
+            return EmojiAllowance(
+                home: nil,
+                allowsExternal: entitlements.has(.emojiEverywhere),
+                allowsAnimated: entitlements.has(.animatedEmoji),
+                packsUsable: entitlements.has(.emojiPacks)
+            )
+        case .community(let guildID):
+            return EmojiAllowance(
+                home: guildID,
+                allowsExternal: false,
+                allowsAnimated: true,
+                packsUsable: false,
+                showsOtherServers: false,
+                showsPacks: false
+            )
+        case .unicodeOnly:
+            return EmojiAllowance(
+                home: nil,
+                allowsExternal: false,
+                allowsAnimated: false,
+                packsUsable: false,
+                showsOtherServers: false,
+                showsPacks: false,
+                allowsCustom: false
+            )
+        }
     }
 
     /// The emoji a **reaction** may use in a channel — Discord's own rule,
@@ -141,9 +230,7 @@ extension AppModel {
             return reactionEmojiCatalogCache.value
         }
         let catalog = buildEmojiCatalog(
-            home: channelIndex.guildID(of: channelID),
-            allowsExternal: canUseExternalEmoji(in: channelID),
-            allowsAnimated: entitlements.has(.animatedEmoji),
+            emojiAllowance(for: .channel(channelID)),
             emojiTable: emojiTable,
             guildTable: guildTable
         )
@@ -157,6 +244,11 @@ extension AppModel {
     func canReact(with emoji: EmojiRef, in channelID: ChannelID) -> Bool {
         guard let id = emoji.id else { return true }
         if emoji.isAnimated, !entitlements.has(.animatedEmoji) { return false }
+        // A Nitro Emoji Pack's emoji is Nitro proper's alone (`TIER_2`), with
+        // the external-emoji permission like any other server's.
+        if emojiPacks.contains(where: { $0.emojis.contains { $0.id == id.rawValue } }) {
+            return entitlements.has(.emojiPacks) && canUseExternalEmoji(in: channelID)
+        }
         let isHome = channelIndex.guildID(of: channelID)
             .flatMap { guildEmojis[$0] }?
             .contains { $0.id == id } ?? false
@@ -191,21 +283,26 @@ extension AppModel {
 
     /// The emoji sections, locked by the rule the caller states.
     private func buildEmojiCatalog(
-        home: GuildID?,
-        allowsExternal: Bool,
-        allowsAnimated: Bool,
+        _ allowance: EmojiAllowance,
         emojiTable: [GuildID: [EmojiRef]],
         guildTable: [GuildID: Guild]
     ) -> ExpressionCatalog {
+        let home = allowance.home
+        let allowsExternal = allowance.allowsExternal
+        let allowsAnimated = allowance.allowsAnimated
+        guard allowance.allowsCustom else {
+            return ExpressionCatalog(sections: Self.unicodeSections(tone: AppSettings.shared.skinTone))
+        }
         var sections: [ExpressionSection] = []
         // Discord's names for them here — a duplicate's tooltip says
         // `:blob~1:`, the name that types it (`EmojiNameTable`). Only for the
         // selected server's table: a reaction elsewhere keeps the plain names.
         let names: EmojiNameTable? = home == selectedGuildID ? emojiNameTable : nil
         // The Nitro Emoji Packs the reader added, first (decision 16). Nitro's
-        // to use; Fake Nitro sends them as links like any other emoji.
-        let packsUsable = emojiPacksUsable
-        for packID in pinnedEmojiPackIDs {
+        // to use; in a message Fake Nitro sends them as links like any other
+        // emoji (`emojiAllowance`).
+        let packsUsable = allowance.packsUsable
+        for packID in allowance.showsPacks ? pinnedEmojiPackIDs : [] {
             guard let pack = emojiPacks.first(where: { $0.id == packID }), pack.isAvailable else { continue }
             sections.append(ExpressionSection(
                 id: "pack-\(pack.id)",
@@ -223,7 +320,9 @@ extension AppModel {
             ))
         }
         for guildID in Self.homeFirst(orderedGuildIDs, home: home) where emojiTable[guildID] != nil {
-            guard let guild = guildTable[guildID], let emojis = emojiTable[guildID] else { continue }
+            guard allowance.showsOtherServers || guildID == home,
+                  let guild = guildTable[guildID], let emojis = emojiTable[guildID]
+            else { continue }
             var items: [ExpressionItem] = []
             items.reserveCapacity(emojis.count)
             for emoji in emojis {

@@ -77,7 +77,11 @@ private struct CallRegionBody<Label: View>: View {
     private var shape: AnyShape {
         let radius = CallCapsuleMetrics.disc / 2
         return switch part {
-        case .whole: AnyShape(Circle())
+        // **A capsule, not a circle** (Alex, 2026-11-18, his Image 151): in
+        // the call capsule's square slots the two are the same shape, but the
+        // activity capsule's Leave carries its word, and a circle fitted to a
+        // wide label is a red disc behind half of it.
+        case .whole: AnyShape(Capsule())
         case .leading:
             AnyShape(UnevenRoundedRectangle(topLeadingRadius: radius, bottomLeadingRadius: radius))
         case .trailing:

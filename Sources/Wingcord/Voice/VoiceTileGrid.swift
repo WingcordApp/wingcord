@@ -29,6 +29,9 @@ struct VoiceTileGrid: View {
     /// once the reader is in it, the call's stage (decision 3).
     var activity: CallActivityPresentation? = nil
     var joinActivity: (CallActivityPresentation) -> Void = { _ in }
+    /// The strip of people under a focused stage is put away — Discord's Hide
+    /// Members, for a game or a stream given the whole band.
+    var hidesStrip = false
 
     @Environment(\.motion) private var motion
     /// Read for Show Non-Video Participants and by the right-click, nothing
@@ -126,12 +129,12 @@ struct VoiceTileGrid: View {
     /// The activity the reader is in, big, with everybody in the strip under
     /// it: Discord's focused activity.
     private func activityLayout(_ activity: CallActivityPresentation, in size: CGSize) -> some View {
-        let layout = VoiceSpotlightLayout.solve(others: shown.count, in: size)
+        let layout = VoiceSpotlightLayout.solve(others: hidesStrip ? 0 : shown.count, in: size)
         return VStack(spacing: VoiceSpotlightLayout.stripGap) {
             CallActivityStage(activity: activity)
                 .frame(width: layout.stage.width, height: layout.stage.height)
                 .matchedGeometryEffect(id: "activity", in: tiles)
-            if !shown.isEmpty {
+            if !shown.isEmpty, !hidesStrip {
                 ScrollView(.horizontal) {
                     HStack(spacing: Spacing.base) {
                         ForEach(shown) { participant in
@@ -139,7 +142,11 @@ struct VoiceTileGrid: View {
                                 .frame(width: layout.chipSize.width, height: layout.chipSize.height)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .center)
+                    // **At least the stage's width**, which is what centres it:
+                    // in a horizontal scroll view `maxWidth: .infinity` is the
+                    // content's own width, so the strip sat at the leading
+                    // edge (Alex, 2026-11-18). Wider than that, it scrolls.
+                    .frame(minWidth: size.width, alignment: .center)
                 }
                 .scrollIndicators(.never)
                 .frame(height: layout.strip.height)
@@ -152,12 +159,12 @@ struct VoiceTileGrid: View {
 
     private func spotlightLayout(starring: VoiceParticipant, in size: CGSize) -> some View {
         let others = shown.filter { $0.id != starring.id }
-        let layout = VoiceSpotlightLayout.solve(others: others.count, in: size)
+        let layout = VoiceSpotlightLayout.solve(others: hidesStrip ? 0 : others.count, in: size)
         return VStack(spacing: VoiceSpotlightLayout.stripGap) {
             tile(starring, isCompact: false)
                 .frame(width: layout.stage.width, height: layout.stage.height)
 
-            if !others.isEmpty {
+            if !others.isEmpty, !hidesStrip {
                 // Scrolls when there are more chips than fit. Everything is
                 // still on screen at eight; past that the strip would shrink
                 // every chip to nothing to keep them all visible, which is the
@@ -172,7 +179,11 @@ struct VoiceTileGrid: View {
                                 )
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .center)
+                    // **At least the stage's width**, which is what centres it:
+                    // in a horizontal scroll view `maxWidth: .infinity` is the
+                    // content's own width, so the strip sat at the leading
+                    // edge (Alex, 2026-11-18). Wider than that, it scrolls.
+                    .frame(minWidth: size.width, alignment: .center)
                 }
                 .scrollIndicators(.never)
                 .frame(height: layout.strip.height)

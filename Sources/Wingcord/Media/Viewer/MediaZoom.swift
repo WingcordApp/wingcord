@@ -35,6 +35,16 @@ nonisolated struct MediaStageGeometry: Equatable, Sendable {
     /// The display's backing scale, so "100%" means one image pixel per device
     /// pixel rather than per point.
     var displayScale: CGFloat = 2
+    /// How far the picture at fit keeps from the stage's edges, per side: clear
+    /// of the viewer's buttons above and its zoom bar below, so a big picture
+    /// never runs under them and their glass never mirrors it into an
+    /// unreadable bar (Alex, 2026-11-18). Symmetric, so the picture stays
+    /// centred on the stage. Zoomed in, it may go anywhere.
+    var fitInset: CGSize = .zero
+    /// Whether the picture at fit stops at its own size — one image pixel to a
+    /// point — rather than being blown up to fill the stage, as Discord's own
+    /// viewer stops it.
+    var capsAtNaturalSize = false
 
     /// The point size the picture is drawn at when it exactly fits.
     ///
@@ -44,10 +54,15 @@ nonisolated struct MediaStageGeometry: Equatable, Sendable {
         guard contentPixels.width > 0, contentPixels.height > 0,
               viewport.width > 0, viewport.height > 0
         else { return .zero }
-        let ratio = min(
-            viewport.width / contentPixels.width,
-            viewport.height / contentPixels.height
+        let area = CGSize(
+            width: max(1, viewport.width - fitInset.width * 2),
+            height: max(1, viewport.height - fitInset.height * 2)
         )
+        var ratio = min(
+            area.width / contentPixels.width,
+            area.height / contentPixels.height
+        )
+        if capsAtNaturalSize { ratio = min(ratio, 1) }
         return CGSize(
             width: contentPixels.width * ratio,
             height: contentPixels.height * ratio

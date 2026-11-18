@@ -117,8 +117,11 @@ struct DiscordThemeTests {
             // One gradient for both columns: the veils are the only difference.
             #expect(ground.page == theme.gradient)
             #expect(ground.frame == theme.gradient)
-            #expect(ground.pageVeil == (theme.base == .light ? 0.85 : 0.80) * theme.veilScale)
-            #expect(ground.frameVeil == (theme.base == .light ? 0.70 : 0.75) * theme.veilScale)
+            // Discord's veils — or, in a dark room, the legibility floor where
+            // that is more (since 2026-11-18; see `InkContrast.legibleVeil`).
+            let floor = theme.base == .dark ? theme.legibleVeil : 0
+            #expect(ground.pageVeil == max((theme.base == .light ? 0.85 : 0.80) * theme.veilScale, floor))
+            #expect(ground.frameVeil == max((theme.base == .light ? 0.70 : 0.75) * theme.veilScale, floor))
             #expect(ground.appearance == theme.base)
             #expect(theme.colors.appearance == theme.base)
             #expect(ground.paintsFrame)
@@ -142,11 +145,42 @@ struct DiscordThemeTests {
         ])
     }
 
+    /// The HIG's "for custom colors, strive for 7:1, especially for small
+    /// text", held for the quietest grey on the brightest stop of every dark
+    /// preset, at the preset's own vividness.
+    @Test("Every dark preset's quietest ink reads at 7:1 on its brightest stop")
+    func quietestInkReads() {
+        for theme in DiscordTheme.allCases where theme.base == .dark {
+            let colours = theme.stops.map(\.color)
+            let brightest = colours.max { InkContrast.luminance($0) < InkContrast.luminance($1) } ?? 0
+            for veil in [theme.readingVeil(vividness: 0), theme.sidebarVeil(vividness: 0)] {
+                let ground = InkContrast.composite(0, over: brightest, opacity: veil)
+                #expect(InkContrast.ratio(InkRamp.darkTertiary, ground) >= InkContrast.smallTextGoal, "\(theme)")
+            }
+        }
+    }
+
+    @Test("The floor is zero where the ink already reads, and black always does")
+    func legibleVeilBounds() {
+        // Black stops need no veil; white ones need most of one.
+        #expect(InkContrast.legibleVeil(over: [0x00_00_00, 0x10_10_10]) == 0)
+        let white = InkContrast.legibleVeil(over: [0xFF_FF_FF])
+        #expect(white > 0.8 && white < 1)
+        #expect(InkContrast.legibleVeil(over: []) == 0)
+    }
+
     @Test("Vice City: Discord's thinner veils, and its campaign's dates")
     func viceCity() {
-        // `unsupported_overlayOpacityMultiplier: 0.8` on every veil.
-        #expect(abs(DiscordTheme.viceCity.readingVeil(vividness: 0) - 0.64) < 1e-9)
-        #expect(abs(DiscordTheme.viceCity.sidebarVeil(vividness: 0) - 0.60) < 1e-9)
+        // `unsupported_overlayOpacityMultiplier: 0.8` on every veil — kept at
+        // the most vivid end. The preset end is raised for legibility since
+        // 2026-11-18: Discord's 0.64 left the orange stop too bright for the
+        // quietest ink (Alex: "washed out").
+        let vice = DiscordTheme.viceCity
+        #expect(vice.legibleVeil > 0.64)
+        #expect(abs(vice.readingVeil(vividness: 0) - vice.legibleVeil) < 1e-9)
+        #expect(abs(vice.sidebarVeil(vividness: 0) - vice.legibleVeil) < 1e-9)
+        #expect(abs(vice.readingVeil(vividness: 1) - (0.48 + 0.32 * 0.3) * 0.8) < 1e-9)
+        #expect(abs(vice.sidebarVeil(vividness: 1) - (0.45 + 0.30 * 0.3) * 0.8) < 1e-9)
         #expect(DiscordTheme.sunset.veilScale == 1)
         #expect(DiscordTheme.viceCity.presetID == 23)
         #expect(DiscordTheme.viceCity.angle == 135)

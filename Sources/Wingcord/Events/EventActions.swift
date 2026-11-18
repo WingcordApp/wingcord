@@ -37,14 +37,19 @@ struct EventActionBar: View {
                     .tint(Palette.accent)
             }
             if isActive, canManage, isExternal {
+                // Ending an event is the one thing here that cannot be taken
+                // back: the destructive tint, as the app's modals give it.
                 Button { confirmation = .end } label: { EventActionLabel(title: "End Event") }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glassProminent)
+                    .tint(Palette.destructive)
             }
         }
         // Glass capsules of one height, every one — the app's button (Alex,
         // 2026-10-27, screenshots 35–36: a squat ⋯ beside a flat Copy Link).
+        // **The modals' size and weight** (Alex, 2026-11-18: "fixing these
+        // buttons"): small controls with plain labels read as disabled pills.
         .buttonBorderShape(.capsule)
-        .controlSize(.small)
+        .controlSize(.regular)
         .eventConfirmation($confirmation, for: event)
     }
 
@@ -132,11 +137,15 @@ struct EventActionLabel: View {
     var systemImage: String?
 
     var body: some View {
-        if let systemImage {
-            Text("\(Image(systemName: systemImage)) \(title)")
-        } else {
-            Text(title)
+        Group {
+            if let systemImage {
+                Text("\(Image(systemName: systemImage)) \(title)")
+            } else {
+                Text(title)
+            }
         }
+        // The modals' button type (`ModalButton`), a size down for a bar.
+        .font(.system(.callout, weight: .semibold))
     }
 }
 
@@ -204,7 +213,7 @@ struct EventMoreMenu: View {
                 items
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(InkColor.primary)
                     .frame(width: side, height: side)
                     .glassEffect(.regular.interactive(), in: .circle)

@@ -108,6 +108,7 @@ extension AppModel {
         // `INVARIANTS.md` §2 records.
         let presentationRevision = PresentationRevision.shared.value
         let key = InboxCardKey(
+            cardRevision: cardRevision,
             tab: inbox.tab,
             showsFriendRequests: inbox.isShowingFriendRequests,
             width: width,
@@ -763,6 +764,8 @@ extension AppModel {
             inGuild: channelIndex.guildID(of: channelID),
             authorFont: style.authorFont
         )
+        let extras = cardExtras
+        let guildID = channelIndex.guildID(of: channelID)
         return messages.map { message in
             InboxRow(
                 id: message.id,
@@ -774,7 +777,9 @@ extension AppModel {
                     settings: settings,
                     mentions: mentions,
                     channelName: channelName,
-                    authors: authors
+                    authors: authors,
+                    extras: extras,
+                    guildID: guildID
                 ),
                 channelID: message.channelID
             )
@@ -1199,6 +1204,9 @@ extension AppModel {
 /// rather than only `inbox.revision`: an edit lands on the transcript's tables,
 /// not on the inbox's.
 struct InboxCardKey: Hashable {
+    /// Fetched extras landing — an invite resolved, a hosted card measured —
+    /// see `MessageCardExtras`.
+    var cardRevision: UInt64 = 0
     var tab: InboxTab
     var showsFriendRequests: Bool
     var width: CGFloat

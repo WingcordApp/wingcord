@@ -63,6 +63,7 @@ extension SessionController {
                 // "Unknown channel" for a room the reader is a member of.
                 for thread in page.threads { model.channelIndex.upsert(thread) }
                 model.inbox.mentions = page.messages
+                resolveCardExtras(in: page.messages)
                 model.inbox.dismissedMentionIDs = []
                 model.inbox.failures[.mentions] = nil
                 model.inbox.revision &+= 1
@@ -84,6 +85,7 @@ extension SessionController {
                 let (saved, authors) = try await rest.savedMessages()
                 model.users.merge(authors) { existing, new in new.merged(over: existing) }
                 model.inbox.saved = saved
+                resolveCardExtras(in: saved.compactMap(\.message))
                 // **The account's answer, not this session's.** `bookmarkedMessageIDs`
                 // existed only so the message menu could say Remove Bookmark on
                 // something bookmarked in this run; this is the first time the

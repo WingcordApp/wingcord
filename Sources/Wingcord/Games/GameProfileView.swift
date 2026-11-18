@@ -26,6 +26,10 @@ struct GameProfileView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.motion) private var motion
     @State private var selectedMedia: URL?
+    /// Which screenshot a game without a banner shows across the top this
+    /// time it is open — Discord's `useState(() => Math.random())`: drawn once
+    /// when the page opens, the same until it closes.
+    @State private var backdropDraw = Double.random(in: 0..<1)
     @State private var didCopyLink = false
     @State private var copyReset: Task<Void, Never>?
     /// Whether the header has given its cover and its title size up for room.
@@ -58,6 +62,13 @@ struct GameProfileView: View {
     private static let collapseThreshold: CGFloat = 60
     /// 412 in the handoff, at its 1,360-point sheet.
     private static let asideWidth: CGFloat = 320
+
+    /// The picture across the top: the banner, or this opening's screenshot.
+    private var backdropURL: URL? {
+        let choices = game.backdropChoices
+        guard !choices.isEmpty else { return nil }
+        return choices[min(choices.count - 1, Int(backdropDraw * Double(choices.count)))]
+    }
 
     private var headerReserve: CGFloat {
         (isHeaderCollapsed ? Self.condensedHeaderHeight : Self.headerHeight) + Self.inset * 2
@@ -97,7 +108,11 @@ struct GameProfileView: View {
         // material on the page blur its backdrop again each time. That was the
         // page's lag, all of it from one parallax nobody would name if asked
         // what the page looks like. A field that holds still is drawn once.
-        .ambientArtwork(game.artworkURL, tint: nil, strength: 0.42)
+        // **The picture itself across the top**, ending in that field — and
+        // the field taken from the same picture, so the hand-off is its own
+        // colours (`GameBackdrop`).
+        .background { GameBackdrop(url: backdropURL) }
+        .ambientArtwork(backdropURL ?? game.artworkURL, tint: nil, strength: 0.42)
         .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
@@ -169,7 +184,9 @@ struct GameProfileView: View {
     private var mainContent: some View {
         VStack(alignment: .leading, spacing: Self.inset) {
             if !game.media.isEmpty {
-                GameMediaStage(media: game.media, selection: $selectedMedia)
+                GameMediaStage(media: game.media, selection: $selectedMedia) { index in
+                    model.openGameMedia(game.media, index: index, gameName: game.name)
+                }
             }
             if let summary = game.summary {
                 Text(summary)

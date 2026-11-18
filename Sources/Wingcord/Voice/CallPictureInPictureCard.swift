@@ -60,7 +60,7 @@ struct CallPictureInPictureCard: View {
                 Button("Leave Call", systemImage: "phone.down.fill") { model.leaveVoice() }
                     .tint(Palette.destructive)
             }
-            .labelStyle(.iconOnly)
+            .labelStyle(.glassCircleIcon)
             .buttonStyle(.glass)
             .buttonBorderShape(.circle)
         }

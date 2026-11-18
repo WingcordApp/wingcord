@@ -127,6 +127,59 @@ extension AppModel {
         )
     }
 
+    /// A game profile's pictures and trailers in the viewer: the one clicked,
+    /// and every other one beside it as the gallery (Alex, 2026-11-18).
+    ///
+    /// An attachment in all but name, as a board's clips are
+    /// (`playBoardClips`): the viewer's one item shape, its id distinct only
+    /// among these. A still is shown as served — it is IGDB's or the store's,
+    /// not the media proxy's — and a trailer plays in the system player.
+    func openGameMedia(_ media: [GameMediaItem], index: Int, gameName: String) {
+        var items: [MediaItem] = []
+        var start = 0
+        for (position, entry) in media.enumerated() {
+            let attachment: Attachment
+            var poster: URL?
+            switch entry {
+            case .still(let url):
+                let name = url.lastPathComponent
+                attachment = Attachment(
+                    id: AttachmentID(rawValue: UInt64(position + 1)),
+                    filename: name.isEmpty ? "Screenshot.jpg" : name,
+                    url: url.absoluteString,
+                    proxyURL: url.absoluteString,
+                    contentType: "image/jpeg"
+                )
+                poster = url
+            case .trailer(let video, let still):
+                attachment = Attachment(
+                    id: AttachmentID(rawValue: UInt64(position + 1)),
+                    filename: "\(gameName) Trailer.mp4",
+                    url: video.absoluteString,
+                    proxyURL: video.absoluteString,
+                    contentType: "video/mp4"
+                )
+                poster = still
+            }
+            guard var item = MediaItem(attachment, posterWidth: 640, posterURL: poster, attachmentIndex: position)
+            else { continue }
+            item.isProxied = false
+            if position == index { start = items.count }
+            items.append(item)
+        }
+        guard !items.isEmpty else { return }
+        mediaViewer = MediaViewerRequest(
+            items: items,
+            index: start,
+            messageID: nil,
+            channelID: nil,
+            authorName: gameName,
+            sentAt: .now,
+            // Opened from the game profile, which is a sheet over everything.
+            isAboveSheets: true
+        )
+    }
+
     /// Follows a forward's breadcrumb to the original — in a server the reader
     /// is in, a jump; in one they are not, a preview of it first, as Discord's
     /// breadcrumb lurks; in a conversation, the conversation.

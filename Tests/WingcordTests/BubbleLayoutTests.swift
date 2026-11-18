@@ -451,7 +451,9 @@ struct BubbleLayoutTests {
         }
         let header = try #require(laid.first?.replyHeader)
         #expect(header.elbowBottom == nil)
-        #expect(abs(header.rect.maxX - (Self.width - Self.margin)) <= 0.5)
+        // Inset from the bubble's outer edge by the reach of the line that
+        // joins the quote to its bubble (`TimelineMetrics.bubbleReplyIndent`).
+        #expect(abs(header.rect.maxX - (Self.width - Self.margin - TimelineMetrics.bubbleReplyIndent)) <= 0.5)
     }
 
     @Test("Columns are untouched: no bubbles, and the words start after the gutter")

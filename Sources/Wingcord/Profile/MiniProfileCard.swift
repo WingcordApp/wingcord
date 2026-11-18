@@ -75,6 +75,22 @@ struct MiniProfileCard: View {
     /// Whether the pointer is over the card, which fades the profile effect
     /// back so the name and banner under it can be read.
     @State private var isEffectFaded = false
+
+    /// Whether the banner's top is bright (`BannerBrightness`), for the glass
+    /// in the corners. Read from the cache first, so a profile opened again is
+    /// right on its first frame.
+    @State private var measuredBannerBright = false
+
+    private var isBannerBright: Bool {
+        guard let url = profile.bannerURL else { return false }
+        return BannerBrightness.cached(url) ?? measuredBannerBright
+    }
+
+    /// The corners' ink: a picture banner decides it — white, on glass dimmed
+    /// over a bright one — and without one, the card's own ground does.
+    private var cornerInkScheme: ColorScheme {
+        profile.bannerURL != nil ? .dark : (ground.wantsDarkInk ? .light : .dark)
+    }
     /// Whether the reader said yes to "Show Profile?" on this card.
     ///
     /// **Per card, as Discord's is** — its `useState` lives and dies with the
@@ -366,6 +382,11 @@ struct MiniProfileCard: View {
             }
         }
         .onHover { isEffectFaded = $0 }
+        .task(id: profile.bannerURL) {
+            measuredBannerBright = false
+            guard let url = profile.bannerURL else { return }
+            measuredBannerBright = await BannerBrightness.isBright(url)
+        }
         // **The one control on the card, and it is a glyph rather than a
         // slab.** What this surface used to have was a filled accent button and
         // a bordered one sitting on somebody's own palette — two more colours
@@ -376,7 +397,8 @@ struct MiniProfileCard: View {
             if profile.isProfilePrivate {
                 PrivateProfilePill()
                     // Outside the ground's environment, as the ⋯ across from it is.
-                    .environment(\.colorScheme, ground.wantsDarkInk ? .light : .dark)
+                    .environment(\.colorScheme, cornerInkScheme)
+                    .environment(\.isOverBrightBanner, isBannerBright)
                     .padding(Spacing.base)
             }
         }
@@ -384,8 +406,9 @@ struct MiniProfileCard: View {
             if !profile.isSelf, model.offersProfileMenu(for: profile.userID) {
                 UserMenuButton(isOpen: $isMenuOpen)
                     // This sits outside the ground's environment, and its glyph
-                    // and glass are the card's.
-                    .environment(\.colorScheme, ground.wantsDarkInk ? .light : .dark)
+                    // and glass are the card's — or the banner's, when it has one.
+                    .environment(\.colorScheme, cornerInkScheme)
+                    .environment(\.isOverBrightBanner, isBannerBright)
                     .padding(Spacing.base)
                     .presentsUserMenu(
                         for: profile.userID,

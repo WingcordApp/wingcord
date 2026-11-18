@@ -16,6 +16,19 @@ extension SessionController {
     ///
     /// An invite that came back with an event not yet over is that event's
     /// card instead (`346542`'s `ly`), measured as the answer lands.
+    /// Everything a channel's history asks for after a page lands — Spotify
+    /// cards, invites, Discord's hosted cards — for messages that reach the
+    /// reader some other way: the inbox, pins, search (Alex, 2026-11-18).
+    func resolveCardExtras(in messages: [Message]) {
+        guard !messages.isEmpty else { return }
+        resolveSpotifyUnfurls(in: messages)
+        resolveInvites(in: messages)
+        let byGuild = Dictionary(grouping: messages) { model.channelIndex.guildID(of: $0.channelID) }
+        for (guildID, group) in byGuild {
+            resolveHostedCards(in: group, inGuild: guildID)
+        }
+    }
+
     func resolveInvites(in messages: [Message]) {
         for message in messages {
             for code in InviteCard.codes(in: message.content)

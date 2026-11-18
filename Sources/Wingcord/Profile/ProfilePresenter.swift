@@ -517,6 +517,20 @@ extension AppModel {
         return nil
     }
 
+    /// Closes the window's top layer for a field that would otherwise keep the
+    /// Escape — the composer holds the keyboard under a layer that takes none.
+    /// True when it closed one. **Only the layers whose closing is clearing
+    /// their request**; the rest answer Escape themselves or own the keyboard.
+    func closeTopLayerForEscape() -> Bool {
+        switch escapeLayer {
+        case .reactions?:
+            reactionsList = nil
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Whether a floating layer is drawn over the window's content.
     ///
     /// **The drawn canvases need this and cannot work it out.** An

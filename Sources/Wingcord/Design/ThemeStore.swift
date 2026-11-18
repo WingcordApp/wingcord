@@ -78,6 +78,18 @@ final class ThemeStore {
     /// would leave the window showing the theme before.
     private(set) var ground: ThemeGround = .trueBlack
 
+    /// Whether the ground is a colour theme's — a Discord theme, a custom or
+    /// shared one, a server's — rather than the plain dark or light room.
+    /// What frosts the bubbles with no picture up (`WallpaperLayer`).
+    var groundIsColour: Bool {
+        if serverTheme != nil || previewTheme != nil { return true }
+        switch choice {
+        case .system: return false
+        case .preset(let preset): return !preset.isStated
+        case .discord, .custom, .shared: return true
+        }
+    }
+
     // MARK: The picture behind it
 
     /// The image filling the window behind the theme, if the reader set one.

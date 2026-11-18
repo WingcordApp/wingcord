@@ -88,32 +88,32 @@ struct TypingIndicator: View, Equatable {
                     } else {
                         dots
                     }
-                    Text(sentence)
+                    Text(styledSentence)
                         .font(Typeface.rowSubtitle)
-                        // Solid rather than the hierarchy: this floats over the
-                        // transcript, so a `.secondary` line resolves against
-                        // whatever message happens to be scrolling under it —
-                        // which is exactly how it got lost. See `InkColor.solid`.
-                        .foregroundStyle(InkColor.solid)
+                        // The secondary ink, as Discord sets this line in its
+                        // normal text colour rather than its brightest. A fixed
+                        // ink, never the vibrant hierarchy: vibrancy resolves
+                        // against whatever message is scrolling under it.
+                        .foregroundStyle(Ink.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                // **A pill, not a line of text over the scrollback.** Bare text
-                // laid over a moving transcript has no ground of its own, so it
-                // reads as part of whatever message is passing behind it — a
-                // nickname in bold slides under "is typing" and the whole line
-                // becomes unreadable. The pill gives it an edge and a material,
-                // and it is the composer's own so the two read as one object.
+                // **Text, not a pill** (Alex, 2026-11-18: "remove the pill
+                // background ... making them text only like on discord"): the
+                // dots and the sentence straight on the transcript's ground,
+                // the names in bold as Discord sets them. The row is measured
+                // into the transcript's inset, so at rest no message sits under
+                // the words, and it lives in the composer's bar, which is what
+                // the scroll edge effect keys off. The insets are the old
+                // pill's, so the words have not moved.
                 .padding(.horizontal, Spacing.snug)
                 .padding(.vertical, 5)
-                // Status, not a control: a plain chip rather than glass.
-                .plainChip(in: .capsule)
                 .padding(.leading, Spacing.margin)
                 .padding(.bottom, Spacing.tight)
                 .transition(.materialize(from: .bottom))
             }
         }
-        // Leading, and hugging: the pill is as wide as its sentence, so a
+        // Leading, and hugging: the line is as wide as its sentence, so a
         // full-width bar does not sit over the transcript saying nothing.
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(motion.fadeQuick, value: names)
@@ -125,7 +125,7 @@ struct TypingIndicator: View, Equatable {
     private var dots: some View {
         let glyph = Image(systemName: "ellipsis")
             .font(.system(.caption, weight: .bold))
-            .foregroundStyle(InkColor.solid.opacity(0.7))
+            .foregroundStyle(Ink.secondary)
         if motion.reduceMotion {
             // Reduce Motion removes the movement, not the meaning: the dots stay
             // and stop pulsing.
@@ -140,5 +140,16 @@ struct TypingIndicator: View, Equatable {
     /// past three, nobody named.
     private var sentence: String {
         TypingSentence.make(names: names, style: style)
+    }
+
+    /// The sentence with each name in bold, as Discord sets it ("**Ana** and
+    /// **Ben** are typing…"). The pieces say which runs are names, so a name
+    /// is never hunted for inside the words around it.
+    private var styledSentence: AttributedString {
+        TypingSentence.pieces(names: names, style: style).reduce(into: AttributedString()) { line, piece in
+            var run = AttributedString(piece.text)
+            if piece.isName { run.inlinePresentationIntent = .stronglyEmphasized }
+            line += run
+        }
     }
 }

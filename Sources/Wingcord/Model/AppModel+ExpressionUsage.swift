@@ -85,7 +85,16 @@ extension AppModel {
     ) -> ExpressionCatalog {
         var cells: [String: ExpressionItem] = [:]
         for section in catalog.sections {
-            for item in section.items where cells[item.id] == nil { cells[item.id] = item }
+            for item in section.items where cells[item.id] == nil {
+                // **A locked section's emoji are locked wherever they are
+                // offered.** The lock was the section's alone, so another
+                // server's static emoji came back unlocked in Frequently Used
+                // and Favorites — one click from being sent where it can't go
+                // (Alex, 2026-11-18).
+                var item = item
+                if section.isLocked { item.isLocked = true }
+                cells[item.id] = item
+            }
         }
         // A key is a cell's id for a custom emoji or a sticker; a Unicode one
         // goes through its glyph to this table's own name for it.

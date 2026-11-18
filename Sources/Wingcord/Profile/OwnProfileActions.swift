@@ -247,7 +247,9 @@ private struct CustomStatusEditor: View {
                         },
                         // An emoji picker has no GIF tab to pick from; the
                         // closure is required and this is the honest body.
-                        onPickGIF: { _ in }
+                        onPickGIF: { _ in },
+                        // A status belongs to no server (Discord's STATUS).
+                        destination: .personal
                     )
                     .presentationBackground(.clear)
                     .profileFlyoutAppearance()

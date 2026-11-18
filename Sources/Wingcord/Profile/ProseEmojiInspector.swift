@@ -35,6 +35,9 @@ struct ProseEmojiInspector: ViewModifier {
                     previewGuild: { model.previewFromExpression($0) }
                 )
                 .presentationBackground(.clear)
+                // In the profile's room, as its other flyouts are (Alex,
+                // 2026-11-18: "emoji flyouts dont respect profile theme").
+                .profileFlyoutAppearance()
                 // Started here rather than in the resolver: a resolver that
                 // fires a request fires one every time a view body runs.
                 .task(id: request.id) {

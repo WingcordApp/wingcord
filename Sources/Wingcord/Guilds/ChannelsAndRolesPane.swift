@@ -22,7 +22,11 @@ struct ChannelsAndRolesContainer: View {
                     presentation: presentation,
                     startsOnBrowse: surface == .browseChannels,
                     toggleOption: { model.toggleOnboardingOption($0, inPrompt: $1) },
-                    openChannel: { model.openChannelFromSurface($0) },
+                    // **Beside the page, as the guide's do** (Alex,
+                    // 2026-11-18): Browse Channels is for looking around, and
+                    // a press that left it lost your place in the list. The
+                    // column's Open Channel goes all the way.
+                    openChannel: { model.previewChannel($0) },
                     toggleFollowed: { model.toggleChannelFollowed($0) }
                 )
                 .equatable()
@@ -250,29 +254,37 @@ private struct CustomizeTab: View {
     var isWide: Bool
     var toggleOption: (UInt64, UInt64) -> Void
 
+    /// The tab settles in as the guide does (`SurfaceEntrance`) — again on
+    /// every switch back to it, which is a new arrival.
+    @State private var hasAppeared = false
+
     var body: some View {
         SurfaceHeading(
             title: "Customize",
             detail: "Answer these to unlock more channels and pick up roles.",
             badge: nil
         )
+        .modifier(SurfaceEntrance(index: 0, isShown: hasAppeared))
+        .onAppear { hasAppeared = true }
 
         // **The narrow arrangement puts the profile FIRST.** It is the answer to
         // "what do these questions do to me", and below two prompts on a phone-
         // width column it is an answer nobody scrolls to.
         if !isWide, let me = presentation.me {
             MyProfileAside(me: me)
+                .modifier(SurfaceEntrance(index: 1, isShown: hasAppeared))
         }
 
         HStack(alignment: .top, spacing: Spacing.group) {
             VStack(alignment: .leading, spacing: Spacing.group) {
-                Questions(presentation: presentation, toggleOption: toggleOption)
+                Questions(presentation: presentation, toggleOption: toggleOption, isShown: hasAppeared)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if isWide, let me = presentation.me {
                 MyProfileAside(me: me)
                     .frame(width: Proportions.surfaceAsideWidth)
+                    .modifier(SurfaceEntrance(index: 1, isShown: hasAppeared))
             }
         }
     }
@@ -282,6 +294,8 @@ private struct CustomizeTab: View {
 private struct Questions: View {
     var presentation: ChannelsAndRolesPresentation
     var toggleOption: (UInt64, UInt64) -> Void
+    /// The tab's arrival, which each question takes a beat after the last.
+    var isShown = true
 
     var body: some View {
         if presentation.prompts.isEmpty {
@@ -295,8 +309,9 @@ private struct Questions: View {
                 )
             }
         } else {
-            ForEach(presentation.prompts) { prompt in
+            ForEach(Array(presentation.prompts.enumerated()), id: \.element.id) { index, prompt in
                 PromptSection(prompt: prompt, toggleOption: toggleOption)
+                    .modifier(SurfaceEntrance(index: index + 2, isShown: isShown))
             }
         }
     }
@@ -544,11 +559,19 @@ private struct OptionIconTile: View {
 
 /// A checkbox where the question takes several answers, a radio where it takes
 /// one — filled with the accent once picked.
+///
+/// **The tick draws itself in** (Alex, 2026-11-18: "add the animated
+/// checkmark"): SF Symbols' draw animation — the stroke the native checkbox
+/// draws on macOS 26 — on the box's own tick, which draws back off when the
+/// answer is taken away. The box fills on a small spring; a radio's dot
+/// grows in. Under Reduce Motion the tick and the dot simply appear.
 private struct OptionSelectionMark: View {
     var isSelected: Bool
     var isSingleSelect: Bool
     /// Under the pointer: the empty box's edge comes up.
     var isHighlighted = false
+
+    @Environment(\.motion) private var motion
 
     private static let side: CGFloat = 20
 
@@ -561,17 +584,34 @@ private struct OptionSelectionMark: View {
                 .fill(isSelected ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Color.clear))
             shape
                 .stroke(isSelected ? Color.clear : isHighlighted ? Ink.secondary : Ink.tertiary, lineWidth: 1.5)
-            if isSelected {
-                if isSingleSelect {
-                    Circle().fill(.white).frame(width: 7, height: 7)
-                } else {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white)
-                }
+            if isSingleSelect {
+                Circle()
+                    .fill(.white)
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(isSelected ? 1 : 0.2)
+                    .opacity(isSelected ? 1 : 0)
+            } else if motion.reduceMotion {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .opacity(isSelected ? 1 : 0)
+            } else {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    // Drawn off while unpicked; picking draws the stroke on.
+                    .symbolEffect(.drawOff, isActive: !isSelected)
             }
         }
         .frame(width: Self.side, height: Self.side)
+        // A small pop as the answer changes, then back to its size.
+        .keyframeAnimator(initialValue: 1.0, trigger: isSelected) { content, scale in
+            content.scaleEffect(motion.reduceMotion ? 1 : scale)
+        } keyframes: { _ in
+            SpringKeyframe(1.16, duration: 0.12)
+            SpringKeyframe(1.0, duration: 0.3, spring: .bouncy)
+        }
+        .animation(.spring(response: 0.28, dampingFraction: 0.7), value: isSelected)
         .accessibilityHidden(true)
     }
 }
@@ -604,6 +644,9 @@ private struct BrowseTab: View {
         return result
     }
 
+    /// The tab settles in as the guide does (`SurfaceEntrance`).
+    @State private var hasAppeared = false
+
     var body: some View {
         SurfaceHeading(
             title: "Browse Channels",
@@ -616,6 +659,8 @@ private struct BrowseTab: View {
                 ? nil
                 : "\(presentation.channelCount)"
         )
+        .modifier(SurfaceEntrance(index: 0, isShown: hasAppeared))
+        .onAppear { hasAppeared = true }
 
         let categories = matches
         if categories.isEmpty {
@@ -627,13 +672,14 @@ private struct BrowseTab: View {
                     : "No channel's name or topic matches that."
             )
         } else {
-            ForEach(categories) { category in
+            ForEach(Array(categories.enumerated()), id: \.element.id) { index, category in
                 BrowseSection(
                     category: category,
                     offersFollowing: presentation.offersFollowing,
                     openChannel: openChannel,
                     toggleFollowed: toggleFollowed
                 )
+                .modifier(SurfaceEntrance(index: index + 1, isShown: hasAppeared))
             }
         }
     }

@@ -70,6 +70,10 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
     /// A GIF that is an MP4 (a `gifv` from Tenor or Giphy): played muted and
     /// looping, with no transport, as an animation rather than a video.
     var loopsSilently = false
+    /// Whether smaller renditions can be asked of Discord's media proxy.
+    /// False for a picture served from elsewhere — a game's screenshots, from
+    /// IGDB or the store — which is shown as it is (`renditionURL`).
+    var isProxied = true
     /// The GIF as the account's favourites key it, for the viewer's star
     /// (Alex, 2026-11-17). Nil for everything that isn't a GIF.
     var favoriteGIF: GIF? = nil
@@ -90,7 +94,7 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
     /// 100% should show the file that was uploaded rather than a transcode of
     /// it.
     func renditionURL(forPixelWidth pixels: Int) -> URL {
-        guard kind == .image else { return sourceURL }
+        guard kind == .image, isProxied else { return sourceURL }
         let rung = Self.renditionRungs.first { $0 >= pixels } ?? Self.renditionRungs[Self.renditionRungs.count - 1]
         if let pixelWidth, rung >= pixelWidth { return sourceURL }
         return CDN.resizedAttachment(proxyURL: proxyURL, width: CGFloat(rung), scale: 1) ?? sourceURL
@@ -201,12 +205,17 @@ nonisolated struct MediaViewerRequest: Equatable, Sendable {
     /// Where the opened video picks up: the place the chat's own player had
     /// reached when it was double-clicked (decision 24).
     var startsAt: (item: AttachmentID, seconds: Double)? = nil
+    /// Raised from inside a sheet — a game profile's media, a profile board's
+    /// clips — so it is drawn by the presenter above the sheets rather than
+    /// the one under the profiles (`presentsMedia(aboveSheets:)`).
+    var isAboveSheets = false
 
     static func == (lhs: MediaViewerRequest, rhs: MediaViewerRequest) -> Bool {
         lhs.items == rhs.items && lhs.index == rhs.index && lhs.messageID == rhs.messageID
             && lhs.channelID == rhs.channelID && lhs.origin == rhs.origin && lhs.authorName == rhs.authorName
             && lhs.sentAt == rhs.sentAt && lhs.startsAt?.item == rhs.startsAt?.item
             && lhs.startsAt?.seconds == rhs.startsAt?.seconds
+            && lhs.isAboveSheets == rhs.isAboveSheets
     }
 
     var current: MediaItem? {

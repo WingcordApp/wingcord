@@ -401,7 +401,7 @@ extension View {
     }
 }
 
-private nonisolated enum SidebarChromeFade {
+nonisolated enum SidebarChromeFade {
     /// How far below the switcher a row takes to come back whole.
     static let run: CGFloat = 14
 }

@@ -91,7 +91,7 @@ extension AppModel {
                             CDN.guildIcon(guildID: guildID, hash: $0, side: Metrics.avatarRow)
                         },
                         monogram: guild.monogram,
-                        symbolName: channel.kind.symbolName,
+                        symbolName: channelSymbol(of: channel),
                         recency: channel.lastMessageID?.rawValue ?? 0
                     )
                 )

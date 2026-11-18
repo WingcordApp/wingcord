@@ -396,6 +396,11 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     public let themeColorValues: [UInt32]?
     /// The account's badges, as named by the profile route.
     public let badges: [AccountBadge]
+    /// Whether the profile route answered for them — then `badges` is
+    /// Discord's whole list, **even empty**, and nothing is added to it: no
+    /// Nitro mark read off `premium_type`, no crest read off the flags. Nil in
+    /// data cached before this existed.
+    public let badgesFromProfile: Bool?
     /// The SKU of the profile effect, if they own one. Resolved to artwork
     /// separately — the profile route names the purchase, not the pictures.
     public let profileEffectSKU: String?
@@ -456,6 +461,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         bio: String? = nil,
         themeColorValues: [UInt32]? = nil,
         badges: [AccountBadge] = [],
+        badgesFromProfile: Bool? = nil,
         profileEffectSKU: String? = nil,
         profileFrameSKU: String? = nil,
         wornCollectibles: [WornCollectible]? = nil,
@@ -481,6 +487,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         self.bio = bio
         self.themeColorValues = themeColorValues
         self.badges = badges
+        self.badgesFromProfile = badgesFromProfile
         self.profileEffectSKU = profileEffectSKU
         self.profileFrameSKU = profileFrameSKU
         self.wornCollectibles = wornCollectibles
@@ -523,7 +530,12 @@ public final class UserDecoration: Hashable, Sendable, Codable {
             themeColorValues: incoming.themeColorValues?.isEmpty == false
                 ? incoming.themeColorValues
                 : existing.themeColorValues,
-            badges: incoming.badges.isEmpty ? existing.badges : incoming.badges,
+            // The route's answer stands, empty included; otherwise an empty
+            // list is "not said" and the one already known is kept.
+            badges: incoming.badgesFromProfile == true || !incoming.badges.isEmpty
+                ? incoming.badges
+                : existing.badges,
+            badgesFromProfile: incoming.badgesFromProfile ?? existing.badgesFromProfile,
             profileEffectSKU: incoming.profileEffectSKU ?? existing.profileEffectSKU,
             profileFrameSKU: incoming.profileFrameSKU ?? existing.profileFrameSKU,
             wornCollectibles: incoming.wornCollectibles ?? existing.wornCollectibles,

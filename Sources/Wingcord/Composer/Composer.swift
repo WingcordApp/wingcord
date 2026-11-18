@@ -3,13 +3,11 @@ import WingcordCore
 
 /// The composer, floating over the foot of the transcript.
 ///
-/// **Plain glass, not `.interactive()`.** Interactive glass adds a hover
-/// highlight and a displacement toward the cursor; on a bar this wide that reads
-/// as the whole composer shifting under the pointer rather than as a control
-/// responding. The composer also has no press or focus highlight at all — it is
-/// one flat plate in every state, because hand-rolling a focus lift means
-/// layering a gesture over the text field where it competes with caret placement
-/// and selection.
+/// **Interactive glass, and the press heard on its words too.** The plate is
+/// `.interactive()` (Alex, 2026-11-17), which answers presses on its rim; a press
+/// on the words goes to the text view, so `ComposerPress` watches it go by —
+/// never taking it, so caret placement and selection are the text view's — and
+/// answers as the glass would (Alex, 2026-11-18).
 ///
 /// **Where `+` and the send arrow sit is decided by the silhouette**, not here.
 /// A capsule's ends *are* circles, so an enclosed circle collides with the
@@ -103,6 +101,9 @@ struct Composer: View {
     /// `AppModel.escapeTranscript(in:)`. Returns false when there was nothing
     /// to do, so the key falls through.
     var escapeTranscript: () -> Bool = { false }
+    /// Escape's FIRST step: the window's top layer, where it is one that takes
+    /// no keyboard of its own — see `AppModel.closeTopLayerForEscape()`.
+    var closesTopLayer: () -> Bool = { false }
     /// The `+` menu's rows. Empty hides the `+` — see `ComposerAttachActions`.
     var attachActions = ComposerAttachActions()
     /// When the next message goes, while the bar is scheduling — Discord's bar
@@ -443,6 +444,19 @@ struct Composer: View {
         }
     }
 
+    /// The shaped bar — `+`, field, controls and send in `ComposerChrome` —
+    /// wherever the controls are in the bar, **and wherever the shape is boxy**:
+    /// with the controls in `+`'s menu the Messages arrangement used to win
+    /// whatever the shape said, so Boxy could not be chosen (Alex, 2026-11-18:
+    /// "i cant switch to the boxy composer").
+    private var usesShapedChrome: Bool { inlineControls || shape == .boxy }
+
+    /// Whether there is anything to send — words, a command ready to run, or a
+    /// recorded note. The send control is drawn only then.
+    private var showsSend: Bool {
+        voicePhase == .review || (voicePhase == .idle && canCommit)
+    }
+
     private var showsTray: Bool {
         !attachments.isEmpty || attachmentRefusal != nil || compressingFiles > 0
     }
@@ -461,7 +475,7 @@ struct Composer: View {
 
     private var composerRow: some View {
         Group {
-            if inlineControls {
+            if usesShapedChrome {
                 ComposerChrome(shape: shape) {
                     // A conversation where none of the menu's rows can work gets
                     // no `+` at all rather than a dimmed one — `INVARIANTS.md`
@@ -469,7 +483,8 @@ struct Composer: View {
                     // the field, which is right: there is nothing to add. The
                     // settings preview draws it inert, as it draws the other
                     // controls.
-                    if isReorderable || !attachActions.isEmpty || isVoiceActive {
+                    if isReorderable || (inlineControls ? !attachActions.isEmpty : !menuActions.isEmpty)
+                        || isVoiceActive {
                         attachControl
                     }
                 } input: {
@@ -479,21 +494,33 @@ struct Composer: View {
                         if !isVoiceActive {
                             silentTypingButton
                                 .transition(.materialize)
-                            expressionControls
-                                .transition(.materialize)
+                            // The bar's own controls where they live in it; the
+                            // emoji alone where `+` holds the rest.
+                            if inlineControls {
+                                expressionControls
+                                    .transition(.materialize)
+                            } else {
+                                emojiControl
+                                    .transition(.materialize)
+                            }
                         }
                         voiceControl(stopSide: Metrics.composerControl)
                     }
                 } send: {
-                    if showsSendControl {
-                        // Always drawn in this arrangement, its own body beside the
-                        // field, and armed by a note the way it's armed by words.
+                    // **Only once there is something to send** (Alex, 2026-11-18:
+                    // "hide send button when there's nothing … when i type
+                    // something, it smoothly appears and the icons move to make
+                    // space for it"). It materializes in on the first word while
+                    // the controls beside it glide over, and leaves on the last
+                    // backspace; a recorded note counts as words.
+                    if showsSendControl, showsSend {
                         ComposerSendButton(
                             shape: shape,
-                            isArmed: voicePhase == .idle ? canCommit : voicePhase == .review,
+                            isArmed: true,
                             usesReturnKey: !isVoiceActive,
                             action: voicePhase == .review ? voiceSend : pressedReturn
                         )
+                        .transition(.materialize)
                     }
                 } strip: {
                     voiceStrip(.inline)
@@ -518,9 +545,10 @@ struct Composer: View {
                     // Stop slides to the end when the send disc leaves, and play
                     // moves back one when it returns: the same control all along.
                     voiceControl(stopSide: MessagesSendButton.side)
-                    if showsSendControl, voicePhase != .recording {
+                    // Only once there is something to send — see the shaped bar's.
+                    if showsSendControl, showsSend {
                         MessagesSendButton(
-                            isArmed: voicePhase == .review || canCommit,
+                            isArmed: true,
                             usesReturnKey: !isVoiceActive,
                             action: voicePhase == .review ? voiceSend : pressedReturn
                         )
@@ -538,6 +566,9 @@ struct Composer: View {
         // springier class, because a header or a file arriving is a thing
         // landing (`AttachmentTray`'s note).
         .animation(motion.glassMorph, value: accessoryLayout)
+        // The send control arriving and leaving, and everything beside it
+        // gliding over to make room: the plate's own spring.
+        .animation(motion.glassMorph, value: showsSend)
         .animation(motion.panel, value: voicePhase)
         .contentShape(.rect)
         // The keys, while a note's going. Not a shortcut on each button, since those
@@ -947,6 +978,11 @@ struct Composer: View {
     /// Only a press none of them wanted reaches the transcript behind the bar,
     /// which is where Discord's own chain ends (module `92960`).
     private func pressedEscape() -> KeyPress.Result {
+        // **A layer over the window comes first** (Alex, 2026-11-18: "On the
+        // reactions panel Esc doesnt work"): the field keeps the keyboard under
+        // a panel that takes none, so the press stopped here — cancelling a
+        // reply, marking the channel read — and never reached the panel.
+        if closesTopLayer() { return .handled }
         if pendingCommand != nil {
             cancelCommand()
             return .handled
@@ -990,7 +1026,7 @@ struct Composer: View {
         }
         // Messages' `+` is a glass circle of its own, which is the pill's.
         return ComposerAttachButton(
-            shape: inlineControls ? shape : .pill,
+            shape: usesShapedChrome ? shape : .pill,
             isActive: isAttachMenuOpen,
             isCancel: isVoiceActive,
             action: action
@@ -1026,7 +1062,7 @@ struct Composer: View {
         if let silentTyping {
             ComposerControlButton(
                 label: silentTyping.isOn ? "Disable Silent Typing" : "Enable Silent Typing",
-                shape: inlineControls ? shape : .pill,
+                shape: usesShapedChrome ? shape : .pill,
                 action: isReorderable ? nil : silentTyping.toggle
             ) {
                 SilentTypingMark(isOn: silentTyping.isOn)
@@ -1042,7 +1078,7 @@ struct Composer: View {
         ComposerControlButton(
             label: ComposerControl.emoji.label,
             isActive: openControl != nil,
-            shape: .pill,
+            shape: usesShapedChrome ? shape : .pill,
             action: { openControl = openControl == nil ? .emoji : nil }
         ) {
             ComposerControlMark(control: .emoji)

@@ -24,6 +24,8 @@ struct CallControlCapsule<Accessories: View>: View {
     /// and a shared flag would ask them all to present at once.
     @State private var isSoundboardOpen = false
     @State private var isActivitiesOpen = false
+    /// The Activities control's first answer: the mini shelf.
+    @State private var isShelfOpen = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -44,7 +46,18 @@ struct CallControlCapsule<Accessories: View>: View {
                 flyout: .devices(.output), action: toggleDeafen
             )
             if presentation.canLaunchActivities {
-                CallButton(kind: .activities, isActive: isActivitiesOpen, form: .region, action: toggleActivities)
+                CallButton(kind: .activities, isActive: isActivitiesOpen || isShelfOpen, form: .region, action: toggleActivities)
+                    // **The mini shelf first, the launcher from See All** —
+                    // Discord's order (Alex, 2026-11-18: "add back the
+                    // suggested activities flyout"). On the control, which is
+                    // the only place a popover can point at it from.
+                    .popover(isPresented: $isShelfOpen, arrowEdge: .top) {
+                        SuggestedActivitiesFlyout(channelID: presentation.channelID) {
+                            isShelfOpen = false
+                            // On the next turn: the popover is still closing.
+                            Task { @MainActor in isActivitiesOpen = true }
+                        }
+                    }
             }
             if presentation.soundboard != .unavailable {
                 CallButton(
@@ -84,12 +97,12 @@ struct CallControlCapsule<Accessories: View>: View {
             ActivityLauncher(channelID: presentation.channelID, context: .call)
         }
         .transformPreference(CallControlsEngagedKey.self) { engaged in
-            engaged = engaged || isSoundboardOpen || isActivitiesOpen
+            engaged = engaged || isSoundboardOpen || isActivitiesOpen || isShelfOpen
         }
     }
 
     private func toggleActivities() {
-        isActivitiesOpen.toggle()
+        isShelfOpen.toggle()
     }
 
     private func toggleSoundboard() {

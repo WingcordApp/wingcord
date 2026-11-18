@@ -120,7 +120,11 @@ final class SessionController {
     var pendingActivityConnect: PendingActivityConnect?
     /// This gateway session's id, from READY: what a running activity's
     /// participant record names (`reconcileActivity`).
-    var gatewaySessionID: String?
+    var gatewaySessionID: String? {
+        // The voice controller tells this client's voice from another
+        // device's by it (`VoiceController.ownSessionID`).
+        didSet { voice.ownSessionID = gatewaySessionID }
+    }
     /// The private channels whose call this connection has asked about
     /// (`askForCall`), as Discord's CallStore keeps them.
     var callsAsked: Set<ChannelID> = []
@@ -218,6 +222,12 @@ final class SessionController {
     /// The member list subscription in force, so the same request is never
     /// sent twice. See `subscribeMemberListPages`.
     private var memberListSubscription: MemberListSubscription?
+    /// When each person a list on screen named without a record was last asked
+    /// for by id — `repairMemberList`.
+    private var listMemberAsks: [MemberRequest: Date] = [:]
+    /// When each list was last asked to sync again, and the check waiting to.
+    private var listResyncs: [MemberListKey: Date] = [:]
+    private var listHoleCheck: Task<Void, Never>?
 
     struct MemberListSubscription: Equatable {
         var key: MemberListKey
@@ -304,6 +314,9 @@ final class SessionController {
     /// Discord's own sticker packs, while they are being fetched — one request
     /// however many things ask, the picker and a sticker's card among them.
     var stickerPacksTask: Task<Void, Never>?
+    /// Whether the packs on show are a day old at most — read off the network
+    /// this launch, or off the disk within the day (`StandardStickerPackCache`).
+    var hasFreshStickerPacks = false
     /// Channels whose transcript is being re-anchored around a linked message.
     private var jumpFetches: Set<ChannelID> = []
     /// Invite codes asked about this session — see `resolveInvites`.
@@ -1391,6 +1404,10 @@ final class SessionController {
         // The people asked about on the old session were asked of a session
         // that is gone; READY's members are not all of them.
         memberRequests.removeAll()
+        listMemberAsks.removeAll()
+        listResyncs.removeAll()
+        listHoleCheck?.cancel()
+        listHoleCheck = nil
         if let channelID = model.selectedChannelID {
             subscribeMemberListPages(nil, for: channelID)
         }
@@ -1738,7 +1755,17 @@ final class SessionController {
             // first would be swept straight out again.
             for thread in threads { model.channelIndex.upsertThread(thread) }
             model.roles[guild.id] = roles
-            if !members.isEmpty { model.members[guild.id] = members }
+            // **Merged, never replaced**, as the users below are. A server
+            // arriving mid-session — back from an outage, or loaded when first
+            // opened — carries a handful of its people; replacing the table with
+            // them dropped everyone the member list had brought in, and the
+            // list's rows went to placeholders until each person happened to
+            // change (Alex, 2026-11-18). Somebody who left goes by
+            // `GUILD_MEMBER_REMOVE`, not by being missing here.
+            if !members.isEmpty {
+                model.members[guild.id, default: [:]].merge(members) { _, new in new }
+                if let key = displayedMemberListKey, key.guildID == guild.id { repairMemberList(key) }
+            }
             model.guildEmojis[guild.id] = emojis.isEmpty ? nil : emojis
             model.guildStickers[guild.id] = stickers.isEmpty ? nil : stickers
             // **Merged, never replaced.** A roster user carries no bio, no
@@ -1902,6 +1929,7 @@ final class SessionController {
                model.memberListTarget(for: channelID)?.key == key
             {
                 LoadMarks.shared.mark(.roster, in: channelID)
+                repairMemberList(key)
             }
 
         case .channelAcknowledged(let channelID, let messageID, let mentionCount, let isManual):
@@ -2575,6 +2603,86 @@ final class SessionController {
         }
     }
 
+    /// The list the column shows now, if any.
+    private var displayedMemberListKey: MemberListKey? {
+        model.selectedChannelID.flatMap { model.memberListTarget(for: $0)?.key }
+    }
+
+    /// Fills the list on screen back in where it lost people (Alex,
+    /// 2026-11-18: "after some time, some users just fail to load").
+    ///
+    /// **Two kinds of gap, two answers.**
+    ///
+    /// - **A row that names somebody this client holds no record of** — wiped by
+    ///   something, or never sent. Asked for by id (op 8, with presences), at
+    ///   most once a minute each, so the row fills on the answer.
+    /// - **A row the list counts and has nothing for**, inside the pages the
+    ///   column subscribes to. Only a sync can say who it is: if it is still
+    ///   there three seconds on, the pages are dropped and asked for again,
+    ///   which Discord answers with `INVALIDATE` and then `SYNC` — at most once
+    ///   a minute a list, so a gap Discord itself keeps never loops.
+    ///
+    /// Either one is traced with its counts, so the next report says which.
+    private func repairMemberList(_ key: MemberListKey) {
+        guard let socket, let list = model.memberLists[key] else { return }
+        let now = Date.now
+        let known = model.members[key.guildID]
+        var wanted: [UserID] = []
+        for row in list.rows.values {
+            guard case .member(let userID) = row,
+                  known?[userID] == nil || model.users[userID] == nil
+            else { continue }
+            let request = MemberRequest(guildID: key.guildID, userID: userID)
+            if let asked = listMemberAsks[request], now.timeIntervalSince(asked) < 60 { continue }
+            listMemberAsks[request] = now
+            wanted.append(userID)
+        }
+        if !wanted.isEmpty {
+            Self.trace("member list \(key.listID): \(wanted.count) rows without a record, asking by id")
+            Task { await socket.requestGuildMembers(guildID: key.guildID, userIDs: wanted) }
+        }
+
+        guard Self.holes(in: list, pages: memberListSubscription?.key == key ? memberListSubscription?.pages ?? [] : []) > 0,
+              listHoleCheck == nil
+        else { return }
+        listHoleCheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled else { return }
+            listHoleCheck = nil
+            guard let subscription = memberListSubscription, subscription.key == key,
+                  let list = model.memberLists[key]
+            else { return }
+            let holes = Self.holes(in: list, pages: subscription.pages)
+            guard holes > 0 else { return }
+            if let last = listResyncs[key], Date.now.timeIntervalSince(last) < 60 { return }
+            listResyncs[key] = .now
+            Self.trace("member list \(key.listID): \(holes) rows missing in its pages, asking for them again")
+            await socket.subscribeToMemberList(
+                guildID: key.guildID, channelID: subscription.channelID, ranges: []
+            )
+            await socket.subscribeToMemberList(
+                guildID: key.guildID,
+                channelID: subscription.channelID,
+                ranges: subscription.pages.map { [$0.lowerBound, $0.upperBound] }
+            )
+        }
+    }
+
+    /// Rows inside `pages` the list counts but holds nothing for — headings
+    /// aside, which are the list's own.
+    nonisolated static func holes(in list: MemberList, pages: [ClosedRange<Int>]) -> Int {
+        let headings = Set(list.headingIndexes)
+        var count = 0
+        for page in pages {
+            let upper = min(page.upperBound, list.rowCount - 1)
+            guard page.lowerBound <= upper else { continue }
+            for index in page.lowerBound...upper where !headings.contains(index) && list.rows[index] == nil {
+                count += 1
+            }
+        }
+        return count
+    }
+
     /// Writes the people a roster answer names into the stores.
     ///
     /// **Merged, never replaced.** A roster user carries no bio, no banner and
@@ -2889,6 +2997,12 @@ final class SessionController {
     /// then lands on it.
     private func reanchor(_ channelID: ChannelID, at anchor: JumpAnchor, highlights: Bool) {
         guard jumpFetches.insert(channelID).inserted else { return }
+        // The present this jump leaves, for an instant way back
+        // (`AppModel.jumpToPresent`). Only a present: a jump from a page
+        // already cut off has none to keep.
+        if let box = model.messageBoxes.peek(channelID), !box.hasMoreNewer, !box.messages.isEmpty {
+            model.keptPresents[channelID] = KeptPresent(box: box, keptAt: .now)
+        }
         model.mutateBox(channelID) { box in
             box.isLoadingHistory = true
             box.historyFailure = nil
@@ -3561,13 +3675,27 @@ final class SessionController {
 // store that reaches for a socket is a store that cannot be constructed in one.
 
 extension SessionController {
-    /// Discord's own sticker packs, fetched **once per launch** and kept.
+    /// Discord's own sticker packs: **off the disk at once, off the network
+    /// once a day**.
     ///
-    /// The set is the same for every account and changes about twice a year, so
-    /// a request per picker open is a request per open for an answer that
-    /// cannot have changed.
+    /// The set is the same for every account and changes about twice a year.
+    /// It used to be fetched on the first picker open of every launch, so each
+    /// launch's first look at the Stickers tab waited on `/sticker-packs`, and
+    /// a refused request left the packs out until something asked again. Now
+    /// the last answer is kept (`StandardStickerPackCache`) and drawn the
+    /// moment anything asks, and the network is asked only when it is a day
+    /// old — reinstalling only if Discord's answer changed, so an open picker
+    /// is not rebuilt under the reader for the same packs.
     func loadDefaultStickerPacks() async {
-        guard model.defaultStickerPacks.isEmpty else { return }
+        let cache = StandardStickerPackCache()
+        if model.defaultStickerPacks.isEmpty,
+           let stored = await Task.detached(priority: .userInitiated, operation: { cache.read() }).value,
+           !stored.packs.isEmpty
+        {
+            if model.defaultStickerPacks.isEmpty { model.installStandardStickerPacks(stored.packs) }
+            if !cache.isStale(stored) { hasFreshStickerPacks = true }
+        }
+        guard !hasFreshStickerPacks else { return }
         // **One request for every caller.** The picker and a sticker's card
         // both ask, and each used to fetch the whole set for itself.
         if let stickerPacksTask {
@@ -3577,12 +3705,17 @@ extension SessionController {
         let task = Task { [weak self] in
             guard let self, let packs = try? await rest.stickerPacks(), !packs.isEmpty
             else { return }
-            model.installStandardStickerPacks(packs)
+            hasFreshStickerPacks = true
+            let installed = Dictionary(packs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            if model.standardStickerPacks != installed || model.defaultStickerPacks.isEmpty {
+                model.installStandardStickerPacks(packs)
+            }
+            await Task.detached(priority: .utility) { cache.write(packs) }.value
         }
         stickerPacksTask = task
         await task.value
         // Cleared once it is done either way: a refusal must stay retryable, and
-        // a success is answered by the guard above from then on.
+        // a success is answered by `hasFreshStickerPacks` from then on.
         stickerPacksTask = nil
     }
 
@@ -3728,7 +3861,9 @@ extension SessionController {
     /// opened — and the answer would be the same 404 every time.
     func loadServerGuide(_ guildID: GuildID) {
         let fetch = GuildSurfaceFetch(guildID: guildID, subject: .guide)
-        guard model.serverGuides[guildID] == nil,
+        // Not asked of a server Discord would not show a guide for.
+        guard model.offersServerGuide(guildID),
+              model.serverGuides[guildID] == nil,
               model.loadingGuildSurfaces.insert(fetch).inserted
         else { return }
         Task { [weak self] in

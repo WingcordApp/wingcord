@@ -32,6 +32,34 @@ struct MediaStageGeometryTests {
         #expect(square.fitSize == CGSize(width: 400, height: 300))
     }
 
+    @Test("A still at fit stays clear of the controls and is never blown up past its own size")
+    func fitKeepsClearOfTheControls() {
+        // A big picture in a window: inside the bands above and below and the
+        // margins either side, centred (Alex, 2026-11-18: it ran under the zoom
+        // bar, whose glass then mirrored it).
+        let big = MediaStageGeometry(
+            contentPixels: CGSize(width: 3000, height: 2000),
+            viewport: CGSize(width: 1000, height: 700),
+            displayScale: 2,
+            fitInset: CGSize(width: 40, height: 76),
+            capsAtNaturalSize: true
+        )
+        let rect = big.contentRect(.fit)
+        #expect(rect.minY >= 76 - 0.001)
+        #expect(rect.maxY <= 700 - 76 + 0.001)
+        #expect(rect.minX >= 40 - 0.001)
+        #expect(abs(rect.midX - 500) < 0.001 && abs(rect.midY - 350) < 0.001)
+        // A small one: its own size, one pixel to a point, not the stage's.
+        let small = MediaStageGeometry(
+            contentPixels: CGSize(width: 300, height: 200),
+            viewport: CGSize(width: 1000, height: 700),
+            displayScale: 2,
+            fitInset: CGSize(width: 40, height: 76),
+            capsAtNaturalSize: true
+        )
+        #expect(small.fitSize == CGSize(width: 300, height: 200))
+    }
+
     @Test("A dimension that does not overflow cannot be panned")
     func panLimitsAreZeroWhereNothingOverflows() {
         let limit = wide.panLimit(1)

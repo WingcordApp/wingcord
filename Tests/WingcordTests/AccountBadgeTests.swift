@@ -41,6 +41,15 @@ struct AccountBadgeTests {
         }
     }
 
+    /// Alex, 2026-11-18: "wingcord shows the nitro icon for some profiles
+    /// when discord doesnt". Discord draws exactly the route's list, so an
+    /// answered `[]` is no badges at all.
+    @Test("The profile route's empty list is final: no Nitro, no crests added")
+    func answeredEmptyListIsFinal() {
+        let answered = UserDecoration(badges: [], badgesFromProfile: true, premiumTier: .nitro)
+        #expect(AccountBadges.resolve(flags: [.hypesquadBalance], decoration: answered).isEmpty)
+    }
+
     @Test("An empty named list no longer hides the flag badges")
     func emptyNamedListStillShowsFlags() {
         let resolved = AccountBadges.resolve(

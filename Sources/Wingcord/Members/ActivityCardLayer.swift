@@ -21,6 +21,17 @@ struct ActivityCardLayer: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
+                // **The window's whole box, always, and never hit.** The
+                // popout's alignment guides place it against the stack's
+                // corner, and the stack is as big as its children: opened by a
+                // click, the catcher below fills the window and the guides
+                // land beside the card; opened by hover, with no catcher, the
+                // popout was the stack's only child, so it sat in the window's
+                // top-left corner whatever the guides said (Alex, 2026-11-18).
+                Color.clear
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 if let request = model.activityCardRequest,
                    let entry = model.activityEntry(request.entryID)
                 {

@@ -28,6 +28,43 @@ nonisolated enum InkContrast {
         return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
     }
 
+    /// What the quietest text aims for on a theme's ground: the HIG's "for
+    /// custom colors, strive for 7:1, especially for small text" — timestamps
+    /// and previews are small, and the ramp's greys are custom.
+    static let smallTextGoal = 7.0
+
+    /// The least black veil over `stops` at which `ink` reads at `goal` on the
+    /// brightest of them — zero when it already does unveiled.
+    ///
+    /// **A floor, not a look** (Alex, 2026-11-18: "washed out" next to
+    /// SakuraCord's and Swiftcord's). A theme whose veil already makes its
+    /// brightest stop read is left exactly as Discord draws it; one that
+    /// does not — Vice City's orange under its 0.8 multiplier — is veiled just
+    /// far enough. The colour stays: a darker violet is still violet.
+    ///
+    /// Bisected on the veil's opacity. The test is monotone in it — while the
+    /// ground is lighter than the ink the ratio is under 2.2, and once it is
+    /// darker the ratio only grows — so sixteen halvings pin it.
+    static func legibleVeil(
+        over stops: [UInt32],
+        ink: UInt32 = InkRamp.darkTertiary,
+        goal: Double = smallTextGoal
+    ) -> Double {
+        guard let brightest = stops.max(by: { luminance($0) < luminance($1) }) else { return 0 }
+        func reads(_ veil: Double) -> Bool {
+            let ground = composite(0, over: brightest, opacity: veil)
+            return luminance(ground) < luminance(ink) && ratio(ink, ground) >= goal
+        }
+        if reads(0) { return 0 }
+        var low = 0.0
+        var high = 1.0
+        for _ in 0..<16 {
+            let middle = (low + high) / 2
+            if reads(middle) { high = middle } else { low = middle }
+        }
+        return high
+    }
+
     static func ratio(_ a: UInt32, _ b: UInt32) -> Double {
         let (x, y) = (luminance(a), luminance(b))
         return (max(x, y) + 0.05) / (min(x, y) + 0.05)

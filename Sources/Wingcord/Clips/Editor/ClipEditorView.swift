@@ -205,7 +205,7 @@ struct ClipEditorView: View {
             Button(editor.isPlaying ? "Pause" : "Play", systemImage: editor.isPlaying ? "pause.fill" : "play.fill") {
                 editor.togglePlay()
             }
-            .labelStyle(.iconOnly)
+            .labelStyle(.glassCircleIcon)
             .buttonStyle(.glass)
             .buttonBorderShape(.circle)
             .keyboardShortcut(.space, modifiers: [])

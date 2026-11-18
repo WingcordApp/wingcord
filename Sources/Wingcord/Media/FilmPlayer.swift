@@ -1,4 +1,5 @@
 import AppKit
+import Lottie
 import QuartzCore
 
 /// Plays one animated picture in a layer: every frame, at the asset's own
@@ -20,6 +21,12 @@ import QuartzCore
 ///
 /// A picture of one frame is shown rather than played, for an owner that asks
 /// — see `init(key:placeholder:drawsStills:)`.
+///
+/// **A Lottie sticker plays as vectors** (`loadVector`): ImageIO cannot open
+/// its JSON, and before this an owner that asked for one — the picker's grid,
+/// the hover row — was told there was nothing to play and kept a still that a
+/// Lottie sticker does not have (Alex, 2026-11-18: Chaos Cat, Robo Nelly and
+/// seven other stock packs drew empty).
 @MainActor
 final class FilmPlayer {
 
@@ -63,6 +70,8 @@ final class FilmPlayer {
     private let drawsStills: Bool
     private var loadTask: Task<Void, Never>?
     private var stream: FilmStream?
+    /// A Lottie sticker's own layer, sized with this one.
+    private var vector: LottieAnimationLayer?
     /// Whether the picture is moving now.
     private var isPlaying = true
     /// Whether its owner wants it moving. The app being in the background is
@@ -100,6 +109,9 @@ final class FilmPlayer {
         loadTask = nil
         stream?.stop()
         stream = nil
+        vector?.stop()
+        vector?.removeFromSuperlayer()
+        vector = nil
         layer.removeAllAnimations()
         layer.removeFromSuperlayer()
     }
@@ -157,6 +169,10 @@ final class FilmPlayer {
     }
 
     private func load() {
+        if LottieFilmstrip.handles(key.url) {
+            loadVector()
+            return
+        }
         if let film = FilmFrames.shared.cached(key) {
             // A still held for an owner that leaves its box empty is, to one
             // that draws its own, nothing to play.
@@ -205,6 +221,43 @@ final class FilmPlayer {
                 stream.setPlaying(self.isPlaying)
             }
         }
+    }
+
+    /// A Lottie sticker: the parsed document (`LottieDocuments`, shared with
+    /// the transcript and the card), played on Lottie's Core Animation engine
+    /// at the file's own rate and sharp at any size — the render server runs
+    /// it, and this layer's `speed` holds it like any other film.
+    ///
+    /// **Installed one per turn** (`LottieTurns`): building a sticker's layer
+    /// tree is a few milliseconds, and a pack scrolled onto asks for thirty.
+    private func loadVector() {
+        let url = key.url
+        loadTask = Task { [weak self] in
+            let animation = await LottieDocuments.shared.animation(for: url)
+            guard !Task.isCancelled else { return }
+            guard let animation else {
+                self?.report(false)
+                return
+            }
+            await LottieTurns.next()
+            guard let self, !Task.isCancelled else { return }
+            self.installVector(animation)
+        }
+    }
+
+    private func installVector(_ animation: LottieAnimation) {
+        let lottie = LottieStickerLayer.make(animation, scale: NSScreen.main?.backingScaleFactor ?? 2)
+        // Follows this layer's size, which its owner sets (`LottieStickerFitter`
+        // fits the drawing to it each time).
+        lottie.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        lottie.frame = layer.bounds
+        layer.addSublayer(lottie)
+        CATransaction.commit()
+        vector = lottie
+        lottie.play()
+        report(true)
     }
 
     private func report(_ playing: Bool) {

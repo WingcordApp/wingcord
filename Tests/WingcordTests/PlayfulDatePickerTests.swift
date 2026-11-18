@@ -25,7 +25,11 @@ struct PlayfulDatePickerTests {
         #expect(days.prefix(3).allSatisfy { $0 == nil })
         #expect(days[3] == date(2026, 10, 1, in: monday))
         #expect(days.compactMap { $0 }.count == 31)
-        #expect(days.count % 7 == 0)
+        // Six weeks whatever the month, so the popover never changes height
+        // under the arrows.
+        #expect(days.count == 42)
+        let february = PlayfulDatePicker.days(of: date(2027, 2, 1, in: monday), calendar: monday)
+        #expect(february.count == 42)
 
         let sunday = calendar(firstWeekday: 1)
         let fromSunday = PlayfulDatePicker.days(of: date(2026, 10, 1, in: sunday), calendar: sunday)

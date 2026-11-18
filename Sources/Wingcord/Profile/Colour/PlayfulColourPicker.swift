@@ -399,7 +399,7 @@ struct PlayfulColourPicker: View {
                     .buttonBorderShape(.capsule)
                     .help("A colour at random")
                 Button("Pick from Screen", systemImage: "eyedropper", action: sample)
-                    .labelStyle(.iconOnly)
+                    .labelStyle(.glassCircleIcon)
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
                     .help("Pick a colour from anywhere on screen")

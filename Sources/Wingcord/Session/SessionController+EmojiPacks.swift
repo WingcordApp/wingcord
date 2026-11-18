@@ -5,8 +5,9 @@ import WingcordNet
 // MARK: - Nitro Emoji Packs (docs/ACTIVITY-CARDS.md, decision 2)
 
 extension SessionController {
-    /// The packs and the reader's picks, when the emoji picker opens: once per
-    /// session after an answer, again after a failure.
+    /// The packs and the reader's picks, when the emoji picker opens or a card
+    /// asks about an emoji no server of the reader's owns: once per session
+    /// after an answer, again after a failure.
     func loadEmojiPacks() async {
         if LaunchOptions.current.usesDemoFixtures {
             guard model.emojiPacksLoad == .idle else { return }

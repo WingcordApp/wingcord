@@ -40,6 +40,8 @@ struct ActivityRow: Hashable, Sendable, Identifiable {
     var previewVideoURL: URL? = nil
     var monogram: String
     var isLaunchable: Bool
+    /// Discord's PROMOTED badge (`ActivityApp.isPromoted`).
+    var isPromoted = false
 }
 
 /// A titled row of the directory.
@@ -47,9 +49,12 @@ struct ActivitySection: Hashable, Sendable, Identifiable {
     var id: String
     var title: String
     var isFeatured: Bool
+    /// Every row; the view shows `collapsedCount` of them until See All.
     var rows: [ActivityRow]
     /// Whether the section has more than it is showing.
     var hasMore: Bool
+    /// How many rows show before See All.
+    var collapsedCount = Int.max
 }
 
 extension AppModel {
@@ -60,10 +65,11 @@ extension AppModel {
     /// for every account, and a fetch per popover open is a quarter of a
     /// megabyte for an answer that changes about as often as Discord ships a
     /// new game.
-    var activitySections: [ActivitySection] {
+    func activitySections(for context: ActivityLauncherContext) -> [ActivitySection] {
         let key = ActivityMemoKey(
             revision: activityRevision,
-            query: activityQuery.trimmingCharacters(in: .whitespaces)
+            query: activityQuery.trimmingCharacters(in: .whitespaces),
+            context: context
         )
         // Every observable input is read before the early return: a memo that
         // answers from its cache without touching them registers no dependency
@@ -77,7 +83,7 @@ extension AppModel {
         }
 
         let sections = key.query.isEmpty
-            ? browseSections(directory: directory, recents: recents)
+            ? browseSections(directory: directory, recents: recents, context: context)
             : [searchSection(results)]
         activitySectionsCache = (key, sections)
         return sections
@@ -97,7 +103,8 @@ extension AppModel {
 
     private func browseSections(
         directory: ActivityDirectory,
-        recents: [ApplicationID]
+        recents: [ApplicationID],
+        context: ActivityLauncherContext
     ) -> [ActivitySection] {
         var sections: [ActivitySection] = []
 
@@ -116,18 +123,22 @@ extension AppModel {
             ))
         }
 
-        for collection in directory.collections {
+        // **A call reads the voice launcher's collections**, as Discord's
+        // does (`surface=3`); the text launcher's stand in until they land.
+        let collections = context == .call && !directory.voiceCollections.isEmpty
+            ? directory.voiceCollections
+            : directory.collections
+        for collection in collections {
             let rows = collection.apps.map(Self.row(for:))
             guard !rows.isEmpty else { continue }
-            let shown = collection.isFeatured
-                ? rows
-                : Array(rows.prefix(Self.sectionRowsShown))
+            let collapsed = collection.isFeatured ? rows.count : Self.sectionRowsShown
             sections.append(ActivitySection(
                 id: collection.id,
                 title: collection.title,
                 isFeatured: collection.isFeatured,
-                rows: shown,
-                hasMore: shown.count < rows.count
+                rows: rows,
+                hasMore: rows.count > collapsed,
+                collapsedCount: collapsed
             ))
         }
         return sections
@@ -164,7 +175,8 @@ extension AppModel {
                 CDN.activityPreviewVideo(id: app.id, assetID: $0)
             },
             monogram: String(app.name.prefix(1)).uppercased(),
-            isLaunchable: app.isLaunchable
+            isLaunchable: app.isLaunchable,
+            isPromoted: app.isPromoted
         )
     }
 
@@ -282,6 +294,8 @@ struct ActivityMemoKey: Hashable, Sendable {
     /// arriving touches.
     var revision: UInt64
     var query: String
+    /// The text launcher and the voice launcher read different collections.
+    var context: ActivityLauncherContext
 }
 
 // MARK: - Publishing a running activity as presence

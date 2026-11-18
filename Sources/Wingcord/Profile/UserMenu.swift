@@ -647,6 +647,9 @@ extension View {
 struct UserMenuButton: View {
     @Binding var isOpen: Bool
 
+    @Environment(\.isOverBrightBanner) private var isOverBrightBanner
+    @Environment(\.motion) private var motion
+
     /// Up from 24, which Alex found small. Measured off his image 56.
     private static let side: CGFloat = 30
 
@@ -659,7 +662,9 @@ struct UserMenuButton: View {
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .interactiveChromeOverMedia(in: .circle)
+        // Dimmed over a bright banner (`BannerBrightness`).
+        .chromeOverBanner(in: .circle, dimmed: isOverBrightBanner, interactive: true)
+        .animation(motion.standard, value: isOverBrightBanner)
         .help("More")
         .accessibilityLabel(Text("More actions"))
     }

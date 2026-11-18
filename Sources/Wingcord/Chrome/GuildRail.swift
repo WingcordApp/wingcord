@@ -33,6 +33,8 @@ struct GuildRail: View, Equatable {
     var isHomeSelected: Bool
     var homeMentionCount: Int
     var homeHasUnread: Bool
+    /// The DM call's start, for the clock under the Home squircle.
+    var homeCallSince: Date? = nil
     /// Show All Servers, at the rail's head — where the rack expands into the
     /// list (REDESIGN.md R10). Nil where there is no list to expand into.
     var showAllServers: (() -> Void)? = nil
@@ -53,6 +55,7 @@ struct GuildRail: View, Equatable {
             && lhs.isHomeSelected == rhs.isHomeSelected
             && lhs.homeMentionCount == rhs.homeMentionCount
             && lhs.homeHasUnread == rhs.homeHasUnread
+            && lhs.homeCallSince == rhs.homeCallSince
             && (lhs.showAllServers == nil) == (rhs.showAllServers == nil)
             && (lhs.readAll == nil) == (rhs.readAll == nil)
     }
@@ -95,6 +98,7 @@ struct GuildRail: View, Equatable {
                     isSelected: isHomeSelected,
                     mentionCount: homeMentionCount,
                     hasUnread: homeHasUnread,
+                    callSince: homeCallSince,
                     action: selectHome
                 )
 

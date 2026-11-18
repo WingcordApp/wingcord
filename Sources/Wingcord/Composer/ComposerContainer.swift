@@ -95,6 +95,7 @@ struct ComposerContainer: View {
             cancelEdit: { model.cancelEdit(in: channelID) },
             editLatest: { model.editLatestOwnMessage(in: channelID) },
             escapeTranscript: { model.escapeTranscript(in: channelID) },
+            closesTopLayer: { model.closeTopLayerForEscape() },
             attachActions: refreshingAttachActions,
             scheduledAt: box?.scheduledAt,
             setSchedule: { model.setSchedule($0, in: channelID) },

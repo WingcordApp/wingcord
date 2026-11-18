@@ -1364,6 +1364,8 @@ struct MessageDTO: Decodable, Sendable {
     var media_mention: MediaMentionDTO?
     /// What a Server Hub message (type 69) is about. Never throws.
     var guild_space_data: GuildSpaceMessageDataField?
+    /// A call's record on a `CALL` message. Never throws.
+    var call: MessageCallDTO?
     var mentions: [UserDTO]?
     var mention_roles: [RoleID]?
     var mention_everyone: Bool?
@@ -1544,7 +1546,8 @@ struct MessageDTO: Decodable, Sendable {
             sharedTheme: shared_client_theme?.domain,
             mediaMention: media_mention?.domain,
             guildSpaceData: guild_space_data?.data,
-            contentEntry: ComponentDTO.contentEntry(components)
+            contentEntry: ComponentDTO.contentEntry(components),
+            call: call?.domain
         )
         return Message(
             id: id,
@@ -2187,6 +2190,8 @@ struct UserProfileDTO: Decodable, Sendable {
             bio: bio ?? base.decoration?.bio,
             themeColorValues: theme,
             badges: badges?.compactMap(\.domain) ?? [],
+            // Sent, even as `[]`, means Discord has said which badges show.
+            badgesFromProfile: badges != nil,
             profileEffectSKU: effectSKU,
             profileFrameSKU: frameSKU,
             wornCollectibles: worn,

@@ -59,6 +59,7 @@ struct ProfileConnectionCard: View {
 
     @Environment(\.openURL) private var openURL
     @Environment(\.motion) private var motion
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isOverTile = false
     @State private var isOverCard = false
     @State private var didCopy = false
@@ -179,7 +180,12 @@ struct ProfileConnectionCard: View {
             }
             if let since {
                 Label {
-                    Text("Member since \(since.formatted(.dateTime.day().month(.wide).year()))")
+                    // **Never cut off** (Alex, 2026-11-18: "the member since gets
+                    // cut off"): the short month fits the card, and a long
+                    // locale still gets a second line rather than an ellipsis.
+                    Text("Member since \(since.formatted(.dateTime.day().month(.abbreviated).year()))")
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "calendar")
                 }
@@ -215,9 +221,10 @@ struct ProfileConnectionCard: View {
         }
         .padding(14)
         .frame(width: width, alignment: .leading)
-        // **A material, not glass**: the card is words over a profile, the
-        // content layer, and glass turned the coloured seal into a grey mark.
-        .background(.regularMaterial, in: Self.cardShape)
+        // **Opaque** (Alex, 2026-11-18: "make the connections squircle in the
+        // full profile opaque"): a material let the note under it read through
+        // the card. The profile flyouts' own ground, in the profile's room.
+        .background(ProfileFlyoutGround.raised(in: colorScheme), in: Self.cardShape)
         .overlay { Self.cardShape.strokeBorder(Palette.edgeStrong) }
         .shadow(color: .black.opacity(0.3), radius: 18, y: 8)
         .contentShape(Self.cardShape)

@@ -191,6 +191,9 @@ struct HomeRailTile: View {
     var isSelected: Bool
     var mentionCount: Int
     var hasUnread: Bool
+    /// A DM call's start, while the reader is in one: its clock sits under
+    /// the squircle, so the call can be read from any server.
+    var callSince: Date? = nil
     var action: () -> Void
 
     @Environment(\.motion) private var motion
@@ -204,6 +207,13 @@ struct HomeRailTile: View {
                 RailIndicator(isSelected: isSelected, hasUnread: hasUnread)
 
                 icon
+                    .overlay(alignment: .bottom) {
+                        if let callSince {
+                            RailCallClock(since: callSince)
+                                .offset(y: 7)
+                                .transition(.scale(scale: 0.6).combined(with: .opacity))
+                        }
+                    }
                     .overlay(alignment: .bottomTrailing) {
                         if mentionCount > 0 {
                             UnreadBadge(count: mentionCount, isMuted: false)
@@ -211,6 +221,7 @@ struct HomeRailTile: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .animation(motion.standard, value: callSince == nil)
             }
             // The whole column is the target, for the reason above: the rail is
             // a strip of 44-point pictures and aiming between them should not
@@ -227,6 +238,7 @@ struct HomeRailTile: View {
         .animation(motion.glassMorph, value: isSelected)
         .railHoverLabel("Direct Messages", isHovered: isHovering)
         .accessibilityLabel(Text("Direct Messages"))
+        .accessibilityValue(Text(callSince == nil ? "" : "In a call"))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
@@ -588,5 +600,22 @@ extension GuildRailTile: Equatable {
         lhs.guild == rhs.guild
             && lhs.isSelected == rhs.isSelected
             && lhs.dragNode == rhs.dragNode
+    }
+}
+
+/// The DM call's clock under the Home squircle: the green digits the DM row
+/// shows, on a dark pill so they read over any icon, edged like a badge cut
+/// out of the picture it sits on.
+private struct RailCallClock: View {
+    var since: Date
+
+    var body: some View {
+        VoiceSessionClock(startedAt: since)
+            .padding(.horizontal, 5)
+            .frame(height: 16)
+            .background { Capsule().fill(Color.black.opacity(0.78)) }
+            .overlay { Capsule().strokeBorder(Palette.edge, lineWidth: 1) }
+            .fixedSize()
+            .allowsHitTesting(false)
     }
 }

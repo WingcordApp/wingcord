@@ -45,7 +45,7 @@ struct MediaGlassButton: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.4)
-        .interactiveChromeOverMedia(in: .circle)
+        .readableChromeOverMedia(in: .circle)
         .animation(motion.standard, value: isActive)
         .help(label)
         .accessibilityLabel(Text(label))
@@ -233,7 +233,7 @@ private struct MediaOverflowMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .interactiveChromeOverMedia(in: .circle)
+        .readableChromeOverMedia(in: .circle)
         .help("More actions")
         .accessibilityLabel("More actions")
     }

@@ -1,11 +1,16 @@
 import SwiftUI
 
-/// One titled row of the launcher.
+/// One titled section of the launcher, in the Showcase layout (Alex,
+/// 2026-11-18, picked over a list and a gallery: "i want smth beautiful").
 ///
-/// Three shapes behind one type, because the wire says which: Recents is a
-/// strip of bare icons, a `type: 5` collection is two artwork tiles across, and
-/// everything else is a list. Splitting them into three views at the call site
-/// would put the wire's own distinction in the caller.
+/// Four shapes behind one type, because the wire says which:
+/// - **Recents**: big icons with their names, in a row.
+/// - **A featured collection** (`type: 5`): a paging carousel of wide hero
+///   cards (`ActivityHeroCarousel`).
+/// - **Any other collection**: a two-column grid of cards — artwork above,
+///   the app below (`ActivityGridCard`) — and See All opens it in place.
+/// - **Search results**: rows, which scan faster than cards when you know
+///   the name you typed.
 struct ActivitySectionView: View {
     var section: ActivitySection
     var onOpen: (ActivityRow) -> Void
@@ -13,101 +18,112 @@ struct ActivitySectionView: View {
     /// the composer, where a card opens the app's page.
     var onStart: ((ActivityRow) -> Void)? = nil
 
+    @Environment(\.motion) private var motion
+    @State private var isExpanded = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.base) {
-            header
+        VStack(alignment: .leading, spacing: Spacing.snug) {
+            // The carousel carries its own weight; a title over it would be a
+            // label on the most obvious thing in the panel.
+            if kind != .featured { header }
             switch kind {
             case .recents: recents
-            case .featured: featured
+            case .featured:
+                ActivityHeroCarousel(rows: section.rows, onOpen: onOpen, onStart: onStart)
+            case .grid: grid
             case .list: list
             }
         }
     }
 
-    private enum Kind { case recents, featured, list }
+    private enum Kind { case recents, featured, grid, list }
 
     private var kind: Kind {
         if section.id == "recents" { return .recents }
-        return section.isFeatured ? .featured : .list
+        if section.id == "search" { return .list }
+        return section.isFeatured ? .featured : .grid
     }
 
-    /// The title, and nothing beside it.
+    /// The title in the section's own case, and See All where it has more.
     ///
-    /// **No "View More".** Discord's row has one; this does not, and that is a
-    /// decision rather than an omission — the link opens a full-window app
-    /// directory this client does not have, so a control here would be the
-    /// inert control `INVARIANTS.md` §5.5 forbids. The search field above
-    /// reaches every app in the directory, which is what the link was for.
+    /// **See All opens the section in place.** Discord's opens a full-window
+    /// app directory this client does not have; a link to nowhere would be
+    /// the inert control `INVARIANTS.md` §5.5 forbids, and a grid that grows
+    /// where you are looking is the shorter trip anyway.
     private var header: some View {
-        Text(section.title)
-            .font(Typeface.sectionHeader)
-            .foregroundStyle(Ink.secondary)
-            .textCase(.uppercase)
-            .kerning(0.4)
-            .padding(.leading, Spacing.tight)
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
+            Text(section.title)
+                .font(.system(.title3, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+                .lineLimit(1)
+            Spacer(minLength: Spacing.base)
+            if section.hasMore {
+                Button {
+                    withAnimation(motion.standard) { isExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(isExpanded ? "Show Less" : "See All")
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.right")
+                            .font(.system(.caption, weight: .semibold))
+                    }
+                    .font(.system(.subheadline, weight: .medium))
+                    .foregroundStyle(Palette.accent)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, Spacing.tight)
     }
 
     // MARK: Recents
 
-    /// Icons only, in a row.
-    ///
-    /// These are apps the reader has already launched — they know what they
-    /// are — so a name under each would be a caption on something already
-    /// recognised, and the strip would cost three rows instead of one.
+    private static let recentSide: CGFloat = 56
+
+    /// Big icons with their names: the games you already know, one press from
+    /// playing, the way a phone's dock holds its apps.
     private var recents: some View {
         ScrollView(.horizontal) {
-            HStack(alignment: .top, spacing: Spacing.snug) {
+            HStack(alignment: .top, spacing: Spacing.margin) {
                 ForEach(section.rows) { row in
                     Button {
                         if let onStart, row.isLaunchable { onStart(row) } else { onOpen(row) }
                     } label: {
-                        VStack(spacing: 4) {
+                        VStack(spacing: 6) {
                             ActivityIcon(row: row, side: Self.recentSide)
-                            // A name under each now that the strip is the
-                            // launcher's second row and a game's icon alone
-                            // isn't always its name (decision 5).
+                                .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
                             Text(row.name)
                                 .font(.system(.caption, weight: .medium))
                                 .foregroundStyle(Ink.secondary)
                                 .lineLimit(1)
                                 .frame(width: Self.recentSide + Spacing.snug)
                         }
+                        .contentShape(.rect)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ActivityPressStyle())
                     .help(onStart == nil ? row.name : "Start \(row.name)")
                     .accessibilityLabel(row.name)
                 }
             }
             .padding(.horizontal, Spacing.tight)
-            .padding(.vertical, Spacing.hair)
+            .padding(.vertical, Spacing.tight)
         }
         .scrollIndicators(.never)
     }
 
-    // MARK: Featured
+    // MARK: Grid
 
-    private static let recentSide: CGFloat = 52
-
-    /// Discord's featured shelf as cover cards (decision 5): the first across
-    /// the panel, the rest two by two, each playing its preview on hover.
-    private var featured: some View {
-        VStack(spacing: Spacing.snug) {
-            if let hero = section.rows.first {
-                ActivityFeatureCard(
-                    row: hero, isHero: true, onOpen: { onOpen(hero) },
-                    onStart: start(hero)
-                )
-            }
-            LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: Spacing.snug),
-                    GridItem(.flexible(), spacing: Spacing.snug),
-                ],
-                spacing: Spacing.snug
-            ) {
-                ForEach(section.rows.dropFirst()) { row in
-                    ActivityFeatureCard(row: row, onOpen: { onOpen(row) }, onStart: start(row))
-                }
+    private var grid: some View {
+        let shown = isExpanded ? section.rows : Array(section.rows.prefix(section.collapsedCount))
+        return LazyVGrid(
+            columns: [
+                GridItem(.flexible(), spacing: Spacing.snug, alignment: .top),
+                GridItem(.flexible(), spacing: Spacing.snug, alignment: .top),
+            ],
+            spacing: Spacing.margin
+        ) {
+            ForEach(shown) { row in
+                ActivityGridCard(row: row, onOpen: { onOpen(row) }, onStart: start(row))
             }
         }
     }
@@ -148,11 +164,11 @@ struct ActivityIcon: View {
                 .background(Palette.surfaceRaised)
         }
         .frame(width: side, height: side)
-        .clipShape(.rect(cornerRadius: side * 0.28, style: .continuous))
+        .clipShape(.rect(cornerRadius: side * 0.24, style: .continuous))
     }
 }
 
-// MARK: - A list row
+// MARK: - A search row
 
 private struct ActivityRowView: View {
     var row: ActivityRow
@@ -164,18 +180,27 @@ private struct ActivityRowView: View {
     var body: some View {
         Button(action: onOpen) {
             HStack(spacing: Spacing.snug) {
-                ActivityIcon(row: row, side: Metrics.activityRowIcon)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(row.name)
-                        .font(.system(.subheadline, weight: .semibold))
-                        .foregroundStyle(Ink.primary)
-                        .lineLimit(1)
-                    Text(row.subtitle)
-                        .font(Typeface.rowSubtitle)
-                        .foregroundStyle(Ink.tertiary)
-                        .lineLimit(1)
+                ActivityIcon(row: row, side: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: Spacing.base) {
+                        Text(row.name)
+                            .font(.system(.body, weight: .semibold))
+                            .foregroundStyle(Ink.primary)
+                            .lineLimit(1)
+                        if row.isPromoted { PromotedBadge() }
+                    }
+                    if !row.subtitle.isEmpty {
+                        Text(row.subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(Ink.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(.caption, weight: .semibold))
+                    .foregroundStyle(Ink.tertiary)
+                    .opacity(isHovered ? 1 : 0)
             }
             .padding(.horizontal, Spacing.base)
             .padding(.vertical, Spacing.base)
@@ -185,10 +210,10 @@ private struct ActivityRowView: View {
             )
             .contentShape(.rect(cornerRadius: Radius.row, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ActivityPressStyle())
         .onHover { isHovered = $0 }
         .animation(motion.hover, value: isHovered)
-        .accessibilityLabel(row.name)
+        .accessibilityLabel(row.isPromoted ? "\(row.name), promoted" : row.name)
         .accessibilityHint(row.subtitle)
     }
 }

@@ -55,6 +55,10 @@ struct ExpressionPicker: View {
     /// link, but a reaction names the emoji — so its catalog locks what the
     /// account may not use there. Nil for everything that writes a message.
     var reactingIn: ChannelID? = nil
+    /// **Where the pick goes**, which decides what is locked — a status's or
+    /// an activity's reaction goes to a DM, the reader's status or bio to no
+    /// server at all (`EmojiDestination`). A reaction's channel overrides it.
+    var destination: EmojiDestination = .composer
 
     init(
         mode: ExpressionMode,
@@ -64,7 +68,8 @@ struct ExpressionPicker: View {
         onPick: @escaping (ExpressionItem) -> Void,
         onPickGIF: @escaping (GIF) -> Void,
         onPickSuperReaction: ((ExpressionItem) -> Void)? = nil,
-        reactingIn: ChannelID? = nil
+        reactingIn: ChannelID? = nil,
+        destination: EmojiDestination = .composer
     ) {
         self.mode = mode
         self.initialSectionID = initialSectionID
@@ -74,6 +79,7 @@ struct ExpressionPicker: View {
         self.onPickGIF = onPickGIF
         self.onPickSuperReaction = onPickSuperReaction
         self.reactingIn = reactingIn
+        self.destination = destination
         _shown = State(initialValue: mode)
         _showsPacks = State(initialValue: mode == .emoji && initialEmojiPackID != nil)
     }
@@ -121,11 +127,17 @@ struct ExpressionPicker: View {
     /// top inset is derived from it, and the two must not drift.
     private static let railSide: CGFloat = 28
 
+    /// What this picker's pick is held to: a reaction's channel, else the
+    /// caller's destination.
+    private var emojiDestination: EmojiDestination {
+        reactingIn.map(EmojiDestination.channel) ?? destination
+    }
+
     private var catalog: ExpressionCatalog {
         switch shown {
         case .emoji:
             model.withUsageSections(
-                reactingIn.map(model.reactionEmojiCatalog(in:)) ?? model.emojiCatalog,
+                model.emojiCatalog(for: emojiDestination),
                 stickers: false,
                 reacting: reactingIn != nil
             )
@@ -162,8 +174,15 @@ struct ExpressionPicker: View {
                         // Discord's Nitro Emoji Packs, at the rail's foot: its
                         // Nitro mark, as wide as the rail's pill above it
                         // (Alex, 2026-11-17, Image 85).
-                        if shown == .emoji, reactingIn == nil {
-                            EmojiPacksRailButton(isShowing: showsPacks, width: Self.railSide + Spacing.tight * 2) {
+                        // In the add-reaction flyout too, as Discord's has it
+                        // (Alex, 2026-11-18): a pack's emoji picked there goes
+                        // through the same `onPick`, so it reacts.
+                        if shown == .emoji, model.emojiAllowance(for: emojiDestination).showsPacks {
+                            EmojiPacksRailButton(
+                                isShowing: showsPacks,
+                                width: Self.railSide + Spacing.tight * 2,
+                                isEnabled: reactingIn == nil || model.emojiPacksUsable
+                            ) {
                                 showsPacks.toggle()
                             }
                         }
@@ -324,18 +343,17 @@ struct ExpressionPicker: View {
         case .glyph(let glyph):
             Text(glyph).font(.system(.title))
         case .image(let url, let animated):
-            // The still, with the film over it — the same stack the grid uses,
-            // and the only way a Lottie sticker shows anything here at all,
-            // since it has no still to fall back on.
+            // The still, with the film over it — the same stack the grid uses.
+            // A Lottie sticker's still is its poster (`LottiePosters`), and the
+            // still steps aside once the film is up, so the two never show at
+            // once through a transparent edge.
             Color.clear
-                .overlay { RemoteImage(url: url, side: Metrics.control) { Color.clear } }
                 .overlay {
-                    if animated, let url {
-                        AnimatedDecoration(
-                            url: url,
-                            side: Metrics.control
-                        )
-                    }
+                    StillAndFilm(
+                        url: url,
+                        side: Metrics.control,
+                        plays: animated && settings.playsAnimatedMedia && !motion.reduceMotion
+                    ) { Color.clear }
                 }
         }
     }
@@ -519,6 +537,10 @@ private struct ExpressionRail: View {
             }
             .scrollIndicators(.never)
             .frame(width: side + Spacing.tight * 2)
+            // **Clipped to the pill its glass is**, not to the scroll view's
+            // rectangle: an icon scrolled to an end stood out past the curve
+            // (Alex, 2026-11-18).
+            .clipShape(.rect(cornerRadius: (side + Spacing.tight * 2) / 2, style: .continuous))
             .chromeOverMedia(in: .rect(cornerRadius: (side + Spacing.tight * 2) / 2, style: .continuous))
             .onChange(of: selection) { _, index in
                 withAnimation(motion.standard) { rail.scrollTo(index, anchor: .center) }

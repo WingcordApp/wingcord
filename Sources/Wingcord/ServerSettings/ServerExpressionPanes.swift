@@ -301,7 +301,7 @@ struct SoundboardPane: View {
             }
         }
         .modal(isPresented: $isUploading) {
-            SoundSheet(existing: nil) { draft in
+            SoundSheet(existing: nil, guildID: store.guildID) { draft in
                 guard let sound = draft.sound else { return }
                 Task {
                     await store.createSound(
@@ -346,7 +346,7 @@ struct SoundboardPane: View {
             get: { editing?.id == sound.id },
             set: { if !$0 { editing = nil } }
         )) {
-            SoundSheet(existing: sound) { draft in
+            SoundSheet(existing: sound, guildID: store.guildID) { draft in
                 Task {
                     await store.saveSound(
                         sound.id,

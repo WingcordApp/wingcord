@@ -25,6 +25,9 @@ final class VoiceController {
     unowned let model: AppModel
     private let rest: DiscordREST
     private weak var socket: GatewaySocket?
+    /// This client's gateway session, which a voice state names when the
+    /// connection is ours — kept current by the session controller.
+    var ownSessionID: String?
 
     /// The call's media session. The share and the watch below are the same
     /// type, each its own session on the wire — see `MediaSession`.
@@ -519,9 +522,29 @@ final class VoiceController {
             + "session=\(state.sessionID.isEmpty ? "MISSING" : "present")"
         )
 
+        // **Another device's voice, not ours** (Alex, 2026-11-18). The state
+        // names the session that holds the connection, and one that is not
+        // this client's means the reader joined from somewhere else. Discord
+        // then drops this client's call and says so, and its lobby shows the
+        // reader in the call they are in elsewhere. Following it, as this
+        // used to, handed the media handshake another device's session.
+        if let mine = ownSessionID, !state.sessionID.isEmpty, state.sessionID != mine {
+            if model.connectedVoiceChannelID != nil {
+                leaveLocally()
+                model.reportActionFailure(
+                    "Your voice has been disconnected because you connected at another location."
+                )
+            }
+            joiningChannelID = nil
+            // Kept (the local leave cleared it), so the conversation's lobby
+            // shows the reader where they are.
+            if state.channelID != nil { model.voiceStates[state.userID] = state }
+            model.voiceRevision &+= 1
+            return
+        }
         // Our own state. Two things come out of it: the session id the media
         // handshake needs, and the fact that a move happened somewhere else —
-        // another device, or a moderator.
+        // a moderator, or this client's own join.
         if state.channelID == nil {
             if model.connectedVoiceChannelID != nil { leaveLocally() }
             return

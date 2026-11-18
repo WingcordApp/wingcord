@@ -3025,12 +3025,26 @@ final class TimelineCanvasView: NSView {
         // that is one, a description full of them. The block was laid out in
         // embed space, so the point has to be brought into it the same way the
         // body's is.
+        //
+        // **And emoji, ahead of the links, as in the body**: an app's card is
+        // full of them — a check, a cross, a status — and each opens its card,
+        // an app's own one saying which app it is from (Alex, 2026-11-18).
         for text in row.embeds.lazy.flatMap(\.texts) {
             let inBlock = CGPoint(x: local.x - text.origin.x, y: local.y - text.origin.y)
             guard inBlock.x >= 0, inBlock.y >= 0,
-                  inBlock.x <= text.block.size.width, inBlock.y <= text.block.size.height,
-                  let hit = text.block.link(at: inBlock)
+                  inBlock.x <= text.block.size.width, inBlock.y <= text.block.size.height
             else { continue }
+            let emojiHit = text.block.emojiRects.first { $0.rect.contains(inBlock) }
+                ?? text.block.unicodeEmojiRects.first { $0.rect.contains(inBlock) }
+            if let emojiHit {
+                return .emoji(
+                    emojiHit.emoji,
+                    emojiHit.rect
+                        .offsetBy(dx: text.origin.x, dy: text.origin.y)
+                        .offsetBy(dx: frame.minX, dy: frame.minY)
+                )
+            }
+            guard let hit = text.block.link(at: inBlock) else { continue }
             return .link(
                 hit.target,
                 hit.rect
@@ -3236,9 +3250,18 @@ final class TimelineCanvasView: NSView {
             for text in forward.embeds.lazy.flatMap(\.texts) {
                 let inBlock = CGPoint(x: local.x - text.origin.x, y: local.y - text.origin.y)
                 guard inBlock.x >= 0, inBlock.y >= 0,
-                      inBlock.x <= text.block.size.width, inBlock.y <= text.block.size.height,
-                      let hit = text.block.link(at: inBlock)
+                      inBlock.x <= text.block.size.width, inBlock.y <= text.block.size.height
                 else { continue }
+                // Its cards' emoji open their cards, as an embed's own do.
+                let emojiHit = text.block.emojiRects.first { $0.rect.contains(inBlock) }
+                    ?? text.block.unicodeEmojiRects.first { $0.rect.contains(inBlock) }
+                if let emojiHit {
+                    return .emoji(
+                        emojiHit.emoji,
+                        emojiHit.rect.offsetBy(dx: text.origin.x, dy: text.origin.y).offsetBy(dx: frame.minX, dy: frame.minY)
+                    )
+                }
+                guard let hit = text.block.link(at: inBlock) else { continue }
                 return .link(
                     hit.target,
                     hit.rect.offsetBy(dx: text.origin.x, dy: text.origin.y).offsetBy(dx: frame.minX, dy: frame.minY)

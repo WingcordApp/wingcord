@@ -10,6 +10,8 @@ struct ConversationPane: View {
     /// and with a message long enough to wrap, and a hard-coded clearance is
     /// wrong in both directions the moment either happens.
     @State private var composerHeight: CGFloat = 0
+    /// The typing and slowmode row's share of `composerHeight`.
+    @State private var statusHeight: CGFloat = 0
 
     /// The toolbar's own strip, measured rather than assumed.
     ///
@@ -88,6 +90,7 @@ struct ConversationPane: View {
             channelID: channelID,
             topInset: chromeHeight + callHeight + activityHeight,
             bottomInset: composerHeight,
+            statusHeight: statusHeight,
             hostsSummaries: true
         )
             // **Out of the column's animation.** When the sidebar moves, the
@@ -186,6 +189,16 @@ struct ConversationPane: View {
                         // at the window's foot, so a line under it is a line
                         // jammed against the edge of the screen.
                         ComposerStatusRow(channelID: channelID)
+                            // Measured on its own so the transcript's air above
+                            // the composer can take it in rather than add to it.
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                                guard abs(statusHeight - height) > 0.5 else { return }
+                                var transaction = Transaction()
+                                transaction.disablesAnimations = true
+                                withTransaction(transaction) { statusHeight = height }
+                            }
+                            // A blocker in the composer's place has no row.
+                            .onDisappear { statusHeight = 0 }
                         ComposerContainer(channelID: channelID)
                     }
                 }

@@ -179,7 +179,9 @@ struct PollEditorSheet: View {
             EmojiSlotButton(
                 emoji: answer.emoji,
                 addLabel: "Add emoji, answer \(number)",
-                updateLabel: { "Update emoji, \($0.name), answer \(number)" }
+                updateLabel: { "Update emoji, \($0.name), answer \(number)" },
+                // An answer names its emoji, as a reaction does.
+                destination: .channel(request.channelID)
             )
             TextField("Type your answer", text: answer.text)
                 .textFieldStyle(.plain)

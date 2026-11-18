@@ -316,6 +316,9 @@ struct SidebarChannelRow: View {
                         plainOpacity: 0.9
                     )
                     .lineLimit(1)
+                    if channel.isOfficial {
+                        SidebarOfficialTag()
+                    }
                     if let tag = channel.tag {
                         SidebarTagChip(text: tag, badgeURL: channel.tagBadgeURL)
                     }
@@ -594,9 +597,12 @@ private struct SidebarRowLeading: View {
                 }
             }
         default:
+            // **A size up and medium**, so the glyph holds its own beside
+            // the name instead of fading under it (Alex, 2026-11-18: the
+            // icons looked washed out next to SakuraCord's and Swiftcord's).
             Image(symbol: channel.kind.symbolName)
-                .font(.system(.caption))
-                .foregroundStyle(Ink.tertiary)
+                .font(.system(.callout, weight: .medium))
+                .foregroundStyle(Ink.secondary)
                 .frame(width: 16)
         }
     }
@@ -775,11 +781,14 @@ struct SidebarCategoryRow: View {
                 Image(systemName: "chevron.right")
                     .font(.system(.caption2, weight: .bold))
                     .rotationEffect(.degrees(category.isExpanded ? 90 : 0))
-                Text(category.name.uppercased())
+                // **Normal case, a size up** (Alex, 2026-11-18): small
+                // uppercase at the faintest ink read as washed out; the name
+                // as the server wrote it is calmer and easier to read.
+                Text(category.name)
                     .font(Typeface.categoryHeader)
                     .lineLimit(1)
             }
-            .foregroundStyle(category.hasUnread ? AnyShapeStyle(Ink.secondary) : AnyShapeStyle(Ink.tertiary))
+            .foregroundStyle(category.hasUnread ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
             .frame(minHeight: Metrics.categoryMinHeight)
             .contentShape(.rect)
         }
@@ -810,8 +819,8 @@ struct SidebarActionRow: View {
     var body: some View {
             HStack(spacing: Spacing.base) {
                 Image(symbol: symbolName)
-                    .font(.system(.caption))
-                    .foregroundStyle(isSelected ? AnyShapeStyle(Ink.secondary) : AnyShapeStyle(Ink.tertiary))
+                    .font(.system(.callout, weight: .medium))
+                    .foregroundStyle(isSelected ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
                     // The channel rows' glyph gutter, to the point: the two kinds
                     // of row sit in one list and a name that starts two points
                     // off is the thing that makes a list look hand-assembled.
@@ -855,8 +864,8 @@ struct SidebarEventsRowView: View {
         Button(action: action) {
             HStack(spacing: Spacing.base) {
                 Image(systemName: "calendar")
-                    .font(.system(.caption))
-                    .foregroundStyle(row.hasUnread ? AnyShapeStyle(Ink.secondary) : AnyShapeStyle(Ink.tertiary))
+                    .font(.system(.callout, weight: .medium))
+                    .foregroundStyle(row.hasUnread ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
                     .frame(width: 16)
                 Text(row.title)
                     .font(row.hasUnread ? Typeface.rowTitleUnread : Typeface.rowTitle)

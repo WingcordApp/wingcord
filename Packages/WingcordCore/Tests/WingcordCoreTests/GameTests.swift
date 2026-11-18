@@ -70,21 +70,42 @@ struct GameTests {
                 website("https://www.instagram.com/thesims", .instagram),
             ]
         )
-        // Seven marks, which is what Discord's own page draws for this game.
-        #expect(game.socialLinks.count == 7)
-        #expect(!game.socialLinks.contains { $0.category == .steam })
-        #expect(!game.socialLinks.contains { $0.category == .discord })
-        #expect(!game.socialLinks.contains { $0.category == .wikipedia })
+        // Discord's row (its `pF`, read 2026-11-18): its order, not the
+        // response's, with Fandom in it and the stores and Wikipedia out.
+        #expect(game.socialLinks.map(\.category) == [
+            .official, .facebook, .twitter, .instagram, .youtube, .reddit, .twitch, .wikia,
+        ])
     }
 
-    @Test("Every link in the row has a brand to draw")
-    func socialLinksAllHaveMarks() {
+    @Test("The phone stores close the row: one each, on the store's own host or built from its id")
+    func socialLinksPhoneStores() {
+        let game = Game(
+            id: sims, name: "Phone game",
+            websites: [
+                website("https://example.com/not-the-app-store", .iphone),
+                website("https://itch.io/game", .itch),
+                website("https://apps.apple.com/app/id123", .ipad),
+                website("https://www.roblox.com/games/1", .roblox),
+            ],
+            thirdPartySkus: [GameSKU(distributor: "google_play", id: "com.example.game")]
+        )
+        let row = game.socialLinks
+        #expect(row.map(\.category) == [.roblox, .itch, .iphone, .android])
+        // An iPhone link off Apple's host is no store page; the iPad one is.
+        #expect(row[2].url.absoluteString == "https://apps.apple.com/app/id123")
+        #expect(row[3].url.absoluteString == "https://play.google.com/store/apps/details?id=com.example.game")
+    }
+
+    @Test("Every kind Discord's row shows is in it")
+    func socialLinkKinds() {
         for category in [
-            GameLinkCategory.official, .facebook, .twitter, .twitch, .instagram,
-            .youtube, .reddit, .bluesky,
+            GameLinkCategory.official, .facebook, .twitter, .instagram, .youtube, .bluesky,
+            .reddit, .twitch, .roblox, .itch, .wikia, .iphone, .ipad, .android,
         ] {
             #expect(category.isSocialLink)
-            #expect(category.brandService != nil)
+        }
+        for category in [GameLinkCategory.steam, .epicGames, .gog, .discord, .wikipedia, .battleNet, .riot, .minecraft] {
+            #expect(!category.isSocialLink)
         }
     }
 

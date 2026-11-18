@@ -16,7 +16,7 @@ struct TypingEmojiRow: View {
 
     @Environment(\.motion) private var motion
 
-    /// The glyph's side: the pill's caption line, a little larger, as the
+    /// The glyph's side: the typing line's caption size, a little larger, as the
     /// symbol it replaces reads at that size.
     private static let side: CGFloat = 14
 

@@ -69,27 +69,24 @@ extension AppModel {
         UnicodeEmoji.namedItems.filter(\.item.takesSkinTone).map(\.item.glyph)
     )
 
-    /// Whether the composer may offer an entry here — the composer picker's
-    /// own locks (`buildEmojiCatalog`): another server's emoji needs the
-    /// external-emoji permission (or Fake Nitro), an animated one the perk,
-    /// a pack's Nitro. Discord's list offers only its unlocked matches.
-    func emojiOfferRule() -> (EmojiNameTable.Entry) -> Bool {
-        let isFakeNitro = AppSettings.shared.sendsFakeEmoji
-        let home = selectedGuildID
-        let allowsExternal = isFakeNitro || selectedChannelID.map(canUseExternalEmoji(in:)) ?? true
-        let allowsAnimated = isFakeNitro || entitlements.has(.animatedEmoji)
-        let packsUsable = emojiPacksUsable
+    /// Whether an entry may be offered for a destination — the picker's own
+    /// locks for it (`emojiAllowance(for:)`): in the composer another
+    /// server's emoji needs the external-emoji permission (or Fake Nitro), an
+    /// animated one the perk, a pack's Nitro. Discord's list offers only its
+    /// unlocked matches.
+    func emojiOfferRule(for destination: EmojiDestination = .composer) -> (EmojiNameTable.Entry) -> Bool {
+        let allowance = emojiAllowance(for: destination)
         let held = Set(guildEmojis.keys)
         return { entry in
             switch entry.owner {
             case .unicode:
                 return true
             case .guild(let guildID):
-                guard held.contains(guildID) else { return false }
-                if guildID != home, !allowsExternal { return false }
-                return !entry.isAnimated || allowsAnimated
+                guard allowance.allowsCustom, held.contains(guildID) else { return false }
+                if guildID != allowance.home, !allowance.allowsExternal { return false }
+                return !entry.isAnimated || allowance.allowsAnimated
             case .pack:
-                return packsUsable
+                return allowance.allowsCustom && allowance.showsPacks && allowance.packsUsable
             }
         }
     }

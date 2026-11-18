@@ -26,6 +26,8 @@ struct TenureBadgePresenter: ViewModifier {
                         .buttonStyle(.plain)
                         .cancelAction(unless: model.isCovered(.tenureBadge))
                         .accessibilityLabel(Text("Close badge details"))
+                        // Past the titlebar (`INVARIANTS.md`).
+                        .ignoresSafeArea()
                         .transition(.opacity)
 
                         TenureBadgeSheet(

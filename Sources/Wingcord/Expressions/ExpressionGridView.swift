@@ -329,10 +329,13 @@ final class ExpressionGridCanvas: NSView {
             let section = sections[row.section]
             let items = section.items
             for column in 0..<row.count {
-                // A locked one stays a dimmed still, as the painter draws it:
-                // a film over it would play at full strength.
-                guard !section.isLocked, !items[first + column].isLocked,
-                      case .image(let url?, true) = items[first + column].art else { continue }
+                // **Locked ones move too, dimmed**, as in Discord's picker,
+                // which asks for the moving picture whenever animation is
+                // allowed and dims what can't be used (Alex, 2026-11-18: the
+                // Nitro packs stood still). The film takes the painter's
+                // dimming, so it never plays at full strength over a lock.
+                guard case .image(let url?, true) = items[first + column].art else { continue }
+                let isDimmed = section.isLocked || items[first + column].isLocked
                 let key = Self.filmKey(section: row.section, item: first + column)
                 let cell = layout.itemFrame(row: index, column: column)
                 wanted.insert(key)
@@ -351,6 +354,7 @@ final class ExpressionGridCanvas: NSView {
                     films[key] = player
                 }
                 player.layer.frame = cell
+                player.layer.opacity = isDimmed ? Float(ExpressionGridPainter.dimmedAlpha) : 1
             }
         }
         for (key, player) in films where !wanted.contains(key) {
@@ -895,22 +899,23 @@ final class ExpressionGridCoordinator: NSObject {
         var requests: [ImageStore.Key] = []
         var seen = Set<ImageStore.Key>()
 
-        // Filmstrips, kept apart from the stills: they are a different decode
-        // of the same URL into a different cache, and they are asked for second
-        // so the grid fills with pictures before it starts moving.
-        var films: [AnimatedImageStore.Key] = []
+        // **Lottie stickers' posters, kept apart from the stills**: the CDN
+        // has no bitmap for one, so its still is drawn (`LottiePosters`) — once,
+        // then from disk. Their motion is the film layer's (`syncFilms`); the
+        // filmstrips this used to decode for every moving cell were drawn by
+        // nobody once the films took over, and held the decode gate the
+        // posters and the rail were waiting on.
+        var posters: [LottiePosters.Key] = []
+        var seenPosters = Set<LottiePosters.Key>()
 
         // The heading pill's own icon, at the size the pill draws it.
         let badgePixels = Int((ExpressionGridPainter.badgeSide * scale).rounded(.up))
         for section in canvas.sections {
             guard case .image(let url, _) = section.badge, let url else { continue }
             if LottieFilmstrip.handles(url) {
-                // A Lottie cover's poster lives in the filmstrip cache; at this
-                // size the whole strip is a few kilobytes.
-                let film = AnimatedImageStore.Key(url: url, maximumPixelSize: badgePixels)
-                if AnimatedImageStore.shared.cached(film) == nil,
-                   !AnimatedImageStore.shared.isKnownStill(film) {
-                    films.append(film)
+                let poster = LottiePosters.Key(url: url, pixels: badgePixels)
+                if LottiePosters.shared.cached(poster) == nil, seenPosters.insert(poster).inserted {
+                    posters.append(poster)
                 }
                 continue
             }
@@ -920,45 +925,36 @@ final class ExpressionGridCoordinator: NSObject {
             }
         }
 
-        for index in canvas.visibleRowRange() {
+        // The rows on screen, then a few past them each way, so a scroll
+        // lands on pictures rather than on their arrival.
+        let visible = canvas.visibleRowRange()
+        let rows = max(0, visible.lowerBound - 2)..<min(canvas.layout.rows.count, visible.upperBound + 6)
+        for index in rows {
             let row = canvas.layout.rows[index]
             guard let first = row.firstItem else { continue }
             let items = canvas.sections[row.section].items
             for column in 0..<row.count {
-                guard case .image(let url, let animated) = items[first + column].art,
-                      let url
-                else { continue }
-                // Lottie has no still — the CDN serves only the JSON — so
-                // asking for one is a download and a decode that can only fail.
-                if !LottieFilmstrip.handles(url) {
-                    let key = ImageStore.Key(url: url, maximumPixelSize: pixels)
-                    if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
-                        requests.append(key)
+                guard case .image(let url, _) = items[first + column].art, let url else { continue }
+                if LottieFilmstrip.handles(url) {
+                    let poster = LottiePosters.Key(url: url, pixels: pixels)
+                    if LottiePosters.shared.cached(poster) == nil, seenPosters.insert(poster).inserted {
+                        posters.append(poster)
                     }
+                    continue
                 }
-                guard animated, animates else { continue }
-                let film = AnimatedImageStore.Key(
-                    url: url,
-                    maximumPixelSize: pixels,
-                    byteBudget: ExpressionGridPainter.filmBudget
-                )
-                // `isKnownStill` is what stops a single-frame asset being
-                // re-fetched and re-inspected forever by a grid that keeps
-                // asking whether it can move.
-                if AnimatedImageStore.shared.cached(film) == nil,
-                   !AnimatedImageStore.shared.isKnownStill(film) {
-                    films.append(film)
+                let key = ImageStore.Key(url: url, maximumPixelSize: pixels)
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append(key)
                 }
             }
         }
-        guard !requests.isEmpty || !films.isEmpty else { return }
+        guard !requests.isEmpty || !posters.isEmpty else { return }
 
         prefetchTask = Task { [weak self] in
             await ScrollWorkGate.waitUntilInactive()
             guard !Task.isCancelled else { return }
-            // Stills first, then the films that make them move — each drawn as
-            // it lands, coalesced (`ImageBatch`), so one slow sticker does not
-            // keep the rest of the grid blank.
+            // Stills first, each drawn as it lands, coalesced (`ImageBatch`),
+            // so one slow sticker does not keep the rest of the grid blank.
             await ImageBatch.load(
                 requests,
                 using: { await ImageStore.shared.image(for: $0) != nil },
@@ -967,13 +963,12 @@ final class ExpressionGridCoordinator: NSObject {
                     self.canvas?.needsDisplay = true
                 }
             )
-            guard !films.isEmpty, !Task.isCancelled else { return }
+            guard !posters.isEmpty, !Task.isCancelled else { return }
             await ImageBatch.load(
-                films,
-                using: { await AnimatedImageStore.shared.image(for: $0) != nil },
+                posters,
+                using: { await LottiePosters.shared.poster(for: $0) != nil },
                 landed: { [weak self] _ in
                     guard let self, !self.isTornDown else { return }
-                    self.canvas?.refreshAnimationState()
                     self.canvas?.needsDisplay = true
                 }
             )

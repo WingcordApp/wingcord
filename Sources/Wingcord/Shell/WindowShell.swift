@@ -55,6 +55,15 @@ struct WindowShell: View {
                 // title (`DetailHeader`).
                 .environment(\.conversationSlide, slide)
 
+            // **The header's shade, under the sidebar column too**, so the
+            // whole top edge darkens as one: the detail column draws its own
+            // (`DetailHeader`), and the gap above the floating panel showed
+            // the ground bare — a bright line along the sidebar's top.
+            // Under the panel, which refracts it like everything else.
+            HeaderShade()
+                .frame(width: max(0, laidLeading ?? layout.detailLeading))
+                .accessibilityHidden(true)
+
             SidebarPanel(layout: layout)
                 // The animated part of a change of state, keyed on the state
                 // and never on the width: a drag on the panel's edge must
@@ -438,8 +447,13 @@ private struct PanelGround<PanelOutline: Shape>: View {
 nonisolated enum PanelVeil {
     /// Dark in a dark room, light in a light one — the panel's rows read against
     /// the veil, not against whatever photograph is behind the glass.
+    ///
+    /// **0.30 in a dark room since 2026-11-18** (was 0.22): the thin material
+    /// lifts a dark theme towards grey, and the rows read lavender on it next
+    /// to SakuraCord's. The HIG: "Larger elements like sidebars are more
+    /// opaque, for legibility."
     static let color = Color.adaptive(
-        dark: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.22),
+        dark: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.30),
         light: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.30)
     )
 }

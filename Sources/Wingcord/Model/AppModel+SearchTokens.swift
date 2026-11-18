@@ -45,7 +45,7 @@ extension AppModel {
                 kind: .channel(id),
                 prefix: "In",
                 value: channel.map(displayName(of:)) ?? "a channel",
-                symbolName: channel?.kind.symbolName ?? "number"
+                symbolName: channel.map(channelSymbol(of:)) ?? "number"
             ))
         }
         for has in query.has.sorted(by: { $0.rawValue < $1.rawValue }) {

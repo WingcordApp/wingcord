@@ -7,6 +7,9 @@ import SwiftUI
 struct EmojiPacksRailButton: View {
     var isShowing: Bool
     var width: CGFloat
+    /// False in the add-reaction flyout for a reader without Nitro, who cannot
+    /// react with a pack's emoji (Alex, 2026-11-18: "gray out the button").
+    var isEnabled = true
     var action: () -> Void
 
     var body: some View {
@@ -19,7 +22,9 @@ struct EmojiPacksRailButton: View {
         }
         .buttonStyle(.plain)
         .interactiveChromeOverMedia(in: .capsule)
-        .help("View Nitro Emojis")
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
+        .help(isEnabled ? "View Nitro Emojis" : "Reacting with a Nitro Emoji Pack needs Nitro")
         .accessibilityLabel(Text("View Nitro Emojis"))
         .accessibilityAddTraits(isShowing ? [.isSelected] : [])
     }

@@ -76,13 +76,15 @@ struct SlowmodeIndicatorContainer: View {
 /// The trailing half of the line above the composer: a stopwatch, and what
 /// slowmode says.
 ///
-/// **The typing pill's own glass**, so the line reads as one row of notes
-/// belonging to the composer rather than two unrelated badges. It stays up for
-/// as long as the channel has slowmode, which is what Discord does and why: the
-/// limit is worth knowing before the first message, not after the refusal.
+/// **Text, like the typing line beside it** (Alex, 2026-11-18: no pills, "like
+/// on discord"), so the row reads as one line of notes belonging to the
+/// composer rather than two unrelated badges. It stays up for as long as the
+/// channel has slowmode, which is what Discord does and why: the limit is worth
+/// knowing before the first message, not after the refusal.
 ///
 /// Discord's three states and its words (module `960850`): "Slowmode is
-/// enabled.", the wait counting down as `m:ss`, and "Slowmode Immune" for a
+/// enabled" (no full stop on the bar, as Alex's screenshot of Discord shows,
+/// 2026-11-18), the wait counting down as `m:ss`, and "Slowmode Immune" for a
 /// reader who holds Bypass Slowmode. The tooltip is its sentence about the
 /// limit itself.
 struct SlowmodeIndicator: View, Equatable {
@@ -98,31 +100,31 @@ struct SlowmodeIndicator: View, Equatable {
     var phase: Phase
     /// The channel's limit, in seconds.
     var rateLimit: Int
-    /// A send was just held back, and the pill says so in the warning colour.
+    /// A send was just held back, and the line says so in the warning colour.
     var isEmphasized: Bool
 
     @Environment(\.motion) private var motion
 
     var body: some View {
+        // **Discord's bar, from Alex's screenshot of it** (2026-11-18): the
+        // stopwatch first, then the words, both in the quieter ink, and
+        // Discord's whole sentence on hover.
         HStack(spacing: Spacing.tight) {
             Image(systemName: "stopwatch")
                 .font(.system(.caption, weight: .semibold))
-                .opacity(isEmphasized ? 1 : 0.7)
             label
                 .font(Typeface.rowSubtitle)
-                // A countdown whose digits change width jiggles the pill once a
+                // A countdown whose digits change width jiggles the line once a
                 // second.
                 .monospacedDigit()
         }
-        // Solid rather than the hierarchy, for the typing pill's reason: this
-        // floats over the transcript, and a `.secondary` line resolves against
-        // whatever message is scrolling under it. See `InkColor.solid`.
-        .foregroundStyle(isEmphasized ? Palette.destructive : InkColor.solid)
+        // **Text, not a pill**, for the typing line's reasons, and a fixed ink
+        // rather than the vibrant hierarchy, which resolves against whatever
+        // message is scrolling under it. The insets are the old pill's.
+        .foregroundStyle(isEmphasized ? Palette.destructive : Ink.tertiary)
         .lineLimit(1)
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, 5)
-        // Status, not a control: a plain chip rather than glass.
-        .plainChip(in: .capsule)
         // Never compressed: beside a long typing sentence it is the sentence
         // that truncates, and a countdown cut to "0:…" says nothing.
         .fixedSize()
@@ -140,7 +142,7 @@ struct SlowmodeIndicator: View, Equatable {
     private var label: some View {
         switch phase {
         case .enabled:
-            Text("Slowmode is enabled.")
+            Text("Slowmode is enabled")
         case .waiting(let end):
             // **Floored at the end.** A body evaluated a moment after the wait
             // ran out — an emphasis flip racing the expiry — would otherwise

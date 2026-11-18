@@ -1,9 +1,11 @@
 import SwiftUI
 import WingcordCore
 
-/// The server's banner: artwork behind the channel list, **a plain rectangle**
-/// across the column (Alex, 2026-10-26, screenshot 19 — "this weird rounded
-/// shape": it was rounded on the leading side only, inset from the rail).
+/// The server's banner: the channel list's first thing, under the page
+/// switcher, 16:9 at the column's width, its top corners rounded and its foot
+/// fading into the glass (Alex, 2026-11-18 — before, it ran up under the toolbar
+/// as a hard-edged rectangle, and before that it was rounded on the leading
+/// side only, screenshot 19).
 ///
 /// **A fixed height that travels with the list, and nothing else.** It used to
 /// grow and zoom when the list was pulled past its top, driven by the scroll
@@ -52,12 +54,37 @@ struct SidebarBanner: View {
     var body: some View {
         artwork
             .frame(height: layout.bannerRestingHeight)
-            .overlay(alignment: .bottom) { bottomScrim }
-            // Edge to edge, square: the column's own band, as Discord draws
-            // it. Its foot is the scrim's soft edge, not a corner.
-            .clipped()
+            // Rounded at the top, where it meets the switcher; its foot has no
+            // corner because it has no edge — it fades into the glass.
+            .clipShape(UnevenRoundedRectangle(
+                topLeadingRadius: SidebarBannerLayout.cornerRadius,
+                topTrailingRadius: SidebarBannerLayout.cornerRadius,
+                style: .continuous
+            ))
+            .mask { footFade }
+            .padding(.horizontal, SidebarBannerLayout.sideInset)
+            .padding(.top, layout.bannerTop)
             .offset(y: -layout.travel)
             .allowsHitTesting(false)
+    }
+
+    /// **The foot fades into the sidebar** rather than ending on a line
+    /// (Alex, 2026-11-18). Whole for most of its height, then eased out — a
+    /// straight alpha ramp leaves a visible line where the last of the colour
+    /// goes; an eased one does not.
+    private var footFade: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black, location: 0.62),
+                .init(color: .black.opacity(0.82), location: 0.74),
+                .init(color: .black.opacity(0.45), location: 0.86),
+                .init(color: .black.opacity(0.14), location: 0.95),
+                .init(color: .clear, location: 1),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 
     /// The picture over the ground it loads onto.
@@ -105,24 +132,5 @@ struct SidebarBanner: View {
             }
             .clipped()
             .accessibilityHidden(true)
-    }
-
-    /// Darkens the block's own foot toward the list below it, so the edge is a
-    /// change of *shape* rather than a change of brightness.
-    ///
-    /// The alternative — fading the artwork's tint to transparent — reads as an
-    /// abrupt cut even though nothing about the luminance is abrupt: a linear
-    /// alpha ramp on a saturated colour drains the *saturation* out of a neutral
-    /// ground, and the height where the last of the colour disappears is a hard
-    /// line the eye finds. A deliberate edge reads as a boundary; a dissolving
-    /// one reads as a mistake.
-    private var bottomScrim: some View {
-        LinearGradient(
-            colors: [.clear, Palette.canvas.opacity(0.28), Palette.canvas.opacity(0.66)],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .frame(height: 64)
-        .allowsHitTesting(false)
     }
 }

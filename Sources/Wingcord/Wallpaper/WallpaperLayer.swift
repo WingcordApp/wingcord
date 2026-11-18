@@ -35,6 +35,14 @@ struct WallpaperLayer: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .task(id: wanted) { await show(wanted) }
+        // A colour theme's frost follows the theme, which `show` does not see.
+        .task(id: ThemeFrostKey(
+            source: wanted.source,
+            ground: ThemeStore.shared.ground,
+            isColour: ThemeStore.shared.groundIsColour
+        )) {
+            await refreshThemeFrost(for: wanted)
+        }
         // The dark room follows the picture, not the conversation: a
         // conversation on the theme puts the reader's own room back.
         .onChange(of: forcesDark(wanted), initial: true) { _, forces in
@@ -80,6 +88,7 @@ struct WallpaperLayer: View {
         // the fade has begun, so the switch never waits on it.
         let frostImage: CGImage? = switch wallpaper.source {
         case .preset(let preset): await Self.presetFrost(preset)
+        case .theme: await themeFrostImage()
         default: wallpaper.source.isPicture ? await WallpaperMedia.frost(of: wallpaper.source) : nil
         }
         guard !Task.isCancelled else { return }
@@ -96,6 +105,33 @@ struct WallpaperLayer: View {
     /// view rendered small, then blurred off the main actor.
     private static func presetFrost(_ preset: WallpaperPreset) async -> CGImage? {
         let renderer = ImageRenderer(content: PresetScene(preset: preset).frame(width: 768, height: 480))
+        guard let image = renderer.cgImage else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            WallpaperMedia.blurred(image, fraction: WallpaperMedia.frostFraction)
+        }.value
+    }
+
+    /// The theme's frost again whenever the theme changes under its own
+    /// ground — `show` runs only when the wallpaper does.
+    private func refreshThemeFrost(for wallpaper: Wallpaper) async {
+        guard wallpaper.source == .theme else { return }
+        let image = await themeFrostImage()
+        guard !Task.isCancelled, store.shown.source == .theme else { return }
+        frost.update(image: image, preset: nil, veil: veilAmount(wallpaper))
+    }
+
+    /// **Bubbles frosted under a colour theme too** (Alex, 2026-11-18: "make
+    /// them blurry when there's a theme applied too"): the theme's own page,
+    /// drawn small and blurred as a scene's is. Not under the plain dark or
+    /// light room — a flat colour gives a frost nothing to show, and a bubble
+    /// frosted over it is only a duller grey with less contrast for its words.
+    private func themeFrostImage() async -> CGImage? {
+        let theme = ThemeStore.shared
+        guard theme.groundIsColour else { return nil }
+        let renderer = ImageRenderer(
+            content: ThemeFrostScene(ground: theme.ground, isLight: ThemeInk.current.isLight)
+                .frame(width: 768, height: 480)
+        )
         guard let image = renderer.cgImage else { return nil }
         return await Task.detached(priority: .userInitiated) {
             WallpaperMedia.blurred(image, fraction: WallpaperMedia.frostFraction)
@@ -387,4 +423,31 @@ final class WallpaperVideoView: NSView {
         playerLayer = nil
         url = nil
     }
+}
+
+/// A colour theme's page, as its frost is made from: the gradient along the
+/// theme's line, and the veil over it.
+private struct ThemeFrostScene: View {
+    var ground: ThemeGround
+    var isLight: Bool
+
+    var body: some View {
+        GeometryReader { proxy in
+            let box = CGRect(origin: .zero, size: proxy.size)
+            let ends = GradientAxis.endpoints(angle: ground.angle, in: box)
+            LinearGradient(
+                gradient: ground.page,
+                startPoint: UnitPoint(x: ends.start.x / max(1, box.width), y: ends.start.y / max(1, box.height)),
+                endPoint: UnitPoint(x: ends.end.x / max(1, box.width), y: ends.end.y / max(1, box.height))
+            )
+            .overlay((isLight ? Color.white : Color.black).opacity(ground.pageVeil))
+        }
+    }
+}
+
+/// What a colour theme's frost is made from — redrawn when any of it changes.
+private struct ThemeFrostKey: Equatable {
+    var source: WallpaperSource
+    var ground: ThemeGround
+    var isColour: Bool
 }

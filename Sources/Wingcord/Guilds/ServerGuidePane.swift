@@ -2,13 +2,17 @@ import SwiftUI
 import WingcordCore
 
 /// The server's front page: who welcomed you, what to do first, and what to
-/// read.
+/// read — redesigned as a welcome poster (Alex, 2026-11-18: "i want smth cool
+/// nice and beautiful", picked over a settings-style list and a journey).
 ///
 /// **Everything on it is either the server's own content or a fact about it.**
-/// The banner, the icon and an action's emoji are the server's colour; the
-/// chrome around them is achromatic. That is the same rule `GuildProfileCard` is
-/// built on, and it is why this page can carry a photograph across its head
-/// without competing with itself.
+/// The banner — or, without one, a gradient drawn from the server's own icon
+/// — the icon and an action's emoji are the server's colour; the chrome around
+/// them is achromatic, with the accent for what is open and for the rules.
+///
+/// **A channel opens beside the page** (his pick): every row puts its channel
+/// in the column next to the guide, so the reader keeps their place and can
+/// read several in turn; the column's Open Channel goes all the way.
 struct ServerGuideContainer: View {
     @Environment(AppModel.self) private var model
 
@@ -18,7 +22,6 @@ struct ServerGuideContainer: View {
                 ServerGuidePane(
                     presentation: presentation,
                     previewedChannelID: model.previewedChannelID,
-                    openChannel: { model.openChannelFromSurface($0) },
                     previewChannel: { model.previewChannel($0) },
                     openRules: { model.openServerRules(inGuild: presentation.guildID) }
                 )
@@ -38,7 +41,7 @@ struct ServerGuideContainer: View {
 
 struct ServerGuidePane: View, Equatable {
     var presentation: ServerGuidePresentation
-    /// Which resource, if any, is open in the column beside this page.
+    /// Which channel, if any, is open in the column beside this page.
     var previewedChannelID: ChannelID?
 
     static func == (lhs: ServerGuidePane, rhs: ServerGuidePane) -> Bool {
@@ -46,14 +49,19 @@ struct ServerGuidePane: View, Equatable {
             && lhs.previewedChannelID == rhs.previewedChannelID
     }
 
-    var openChannel: (ChannelID) -> Void = { _ in }
     var previewChannel: (ChannelID) -> Void = { _ in }
     var openRules: () -> Void = {}
 
-    var body: some View {
-        SurfacePage {
-            GuildHero(presentation: presentation)
+    /// The page settles in once, section by section — see `SurfaceEntrance`.
+    @State private var hasAppeared = false
 
+    var body: some View {
+        // **The whole column, not a reading measure** (Alex, 2026-11-18: "i
+        // was imagining the server guide to fill this whole space"): a front
+        // page, not an article.
+        SurfacePage(measure: .infinity) {
+            GuidePosterHero(presentation: presentation)
+                .modifier(SurfaceEntrance(index: 0, isShown: hasAppeared))
             if presentation.isLoading && !presentation.hasContent {
                 SurfaceLoadingState(message: "Loading the server guide…")
             } else if !presentation.hasContent {
@@ -68,49 +76,50 @@ struct ServerGuidePane: View, Equatable {
                 // not speak in it, and nothing else on screen says so.
                 if presentation.isPendingMember && presentation.hasRules {
                     PendingRulesBanner(action: openRules)
+                        .modifier(SurfaceEntrance(index: 1, isShown: hasAppeared))
                 }
                 if let welcome = presentation.welcome {
-                    WelcomeNote(welcome: welcome)
+                    WelcomeBubble(welcome: welcome)
+                        .modifier(SurfaceEntrance(index: 2, isShown: hasAppeared))
                 }
                 if !presentation.actions.isEmpty || presentation.hasRules {
-                    SurfaceSection(title: "Get Started") {
-                        SurfaceCard {
-                            ForEach(Array(presentation.actions.enumerated()), id: \.element.id) { index, row in
-                                if index > 0 { SurfaceDivider() }
-                                // **An action navigates; a resource previews.**
-                                // The payload draws that line itself, and it is
-                                // the right one: "come say hello" is somewhere
-                                // to go, and "nifty links that might be helpful"
-                                // is something to read without losing this page.
-                                GuideRow(row: row, isOpen: false, act: openChannel)
+                    GuideSection(title: "Get Started") {
+                        // As many across as the column holds: two in a narrow
+                        // window, four in a wide one.
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 240), spacing: Spacing.margin, alignment: .top)],
+                            spacing: Spacing.margin
+                        ) {
+                            ForEach(presentation.actions) { row in
+                                GuideActionCard(
+                                    row: row,
+                                    isOpen: previewedChannelID == row.channelID,
+                                    act: previewChannel
+                                )
                             }
                             if presentation.hasRules {
-                                if !presentation.actions.isEmpty { SurfaceDivider() }
                                 // **It goes to the rules channel**, like every
-                                // other row in this list — the guide's job is to
-                                // point at rooms. The sheet is the fallback for
-                                // a server that has rules and no channel to read
-                                // them in, and the destination line says which
-                                // of the two this is.
-                                SurfaceNavigationRow(
-                                    glyph: .symbol("checkmark.seal"),
-                                    title: "Read the rules",
-                                    detail: nil,
-                                    destination: presentation.rulesChannelName,
-                                    destinationSymbolName: presentation.rulesChannelSymbolName,
-                                    isEmphasised: true,
+                                // other card — the sheet is the fallback for a
+                                // server with rules and no channel to read
+                                // them in.
+                                GuideRulesCard(
+                                    channelName: presentation.rulesChannelName,
+                                    channelSymbolName: presentation.rulesChannelSymbolName,
                                     action: openRules
                                 )
                             }
                         }
                     }
+                    .modifier(SurfaceEntrance(index: 3, isShown: hasAppeared))
                 }
                 if !presentation.resources.isEmpty {
-                    SurfaceSection(title: "Resources") {
-                        SurfaceCard {
-                            ForEach(Array(presentation.resources.enumerated()), id: \.element.id) { index, row in
-                                if index > 0 { SurfaceDivider() }
-                                GuideRow(
+                    GuideSection(title: "Resources") {
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 380), spacing: Spacing.margin, alignment: .top)],
+                            spacing: Spacing.margin
+                        ) {
+                            ForEach(presentation.resources) { row in
+                                GuideResourceCard(
                                     row: row,
                                     isOpen: previewedChannelID == row.channelID,
                                     act: previewChannel
@@ -118,36 +127,483 @@ struct ServerGuidePane: View, Equatable {
                             }
                         }
                     }
+                    .modifier(SurfaceEntrance(index: 4, isShown: hasAppeared))
                 }
             }
+        }
+        .onAppear { hasAppeared = true }
+    }
+}
+
+// MARK: - Motion
+
+/// A card's lift under the pointer, shared by every card on the page.
+private struct GuideCardChrome: ViewModifier {
+    var isHovered: Bool
+    var isOpen: Bool
+    var cornerRadius: CGFloat = GuideMetrics.cardCorner
+
+    @Environment(\.motion) private var motion
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(isOpen ? Palette.accent.opacity(0.12) : Color.white.opacity(isHovered ? 0.08 : 0.05))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(
+                        isOpen ? Palette.accent.opacity(0.8) : Palette.edge,
+                        lineWidth: isOpen ? 1.5 : 1
+                    )
+                    .allowsHitTesting(false)
+            }
+            .scaleEffect(isHovered && !motion.reduceMotion ? 1.012 : 1)
+            .shadow(
+                color: .black.opacity(isHovered ? 0.28 : 0.12),
+                radius: isHovered ? 16 : 6,
+                y: isHovered ? 8 : 3
+            )
+            .animation(motion.hover, value: isHovered)
+            .animation(motion.standard, value: isOpen)
+    }
+}
+
+private enum GuideMetrics {
+    static let cardCorner: CGFloat = 20
+    static let glyphWell: CGFloat = 60
+    /// The glyph inside its well, up from the surface kit's 26.
+    static let glyphScale: CGFloat = 1.3
+}
+
+// MARK: - The head of the page
+
+/// The server as a poster: its banner across the head — or a gradient drawn
+/// from its own icon where it has none, never a dark slab — the icon large and
+/// centred over the banner's edge, the name and its mark under it, and the
+/// member counts as pills.
+///
+/// The banner is `Color.clear` with the picture as an **overlay**, never as a
+/// sibling: an aspect-filled image reports the image's size to layout and takes
+/// the column with it — the trap `SidebarBanner` and the full profile both
+/// already document.
+private struct GuidePosterHero: View {
+    var presentation: ServerGuidePresentation
+
+    private static let bannerHeight: CGFloat = 300
+    private static let iconSide: CGFloat = 128
+    /// How far the icon hangs below the artwork.
+    private static let iconDrop: CGFloat = 58
+    /// The ring of page ground cut around the icon.
+    private static let ring: CGFloat = 8
+
+    var body: some View {
+        VStack(spacing: Spacing.snug) {
+            ZStack(alignment: .bottom) {
+                banner
+                icon.offset(y: Self.iconDrop)
+            }
+            .padding(.bottom, Self.iconDrop)
+            identity
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var banner: some View {
+        Color.clear
+            .frame(height: Self.bannerHeight)
+            .overlay {
+                if let bannerURL = presentation.bannerURL {
+                    RemoteImage(url: bannerURL, side: Proportions.surfaceColumnMax, bucket: .artwork) {
+                        GuideBannerArt(iconURL: presentation.iconURL)
+                    }
+                    .aspectRatio(contentMode: .fill)
+                } else {
+                    GuideBannerArt(iconURL: presentation.iconURL)
+                }
+            }
+            .overlay {
+                // Depth at the foot, where the icon sits.
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.28)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+            }
+            .clipShape(.rect(cornerRadius: GuideMetrics.cardCorner + 4, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: GuideMetrics.cardCorner + 4, style: .continuous)
+                    .strokeBorder(Palette.edge, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            // The gap around the icon is a **hole** in the artwork rather than a
+            // stroke over it, so what shows through is the page's own ground.
+            .mask(alignment: .bottom) { iconHole }
+    }
+
+    private var iconHole: some View {
+        Rectangle()
+            .overlay(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: (Self.iconSide + Self.ring * 2) * 0.3, style: .continuous)
+                    .frame(width: Self.iconSide + Self.ring * 2, height: Self.iconSide + Self.ring * 2)
+                    .offset(y: Self.iconDrop + Self.ring)
+                    .blendMode(.destinationOut)
+            }
+            .compositingGroup()
+    }
+
+    private var icon: some View {
+        RemoteImage(url: presentation.iconURL, side: Self.iconSide) {
+            Text(presentation.monogram)
+                .font(.system(size: Self.iconSide * 0.3, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: Self.iconSide, height: Self.iconSide)
+                .background { GuideBannerArt(iconURL: nil) }
+        }
+        .frame(width: Self.iconSide, height: Self.iconSide)
+        .clipShape(.rect(cornerRadius: Self.iconSide * 0.3, style: .continuous))
+        .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
+    }
+
+    private var identity: some View {
+        VStack(spacing: Spacing.base) {
+            HStack(spacing: Spacing.base) {
+                Text(presentation.name)
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(Ink.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                if let mark = presentation.mark {
+                    // **Sized to the title it stands beside** (Alex, 2026-11-18,
+                    // Image 200): the badge's own 18 points sat at half the
+                    // height of a 34-point name, as Discord's never does.
+                    GuildMarkBadge(mark: mark, side: 28)
+                }
+            }
+            HStack(spacing: Spacing.base) {
+                if let count = presentation.memberCount {
+                    GuidePill(dot: Ink.tertiary, text: "\(count.formatted(.number)) members")
+                }
+                if let online = presentation.onlineCount {
+                    GuidePill(dot: Palette.presenceOnline, text: "\(online.formatted(.number)) online")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// A fact about the server, as a pill: a coloured dot and its words.
+private struct GuidePill: View {
+    var dot: Color
+    var text: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Circle().fill(dot).frame(width: 8, height: 8)
+            Text(text)
+                .font(.system(.callout, weight: .medium))
+                .foregroundStyle(Ink.secondary)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, Spacing.snug + 2)
+        .frame(height: 32)
+        .background(Color.white.opacity(0.06), in: .capsule)
+        .overlay { Capsule().strokeBorder(Palette.edge, lineWidth: 1) }
+    }
+}
+
+/// A server with no banner gets one made of its own icon: the icon's colours
+/// spread across a mesh, softly lit from the top corner — the server's colour,
+/// never a flat dark slab. Without an icon, the accent's.
+private struct GuideBannerArt: View {
+    var iconURL: URL?
+
+    @State private var swatches: [Color] = []
+
+    var body: some View {
+        let colours = Self.three(swatches)
+        MeshGradient(
+            width: 3,
+            height: 2,
+            points: [
+                [0, 0], [0.5, 0], [1, 0],
+                [0, 1], [0.55, 1], [1, 1],
+            ],
+            colors: [
+                colours[0], colours[1], colours[2],
+                colours[1].mix(with: .black, by: 0.45),
+                colours[2].mix(with: .black, by: 0.35),
+                colours[0].mix(with: .black, by: 0.5),
+            ]
+        )
+        .overlay {
+            RadialGradient(
+                colors: [.white.opacity(0.18), .clear],
+                center: .topLeading,
+                startRadius: 0,
+                endRadius: 420
+            )
+        }
+        .animation(.easeOut(duration: 0.35), value: swatches)
+        .task(id: iconURL) {
+            swatches = await Self.swatches(for: iconURL)
+        }
+    }
+
+    private static func three(_ swatches: [Color]) -> [Color] {
+        let accent = Palette.accent
+        var colours = swatches
+        let fallback = [accent, accent.mix(with: .purple, by: 0.5), accent.mix(with: .black, by: 0.3)]
+        while colours.count < 3 { colours.append(fallback[colours.count]) }
+        return colours
+    }
+
+    /// The icon's most significant colours, from a small decode.
+    private static func swatches(for url: URL?) async -> [Color] {
+        guard let url,
+              let image = await ImageStore.shared.image(
+                  for: ImageStore.Key(url: url, maximumPixelSize: 64),
+                  bucket: .thumbnail
+              )
+        else { return [] }
+        return ProfileThemePalette.palette(of: image).prefix(3).map { swatch in
+            Color(
+                red: Double(swatch.x) / 255,
+                green: Double(swatch.y) / 255,
+                blue: Double(swatch.z) / 255
+            )
         }
     }
 }
 
-/// One row of the guide, in either list.
+// MARK: - The welcome
+
+/// The sentence somebody in the server wrote to whoever arrives, as a message
+/// from them: their face, their name — and the crown the group-DM owner gets,
+/// for the same reason — and the words in a bubble pointing back at them.
+private struct WelcomeBubble: View {
+    var welcome: ServerGuidePresentation.Welcome
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Spacing.snug) {
+            AvatarView(url: welcome.avatarURL, monogram: welcome.authorMonogram, side: 48)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(welcome.authorName)
+                        .font(.system(.body, weight: .semibold))
+                        .foregroundStyle(Ink.primary)
+                        .lineLimit(1)
+                    if welcome.isOwner {
+                        Image(systemName: "crown.fill")
+                            .font(.system(.caption))
+                            .foregroundStyle(Palette.presenceIdle)
+                            .accessibilityLabel("Server owner")
+                    }
+                }
+                Text(welcome.message)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Ink.primary)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 14)
+                    .background {
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 6,
+                            bottomLeadingRadius: 20,
+                            bottomTrailingRadius: 20,
+                            topTrailingRadius: 20,
+                            style: .continuous
+                        )
+                        .fill(Color.white.opacity(0.07))
+                    }
+                    .overlay {
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 6,
+                            bottomLeadingRadius: 20,
+                            bottomTrailingRadius: 20,
+                            topTrailingRadius: 20,
+                            style: .continuous
+                        )
+                        .strokeBorder(Palette.edge, lineWidth: 1)
+                    }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+// MARK: - Sections and cards
+
+private struct GuideSection<Content: View>: View {
+    var title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.snug) {
+            Text(title)
+                .font(.system(.title2, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+                .padding(.horizontal, Spacing.tight)
+            content
+        }
+    }
+}
+
+/// Where a card leads: the channel's glyph and its name, as a chip.
+private struct ChannelChip: View {
+    var name: String
+    var symbolName: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(symbol: symbolName)
+                .font(.system(.caption, weight: .semibold))
+            Text(name)
+                .font(.system(.caption, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(Ink.secondary)
+        .padding(.horizontal, Spacing.base)
+        .frame(height: 22)
+        .background(Color.white.opacity(0.07), in: .capsule)
+    }
+}
+
+/// One step of Get Started: the emoji in a tinted well, what to do, and where.
 ///
-/// Its own view rather than a closure in the page's body, so the row's identity
-/// is structurally stable across the page's updates and the `action` closure it
-/// captures is not rebuilt per evaluation of the whole page.
-private struct GuideRow: View {
+/// **Only a button when it leads somewhere.** A guide can name a channel the
+/// reader may not see, and a card that stops at the permission check is the
+/// inert control §5.5 forbids.
+private struct GuideActionCard: View {
     var row: ServerGuidePresentation.Row
-    /// Whether this row's channel is the one already open beside the page.
+    /// Whether its channel is the one open beside the page.
     var isOpen: Bool
     var act: (ChannelID) -> Void
 
+    @State private var isHovered = false
+
     var body: some View {
-        SurfaceNavigationRow(
-            glyph: row.glyph,
-            title: row.title,
-            detail: row.detail,
-            destination: row.channelName,
-            destinationSymbolName: row.channelSymbolName,
-            isOpen: isOpen,
-            // **The row is only a button when it leads somewhere.** A guide can
-            // name a channel the reader may not see, and a pressable row that
-            // stops at the permission check is the inert control §5.5 forbids.
-            action: row.channelName == nil ? nil : { act(row.channelID) }
-        )
+        Button { act(row.channelID) } label: {
+            VStack(alignment: .leading, spacing: Spacing.snug) {
+                SurfaceGlyphView(glyph: row.glyph)
+                    .scaleEffect(GuideMetrics.glyphScale)
+                    .frame(width: GuideMetrics.glyphWell, height: GuideMetrics.glyphWell)
+                    .background(Circle().fill(Color.white.opacity(0.08)))
+                Text(row.title)
+                    .font(.system(.title3, weight: .semibold))
+                    .foregroundStyle(Ink.primary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if let name = row.channelName {
+                    ChannelChip(name: name, symbolName: row.channelSymbolName)
+                }
+            }
+            .padding(Spacing.margin)
+            .frame(maxWidth: .infinity, minHeight: 176, alignment: .topLeading)
+            .modifier(GuideCardChrome(isHovered: isHovered, isOpen: isOpen))
+            .contentShape(.rect(cornerRadius: GuideMetrics.cardCorner, style: .continuous))
+        }
+        .buttonStyle(ActivityPressStyle())
+        .disabled(row.channelName == nil)
+        .onHover { isHovered = $0 && row.channelName != nil }
+        .accessibilityLabel(Text(row.title))
+        .accessibilityValue(Text(row.channelName.map { "Opens \($0)" } ?? ""))
+    }
+}
+
+/// Read the rules: the one card in the accent, because it is the one the
+/// server asks of everybody.
+private struct GuideRulesCard: View {
+    var channelName: String?
+    var channelSymbolName: String
+    var action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: Spacing.snug) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(Palette.accent)
+                    .frame(width: GuideMetrics.glyphWell, height: GuideMetrics.glyphWell)
+                    .background(Circle().fill(Palette.accent.opacity(0.16)))
+                Text("Read the rules")
+                    .font(.system(.title3, weight: .semibold))
+                    .foregroundStyle(Ink.primary)
+                Spacer(minLength: 0)
+                if let channelName {
+                    ChannelChip(name: channelName, symbolName: channelSymbolName)
+                }
+            }
+            .padding(Spacing.margin)
+            .frame(maxWidth: .infinity, minHeight: 176, alignment: .topLeading)
+            .modifier(GuideCardChrome(isHovered: isHovered, isOpen: false))
+            .contentShape(.rect(cornerRadius: GuideMetrics.cardCorner, style: .continuous))
+        }
+        .buttonStyle(ActivityPressStyle())
+        .onHover { isHovered = $0 }
+        .accessibilityLabel(Text("Read the rules"))
+    }
+}
+
+/// A resource: its glyph in a tinted well, its title and what it is, and the
+/// channel — wide, because a resource has a sentence to say.
+private struct GuideResourceCard: View {
+    var row: ServerGuidePresentation.Row
+    var isOpen: Bool
+    var act: (ChannelID) -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button { act(row.channelID) } label: {
+            HStack(alignment: .center, spacing: Spacing.margin) {
+                SurfaceGlyphView(glyph: row.glyph)
+                    .scaleEffect(GuideMetrics.glyphScale)
+                    .frame(width: 64, height: 64)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(row.title)
+                        .font(.system(.title3, weight: .semibold))
+                        .foregroundStyle(Ink.primary)
+                        .lineLimit(1)
+                    if let detail = row.detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(.subheadline))
+                            .foregroundStyle(Ink.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                    if let name = row.channelName {
+                        ChannelChip(name: name, symbolName: row.channelSymbolName)
+                    }
+                }
+                Spacer(minLength: Spacing.base)
+                Image(systemName: isOpen ? "sidebar.right" : "chevron.right")
+                    .font(.system(.body, weight: .semibold))
+                    .foregroundStyle(isOpen ? Palette.accent : Ink.tertiary)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .padding(Spacing.margin)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(GuideCardChrome(isHovered: isHovered, isOpen: isOpen))
+            .contentShape(.rect(cornerRadius: GuideMetrics.cardCorner, style: .continuous))
+        }
+        .buttonStyle(ActivityPressStyle())
+        .disabled(row.channelName == nil)
+        .onHover { isHovered = $0 && row.channelName != nil }
+        .accessibilityLabel(Text(row.title))
+        .accessibilityHint(Text(row.detail ?? ""))
     }
 }
 
@@ -178,156 +634,12 @@ private struct PendingRulesBanner: View {
         .padding(Spacing.margin)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            RoundedRectangle(cornerRadius: GuideMetrics.cardCorner, style: .continuous)
                 .fill(Palette.accent.opacity(0.14))
         }
         .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            RoundedRectangle(cornerRadius: GuideMetrics.cardCorner, style: .continuous)
                 .strokeBorder(Palette.accent.opacity(0.45), lineWidth: 1)
-        }
-    }
-}
-
-// MARK: - The head of the page
-
-/// The server, at the size a front page gives it.
-///
-/// The banner is `Color.clear` with the picture as an **overlay**, never as a
-/// sibling: an aspect-filled image reports the image's size to layout and takes
-/// the column with it — the trap `SidebarBanner` and the full profile both
-/// already document.
-private struct GuildHero: View {
-    var presentation: ServerGuidePresentation
-
-    private static let bannerHeight: CGFloat = 148
-    private static let iconSide: CGFloat = 68
-    /// How far the icon hangs below the artwork.
-    private static let iconDrop: CGFloat = 22
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            banner
-            identity
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var banner: some View {
-        ZStack(alignment: .bottomLeading) {
-            Color.clear
-                .background(Palette.surfaceRaised)
-                .overlay {
-                    if let bannerURL = presentation.bannerURL {
-                        RemoteImage(
-                            url: bannerURL,
-                            side: Proportions.surfaceColumnMax,
-                            bucket: .artwork
-                        ) {
-                            Color.clear
-                        }
-                        .aspectRatio(contentMode: .fill)
-                    }
-                }
-                .frame(height: Self.bannerHeight)
-                .clipped()
-                .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-                // The gap around the icon is a **hole** in the artwork rather
-                // than a stroke over it, so what shows through is the page's own
-                // ground. A stroke is a hard outline stuck to the icon on every
-                // dark banner, which is most of them.
-                .mask(alignment: .bottomLeading) { iconMask }
-
-            icon
-                .padding(.leading, Spacing.margin)
-                .offset(y: Self.iconDrop)
-        }
-        .padding(.bottom, Self.iconDrop)
-    }
-
-    private var iconMask: some View {
-        Rectangle()
-            .overlay(alignment: .bottomLeading) {
-                RoundedRectangle(cornerRadius: Self.iconSide * 0.4, style: .continuous)
-                    .frame(width: Self.iconSide + 12, height: Self.iconSide + 12)
-                    .padding(.leading, Spacing.margin - 6)
-                    .offset(y: Self.iconDrop + 6)
-                    .blendMode(.destinationOut)
-            }
-            .compositingGroup()
-    }
-
-    private var icon: some View {
-        RemoteImage(url: presentation.iconURL, side: Self.iconSide) {
-            Text(presentation.monogram)
-                .font(.system(size: Self.iconSide * 0.32, weight: .bold))
-                .foregroundStyle(Ink.secondary)
-                .frame(width: Self.iconSide, height: Self.iconSide)
-                .background(Palette.surfaceRaised)
-        }
-        .frame(width: Self.iconSide, height: Self.iconSide)
-        .clipShape(.rect(cornerRadius: Self.iconSide * 0.3, style: .continuous))
-    }
-
-    private var identity: some View {
-        VStack(alignment: .leading, spacing: Spacing.tight) {
-            HStack(spacing: Spacing.base) {
-                Text(presentation.name)
-                    .font(.system(.title2, weight: .bold))
-                    .foregroundStyle(Ink.primary)
-                    .lineLimit(2)
-                if let mark = presentation.mark {
-                    GuildMarkBadge(mark: mark)
-                }
-            }
-            if let count = presentation.memberCount {
-                // `Text` with a format style rather than a stored formatter:
-                // there is one of these on the page, and a `NumberFormatter`
-                // property for it would be a formatter built per guild.
-                Text("\(count, format: .number) members")
-                    .font(.system(.callout))
-                    .foregroundStyle(Ink.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// The sentence somebody in the server wrote to whoever arrives.
-///
-/// Drawn as a note from a person rather than as body copy, because that is what
-/// it is — and the crown is the same mark the group-DM owner gets, for the same
-/// reason: it says why the sentence carries weight.
-private struct WelcomeNote: View {
-    var welcome: ServerGuidePresentation.Welcome
-
-    var body: some View {
-        SurfaceCard {
-            VStack(alignment: .leading, spacing: Spacing.base) {
-                HStack(spacing: Spacing.base) {
-                    AvatarView(
-                        url: welcome.avatarURL,
-                        monogram: welcome.authorMonogram,
-                        side: Metrics.avatarRow
-                    )
-                    Text(welcome.authorName)
-                        .font(.system(.body, weight: .semibold))
-                        .foregroundStyle(Ink.primary)
-                        .lineLimit(1)
-                    if welcome.isOwner {
-                        Image(systemName: "crown.fill")
-                            .font(.system(.caption2))
-                            .foregroundStyle(Palette.presenceIdle)
-                            .accessibilityLabel("Server owner")
-                    }
-                    Spacer(minLength: 0)
-                }
-                Text(welcome.message)
-                    .font(.system(.callout))
-                    .foregroundStyle(Ink.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-            .padding(Spacing.margin)
         }
     }
 }

@@ -32,6 +32,7 @@ struct ActivityLauncher: View {
 
     /// The debounce. A keystroke per request would send five for "wordl".
     @State private var searchTask: Task<Void, Never>?
+    @FocusState private var isSearchFocused: Bool
 
 
     /// How long a keystroke waits before it becomes a request. Short enough to
@@ -120,13 +121,13 @@ struct ActivityLauncher: View {
 
     @ViewBuilder
     private var content: some View {
-        let sections = model.activitySections
+        let sections = model.activitySections(for: context)
         let running = model.activityQuery.isEmpty ? model.runningActivities(in: channelID) : []
         if sections.isEmpty, running.isEmpty {
             emptyState
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: Spacing.group, pinnedViews: []) {
+                LazyVStack(alignment: .leading, spacing: Spacing.group + Spacing.base, pinnedViews: []) {
                     if !running.isEmpty { runningSection(running) }
                     ForEach(sections) { section in
                         ActivitySectionView(
@@ -151,33 +152,54 @@ struct ActivityLauncher: View {
     /// be better — and the picker measures its own, because its chrome has a
     /// rail whose height depends on the account. This bar is one control of a
     /// fixed size, so the sum cannot drift.
-    private static let barInset = Metrics.control + Spacing.base * 2
+    private static let searchHeight: CGFloat = 40
+    private static let searchCorner: CGFloat = 12
+    private static let barInset = searchHeight + Spacing.base * 2 + Spacing.tight
 
+    /// **Bigger, frosted, and a field rather than a lens** (Alex, 2026-11-18:
+    /// "making the search bar bigger and less refractive"). It was clear
+    /// glass, which lenses the artwork scrolling under it — right for a
+    /// toolbar, hard to read and type into. The large search field's height,
+    /// on the regular material with a hairline, reads as a place to type and
+    /// stays legible over any cover; the accent rings it while it has focus.
     private var searchBar: some View {
         @Bindable var model = model
         return HStack(spacing: Spacing.base) {
             Image(systemName: "magnifyingglass")
-                .font(.system(.subheadline))
-                .foregroundStyle(Ink.tertiary)
+                .font(.system(.body, weight: .medium))
+                .foregroundStyle(isSearchFocused ? Palette.accent : Ink.secondary)
 
-            TextField("Search apps", text: $model.activityQuery)
+            TextField("Search apps & activities", text: $model.activityQuery)
                 .textFieldStyle(.plain)
-                .font(.system(.subheadline))
+                .font(.body)
+                .focused($isSearchFocused)
                 .onChange(of: model.activityQuery, search)
 
             if !model.activityQuery.isEmpty {
                 Button { model.activityQuery = "" } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(.subheadline))
+                        .font(.system(.body))
                         .foregroundStyle(Ink.tertiary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear search")
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
         }
-        .padding(.horizontal, Spacing.snug)
-        .frame(minHeight: Metrics.control)
-        .chromeOverMedia()
+        .padding(.horizontal, Spacing.snug + Spacing.hair)
+        .frame(height: Self.searchHeight)
+        .background(.regularMaterial, in: .rect(cornerRadius: Self.searchCorner, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Self.searchCorner, style: .continuous)
+                .strokeBorder(
+                    isSearchFocused ? Palette.accent.opacity(0.75) : Palette.edge,
+                    lineWidth: isSearchFocused ? 1.5 : 1
+                )
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 5)
+        .animation(motion.hover, value: isSearchFocused)
+        .animation(motion.hover, value: model.activityQuery.isEmpty)
         .padding(.leading, Spacing.snug)
         .padding(.trailing, context == .call ? Metrics.control + Spacing.snug * 2 : Spacing.snug)
         .overlay(alignment: .trailing) {

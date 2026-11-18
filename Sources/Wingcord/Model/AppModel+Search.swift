@@ -314,7 +314,7 @@ extension AppModel {
                 message: message,
                 channelID: message.channelID,
                 channelName: channel.map(displayName(of:)) ?? "unknown",
-                channelSymbolName: channel?.kind.symbolName ?? "number",
+                channelSymbolName: channel.map(channelSymbol(of:)) ?? "number",
                 // The category above the channel, which is what Discord draws
                 // on the right of each group header. Absent for a channel with
                 // no parent, and for every DM.
@@ -432,6 +432,8 @@ struct SearchCardKey: Hashable, Sendable {
     /// The query the results belong to. Two searches can return the same
     /// messages in a different order, and the cache has to notice.
     var query: MessageSearchQuery?
+    /// Fetched extras landing — see `MessageCardExtras`.
+    var cardRevision: UInt64 = 0
 }
 
 extension AppModel {
@@ -447,7 +449,9 @@ extension AppModel {
         let state = messageSearch
         let messages = state?.results ?? []
         let revision = PresentationRevision.shared.value
-        let key = SearchCardKey(width: width, revision: revision, query: state?.submitted)
+        let key = SearchCardKey(
+            width: width, revision: revision, query: state?.submitted, cardRevision: cardRevision
+        )
         if let searchCardCache,
            searchCardCache.key == key,
            searchCardCache.messages == messages
@@ -476,6 +480,7 @@ extension AppModel {
             authorFont: style.authorFont
         )
         let mentions = mentionContext()
+        let extras = cardExtras
 
         let value = messages.map { message in
             let channel = channelIndex[message.channelID]
@@ -492,11 +497,13 @@ extension AppModel {
                     // carries the channel it was written in, and a card headed
                     // with the wrong one is worse than no header at all.
                     channelName: name,
-                    authors: authors
+                    authors: authors,
+                    extras: extras,
+                    guildID: channelIndex.guildID(of: message.channelID)
                 ),
                 channelID: message.channelID,
                 channelName: name,
-                channelSymbolName: channel?.kind.symbolName ?? "number",
+                channelSymbolName: channel.map(channelSymbol(of:)) ?? "number",
                 categoryName: channel?.parentID.flatMap { channelIndex[$0]?.name }
             )
         }

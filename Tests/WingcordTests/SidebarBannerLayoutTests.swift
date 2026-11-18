@@ -5,17 +5,10 @@ import Testing
 /// The arrangement the sidebar's banner, its name pill and its channel list
 /// share.
 ///
-/// **`overhangCancels` and `pillSitsInTheCorner` are the two that matter**, and
-/// they were confirmed to fail against the version this replaced before being
-/// trusted: with the chrome overhang missing from the drawn height, the artwork
-/// stops 52 points short and the pill — placed correctly against an edge that is
-/// not there — lands in the empty band underneath it. That is the defect the
-/// screenshots showed, expressed as a number.
-///
-/// The chrome inset itself cannot be tested here. It is measured from a live
-/// window, and the whole of its history is that the reader which looks correct
-/// reports zero; see `SidebarBannerLayout`'s note and `ChannelSidebar`'s
-/// `chromeInsetProbe`.
+/// Since 2026-11-18 the banner is the list's first thing, under the page
+/// switcher, 16:9 at the column's width, with the server's name written in its
+/// lower corner — no longer up under the toolbar (Alex: "the sidebar looks very
+/// bad when there's a server banner").
 @Suite("Sidebar banner layout")
 struct SidebarBannerLayoutTests {
 
@@ -33,28 +26,42 @@ struct SidebarBannerLayoutTests {
         )
     }
 
-    @Test("The overhang is added to the height and taken straight back off the top")
-    func overhangCancels() {
+    @Test("The banner sits under the switcher, whole, not up under the chrome")
+    func underTheSwitcher() {
         let banner = layout()
-        let drawnBottom = banner.bannerTop + banner.bannerDrawnHeight
-        #expect(banner.bannerTop == -chrome)
-        #expect(banner.bannerDrawnHeight == chrome + SidebarBannerLayout.bannerHeight)
-        #expect(drawnBottom == SidebarBannerLayout.bannerHeight)
-        #expect(banner.bannerBottom == SidebarBannerLayout.bannerHeight)
+        #expect(banner.bannerTop == SidebarBannerLayout.topMargin)
+        #expect(banner.bannerDrawnHeight == banner.bannerHeight)
+        #expect(banner.bannerBottom == SidebarBannerLayout.topMargin + banner.bannerHeight)
+        // At rest it starts below the run the chrome fades rows over.
+        #expect(SidebarBannerLayout.topMargin >= SidebarChromeFade.run)
     }
 
-    @Test("The pill sits ON the artwork, one base unit above its lower lip")
+    @Test("It is Discord's 16:9 at the column's width, within a header's bounds")
+    func sixteenByNine() {
+        var banner = layout()
+        banner.columnWidth = 300
+        #expect(banner.bannerHeight == ((300 - SidebarBannerLayout.sideInset * 2) * 9 / 16).rounded())
+        banner.columnWidth = 120
+        #expect(banner.bannerHeight == 110)
+        banner.columnWidth = 600
+        #expect(banner.bannerHeight == 200)
+        banner.columnWidth = 0
+        #expect(banner.bannerHeight == SidebarBannerLayout.fallbackHeight)
+    }
+
+    @Test("The name sits ON the artwork, in its lower corner, clear of the faded foot")
     func pillSitsInTheCorner() {
         let banner = layout()
         let bottomInset = banner.bannerBottom - banner.pillBottom
-        #expect(bottomInset == Spacing.base)
-        #expect(banner.pillTop > 0)
+        #expect(bottomInset == SidebarBannerLayout.pillSlot - Metrics.control)
+        #expect(bottomInset > Spacing.base)
+        #expect(banner.pillTop > banner.bannerTop)
         #expect(banner.pillBottom < banner.bannerBottom)
     }
 
-    @Test("The pill is inset from the artwork's leading edge, not the column's")
+    @Test("The name is inset from the artwork's leading edge, not the column's")
     func pillClearsTheRoundedCorner() {
-        let insetFromArtwork = SidebarBannerLayout.pillLeading - Spacing.base
+        let insetFromArtwork = SidebarBannerLayout.pillLeading - SidebarBannerLayout.sideInset
         #expect(insetFromArtwork == Spacing.snug)
     }
 
@@ -96,7 +103,8 @@ struct SidebarBannerLayoutTests {
 
     @Test("The pill has gone by the time it reaches the chrome")
     func pillFadesBeforeTheStrip() {
-        let travelToTop = SidebarBannerLayout.bannerHeight - SidebarBannerLayout.pillSlot
+        let rest = layout()
+        let travelToTop = rest.bannerTop + rest.bannerHeight - SidebarBannerLayout.pillSlot
         let atTop = layout(travel: travelToTop)
         #expect(atTop.pillTop == 0)
         #expect(atTop.pillOpacity == 0)
@@ -120,7 +128,7 @@ struct SidebarBannerLayoutTests {
     /// produces and neither of which shows up in a screenshot of the ends.
     @Test("The toolbar takes the name exactly as the pill loses it")
     func handoffLeavesNoGap() {
-        let end = SidebarBannerLayout.bannerHeight + 40
+        let end = layout().bannerTop + layout().bannerHeight + 40
         var travel: CGFloat = 0
         var gaps = 0
         while travel <= end {

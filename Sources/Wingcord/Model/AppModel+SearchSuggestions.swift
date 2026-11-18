@@ -128,9 +128,12 @@ extension AppModel {
     /// reader actually has — and the answer is a face, which is how they
     /// recognise it.
     ///
-    /// Its completion is the text unchanged: picking it commits what is already
-    /// typed, which is what the row offers. An empty field completes to nothing
-    /// and runs nothing, exactly as Return would.
+    /// **In a one-to-one conversation it searches the other person's messages**
+    /// (Alex, 2026-11-18: "the 'Search in X' doesnt do anything, it should
+    /// search for the other user's messages"): picking it adds `from:` them
+    /// to whatever is typed, so it runs even on an empty field. It used to
+    /// complete to the text unchanged, which on an empty field ran nothing. A
+    /// group has no one person to mean, and still commits what is typed.
     private func findInRow(_ scope: MessageSearchScope, text: String) -> [SearchSuggestion] {
         guard case .channel(let channelID) = scope,
               let channel = channelIndex[channelID], channel.kind.isPrivate
@@ -142,7 +145,9 @@ extension AppModel {
         return [
             SearchSuggestion(
                 id: "scope.\(channelID.rawValue)",
-                completion: text,
+                completion: partner.map {
+                    MessageSearchTokenizer.completing(text, with: .init(kind: .from, value: $0.handle))
+                } ?? text,
                 title: "Find in \(name)",
                 avatarURL: partner.flatMap { avatarURL(for: $0, side: Metrics.avatarRow) },
                 // A group has several faces and therefore none; its own glyph

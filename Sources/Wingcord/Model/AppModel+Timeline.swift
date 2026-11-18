@@ -143,6 +143,13 @@ extension AppModel {
     ///
     ///   Nil means no server — a direct message — and resolves to the account's
     ///   own name, colour and avatar, which is the correct answer there.
+    /// The other person in a one-to-one conversation — for the lines that
+    /// name them whoever wrote the row, the friend request's.
+    func directPartner(in channelID: ChannelID) -> UserID? {
+        guard let channel = channelIndex[channelID], channel.kind == .directMessage else { return nil }
+        return channel.recipientIDs.first { $0 != currentUserID }
+    }
+
     func authorInfo(
         for items: [TimelineItem],
         inGuild guildID: GuildID?,
@@ -178,6 +185,11 @@ extension AppModel {
                 for named in AutoModMessage(message.message)?.namedUserIDs ?? [] where users[named] != nil {
                     resolve(named, into: &result)
                 }
+            }
+            // A friend request line names the other person whoever wrote it.
+            if message.message.kind == .friendRequestAccepted,
+               let partner = directPartner(in: message.message.channelID) {
+                resolve(partner, into: &result)
             }
             // A Server Hub line names the leader, the one overtaken, the top
             // listener — each only where this client knows them.
@@ -518,6 +530,18 @@ extension AppModel {
         presentToken &+= 1
         presentRequest = PresentRequest(channelID: channelID, token: presentToken)
         guard var box = messageBoxes[channelID], box.hasMoreNewer else { return }
+        // **Back at once where nothing has happened since** (Alex, 2026-11-18:
+        // "Making the arrow down to jump to recent messages instant"). The
+        // present a jump left is kept, and while the channel's newest message
+        // is still its newest — and the trip was short, so no edit or reaction
+        // has had time to make it wrong — it comes back as it was, with no
+        // request to wait on. Anything else asks Discord, as before.
+        if let kept = keptPresents.removeValue(forKey: channelID),
+           kept.box.messages.last?.id == channelIndex[channelID]?.lastMessageID,
+           Date.now.timeIntervalSince(kept.keptAt) < KeptPresent.lifetime {
+            setMessages(kept.box, in: channelID)
+            return
+        }
         box.isLoadingNewer = true
         box.newerPageFailed = false
         setMessages(box, in: channelID)
@@ -661,13 +685,26 @@ extension AppModel {
     /// the trap `INVARIANTS.md` §2 records against the transcript's first cache.
     /// `Array ==` short-circuits on buffer identity, so the common case is a
     /// pointer compare.
+    /// The fetched extras a card lays out with — see `MessageCardExtras`.
+    var cardExtras: MessageCardExtras {
+        MessageCardExtras(
+            spotify: spotifyUnfurls,
+            invites: inviteLookups,
+            voiceInvites: voiceInviteStates(),
+            expandedInvites: expandedInviteCards,
+            palettes: derivedPalettes,
+            hostedCardSizes: hostedCardSizes
+        )
+    }
+
     func pinnedCards(in channelID: ChannelID, width: CGFloat) -> [MessageCard] {
         // **Every observable input is read before the early return.** A memo
         // that returns its cache without touching them registers no dependency,
         // so its reader is never invalidated — §2.
         let messages = pinnedMessages[channelID] ?? []
         let revision = PresentationRevision.shared.value
-        let key = PinnedCardKey(channelID: channelID, width: width, revision: revision)
+        // An invite or a hosted card landing redraws the pins (`cardRevision`).
+        let key = PinnedCardKey(channelID: channelID, width: width, revision: revision, cardRevision: cardRevision)
         if let pinnedCardCache,
            pinnedCardCache.key == key,
            pinnedCardCache.messages == messages
@@ -694,6 +731,8 @@ extension AppModel {
         )
         let mentions = mentionContext()
         let channelName = channelIndex[channelID].map(displayName(of:)) ?? ""
+        let extras = cardExtras
+        let guildID = channelIndex.guildID(of: channelID)
         let value = messages.map { message in
             MessageCard.card(
                 for: message,
@@ -703,7 +742,9 @@ extension AppModel {
                 settings: settings,
                 mentions: mentions,
                 channelName: channelName,
-                authors: authors
+                authors: authors,
+                extras: extras,
+                guildID: guildID
             )
         }
         pinnedCardCache = (key, messages, value)
@@ -716,4 +757,16 @@ struct PinnedCardKey: Hashable, Sendable {
     var channelID: ChannelID
     var width: CGFloat
     var revision: UInt64
+    /// Fetched extras landing — see `MessageCardExtras`.
+    var cardRevision: UInt64 = 0
+}
+
+/// The present a jump into history left — see `AppModel.keptPresents`.
+struct KeptPresent {
+    var box: MessageBox
+    var keptAt: Date
+    /// How long a kept present may stand in for a fetch: long enough for a
+    /// look at an old message, short enough that an edit or a reaction since
+    /// is unlikely to have made it wrong.
+    static let lifetime: TimeInterval = 120
 }

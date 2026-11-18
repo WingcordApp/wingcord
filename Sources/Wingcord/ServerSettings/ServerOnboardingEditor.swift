@@ -280,7 +280,8 @@ private struct OnboardingAnswerRow: View {
                     emoji: $option.emoji,
                     addLabel: "Select emoji",
                     updateLabel: { "Select emoji, \($0.name)" },
-                    side: 28
+                    side: 28,
+                    destination: .community(store.guildID)
                 )
 
                 TextField("Answer", text: $option.title)

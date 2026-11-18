@@ -91,6 +91,27 @@ extension View {
         glassEffect(.clear.interactive(), in: shape)
     }
 
+    /// **Frosted, dimmed glass for a control over a picture that may be bright
+    /// anywhere** — the media viewer's round buttons (Alex, 2026-11-18: "making
+    /// these icons refract less or do smth to make them more readable when
+    /// there's bright content"). Regular glass blurs what is behind it where
+    /// clear glass lenses it, and the black in the material is the HIG's
+    /// dimming layer for glass over bright content, so a white glyph holds.
+    func readableChromeOverMedia(in shape: some Shape = .capsule) -> some View {
+        glassEffect(.regular.tint(.black.opacity(0.32)).interactive(), in: shape)
+    }
+
+    /// Clear glass over a profile banner, with black in the material when the
+    /// picture under it is bright (`BannerBrightness`) — the HIG's dimming
+    /// layer for clear over bright content, inside the glass rather than under
+    /// it, so the surface still lenses.
+    func chromeOverBanner(in shape: some Shape = .capsule, dimmed: Bool, interactive: Bool = false) -> some View {
+        var glass = Glass.clear
+        if dimmed { glass = glass.tint(.black.opacity(BannerBrightness.dimming)) }
+        if interactive { glass = glass.interactive() }
+        return glassEffect(glass, in: shape)
+    }
+
     /// Clear glass over media that still has to be *seen* at rest — a label
     /// over a banner. The tint is part of the material, not a fill behind it; a
     /// fill under glass is what rule 3 forbids and is exactly what stops a

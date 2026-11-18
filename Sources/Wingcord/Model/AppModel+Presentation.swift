@@ -448,6 +448,12 @@ extension AppModel {
     }
 
     /// The toolbar's channel chrome.
+    /// A channel's symbol, its parent considered — a forum or media channel's
+    /// post wears its parent's mark (`ChannelKind.symbolName(under:)`).
+    func channelSymbol(of channel: Channel) -> String {
+        channel.kind.symbolName(under: channel.parentID.flatMap { channelIndex[$0]?.kind })
+    }
+
     var channelChrome: ChannelChrome {
         // **The gate has no chrome at all.** It is a takeover, not a page inside
         // the app: naming a channel over it, or offering a roster toggle beside
@@ -519,7 +525,7 @@ extension AppModel {
                     }
                 }
                 : nil,
-            symbolName: channel.kind.symbolName,
+            symbolName: channelSymbol(of: channel),
             topic: channel.topic,
             isTopicShown: openTopicChannelID == channelID,
             isMemberListShown: isMemberListShown,
@@ -715,7 +721,10 @@ extension AppModel {
                 status: partnerID.map { presenceStatus(of: $0) },
                 statusClient: partnerID.map { presenceClient(of: $0) } ?? .desktop,
                 isTyping: partnerID.map { isTypingInDirectMessage(channelID, partner: $0) } ?? false,
-                activityLine: partnerID.flatMap { partnerID in
+                // Discord's own line under its system account (`7s687k`).
+                activityLine: partner?.isSystem == true
+                    ? ActivityStatusLine(text: "Official Discord Message")
+                    : partnerID.flatMap { partnerID in
                     let voice = voicePlace(of: partnerID)
                     return Self.activityLine(
                         presence: presence,
@@ -750,7 +759,8 @@ extension AppModel {
                                 isVoiceNote: message.content.isEmpty && VoiceNoteWords.isVoiceNote(message)
                             )
                         }
-                    }
+                    },
+                isOfficial: partner?.isSystem == true
             ))
         }
 

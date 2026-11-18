@@ -8,11 +8,17 @@ import WingcordCore
 /// channel arrives in the column the roster and the profile pane already share,
 /// and the guide keeps its place underneath the reader's eye.
 ///
-/// **It is a preview, and it says so by what it offers.** There is no composer:
-/// a 340-point column is not where anybody writes, and a text field that
-/// technically works in a space that narrow is worse than none. What it has
-/// instead is the one action a preview owes — opening the channel properly,
-/// which is a real navigation and closes the page on the way.
+/// **The forum post's column, exactly** (Alex, 2026-11-18: "what if you used
+/// the same sidebar as on the forum sidebar"): the same transcript, the same
+/// composer at its foot, the same 460 points — so a channel opened from the
+/// guide, Browse Channels or Channels & Roles can be answered where it is
+/// read. Its header still offers opening the channel properly, a real
+/// navigation that closes the page on the way.
+///
+/// It had no composer, and the empty foot it was built with is what broke it:
+/// a bottom bar laid out around nothing took the column's whole height and
+/// left the transcript zero points tall (measured in the demo), its rows
+/// spilling out at the top over an empty column.
 struct ChannelPreviewContainer: View {
     var channelID: ChannelID
 
@@ -52,6 +58,12 @@ struct ChannelPreviewPane: View, Equatable {
             ChannelPreviewHeader(chrome: chrome, open: open, close: close)
                 .padding(.horizontal, Spacing.snug)
                 .padding(.bottom, Spacing.base)
+        } foot: {
+            // The forum post column's foot (`ThreadPanel`).
+            VStack(spacing: 0) {
+                ComposerStatusRow(channelID: chrome.channelID)
+                ComposerContainer(channelID: chrome.channelID)
+            }
         }
         .frame(width: Proportions.previewColumnIdeal)
         // The column's own edge. The transcript beside it is the same opaque

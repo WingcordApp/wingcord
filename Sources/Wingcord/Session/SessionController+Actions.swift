@@ -211,6 +211,7 @@ extension SessionController {
                 // years ago is written by somebody no roster still carries.
                 model.users.merge(page.authors) { existing, new in new.merged(over: existing) }
                 model.pinnedMessages[channelID] = page.messages
+                resolveCardExtras(in: page.messages)
                 model.pinsFailure[channelID] = nil
                 // A loaded transcript may hold the same messages with a stale
                 // `isPinned`; this is the only pass that can put them right.

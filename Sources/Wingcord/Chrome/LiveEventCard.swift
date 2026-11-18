@@ -6,10 +6,11 @@ import WingcordCore
 /// Event Details for an event somewhere else, "Live Now" with the room and a
 /// way in for one in a voice or stage channel.
 ///
-/// **Clear glass, untinted**, because it floats in the sidebar column, which
-/// paints nothing: what passes under it is the reader's own desktop and the
-/// channel list, and a frosted card there is the slab §4 forbids. Closing it
-/// lasts the session, as Discord's does.
+/// **Frosted, not a slab** (Alex, 2026-11-18): it heads the channel list
+/// inside the glass panel, where the opaque raised card the sidebar's foot is
+/// built from read as a block pasted on. A material lets the panel's colour
+/// through, blurred, with the same hairline edge; the system makes it solid
+/// under Reduce Transparency. Closing it lasts the session, as Discord's does.
 struct LiveEventCard: View {
     var notice: LiveEventNotice
     var open: () -> Void
@@ -81,8 +82,12 @@ struct LiveEventCard: View {
             .padding(.top, 2)
         }
         .padding(Spacing.snug)
-        // A card in the list, so a solid one: content, not glass.
-        .sidebarCard(cornerRadius: Radius.glass)
+        .background(.ultraThinMaterial, in: .rect(cornerRadius: Radius.glass, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
+                .strokeBorder(Palette.edge)
+                .allowsHitTesting(false)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("\(notice.heading): \(notice.name)"))
     }

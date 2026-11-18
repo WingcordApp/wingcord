@@ -30,6 +30,11 @@ struct AccountSwitchVeilHost: ViewModifier {
                     }
                     .contentShape(.rect)
                     .accessibilityHidden(true)
+                    // **Past the titlebar** (`INVARIANTS.md`): stopped at the
+                    // safe area, "Logging in as…" dimmed everything but the
+                    // strip under the traffic lights, where the ember burned on
+                    // at full strength (Alex, 2026-11-18).
+                    .ignoresSafeArea()
                     .transition(.opacity)
                 }
             }

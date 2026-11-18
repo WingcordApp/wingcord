@@ -19,8 +19,10 @@ struct EventsLayer: View {
 
     /// Discord's list is a medium modal and its details a large one; one size
     /// serves both here, so turning the page does not move the panel's edges.
-    private static let width: CGFloat = 560
-    private static let height: CGFloat = 680
+    /// **Smaller since 2026-11-18** (Alex: "making it smaller"): at 560 by
+    /// 680 an event's details filled half of it and left the rest empty.
+    private static let width: CGFloat = 520
+    private static let height: CGFloat = 560
     private static let inset: CGFloat = 32
 
     var body: some View {

@@ -500,7 +500,7 @@ extension AppModel {
         for guildID in guilds.keys {
             for channelID in channelIndex.channelIDs(inGuild: guildID) {
                 guard let channel = channelIndex[channelID],
-                      channel.kind.isConversation || channel.kind.isThread,
+                      channel.kind.isConversation || channel.kind.isThread || Self.readAllAlsoMarks.contains(channel.kind),
                       permissionGate.canView(channelID)
                 else { continue }
                 if channel.kind.isThread, threadMemberships[channelID] == nil { continue }
@@ -524,9 +524,17 @@ extension AppModel {
         }
     }
 
+    /// **Forums, media channels and stages carry read states too** (Alex,
+    /// 2026-11-18: Read All left "a few" on Discord). A forum's is its newest
+    /// post, and Discord shows a forum with new posts as unread; none of the
+    /// three is a "conversation", so Read All used to skip them all.
+    private static let readAllAlsoMarks: Set<ChannelKind> = [.forum, .media, .stage]
+
     func markGuildRead(_ guildID: GuildID) {
         for channelID in channelIndex.channelIDs(inGuild: guildID) {
-            guard let channel = channelIndex[channelID], channel.kind.isConversation else {
+            guard let channel = channelIndex[channelID],
+                  channel.kind.isConversation || Self.readAllAlsoMarks.contains(channel.kind)
+            else {
                 continue
             }
             guard permissionGate.canView(channelID), unreadState(of: channel).unread else {

@@ -182,13 +182,11 @@ nonisolated enum ExpressionGridPainter {
             ))
             context.clip()
             let pixels = Int((frame.width * scale).rounded(.up))
-            // A Lottie pack cover has no still — see `RemoteImage.filmKey` —
-            // so its poster comes out of the filmstrip cache instead.
+            // A Lottie pack cover has no still on the CDN, so its poster is
+            // the one `LottiePosters` drew.
             let poster: CGImage? = url.flatMap { url in
                 LottieFilmstrip.handles(url)
-                    ? AnimatedImageStore.shared.cached(
-                        AnimatedImageStore.Key(url: url, maximumPixelSize: pixels)
-                    )?.frames.first
+                    ? LottiePosters.shared.cached(LottiePosters.Key(url: url, pixels: pixels))
                     : images.cached(ImageStore.Key(url: url, maximumPixelSize: pixels))
             }
             if let poster {
@@ -251,7 +249,7 @@ nonisolated enum ExpressionGridPainter {
         // A locked section is dimmed rather than hidden: its contents are still
         // worth looking at, and a rail that silently omits servers reads as
         // those servers having nothing.
-        if isDimmed { context.setAlpha(0.4) }
+        if isDimmed { context.setAlpha(dimmedAlpha) }
 
         switch item.art {
         case .glyph(let glyph):
@@ -319,6 +317,10 @@ nonisolated enum ExpressionGridPainter {
     /// sixty-four before it starts evicting.
     static let filmBudget = 1024 * 1024
 
+    /// How strongly a locked cell draws — its film included
+    /// (`ExpressionGridCanvas.syncFilms`).
+    static let dimmedAlpha: CGFloat = 0.4
+
     private static func drawImage(
         url: URL?,
         animated: Bool,
@@ -332,9 +334,13 @@ nonisolated enum ExpressionGridPainter {
         let pixels = Int((frame.width * scale).rounded(.up))
 
         // The filmstrip if it has arrived and animation is on; otherwise the
-        // still, which is the same URL's first frame and lands far sooner.
+        // still, which is the same URL's first frame and lands far sooner. A
+        // Lottie sticker has no still on the CDN: its poster is drawn once by
+        // `LottiePosters`, and its film plays over it (`FilmPlayer`).
         let image: CGImage?
-        if animated, let time, let strip = AnimatedImageStore.shared.cached(
+        if LottieFilmstrip.handles(url) {
+            image = LottiePosters.shared.cached(LottiePosters.Key(url: url, pixels: pixels))
+        } else if animated, let time, let strip = AnimatedImageStore.shared.cached(
             AnimatedImageStore.Key(
                 url: url, maximumPixelSize: pixels, byteBudget: filmBudget
             )

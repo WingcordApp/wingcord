@@ -142,7 +142,9 @@ extension AppModel {
     /// used that can be sent here, then its defaults.
     func activityReplyEmoji(limit: Int = 5) -> [ExpressionItem] {
         let table = emojiNameTable
-        let offers = emojiOfferRule()
+        // Sent in a DM, where no server is home: every custom emoji needs
+        // Nitro (`EmojiDestination.personal`).
+        let offers = emojiOfferRule(for: .personal)
         var picked: [ExpressionItem] = []
         var seen = Set<String>()
         let keys = (expressionUsage?.emojis.ranked ?? [])

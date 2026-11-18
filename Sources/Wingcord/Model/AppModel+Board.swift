@@ -72,6 +72,25 @@ extension AppModel {
         return nil
     }
 
+    /// What the picture across the top of a game's profile is drawn from —
+    /// Discord's rule exactly (`t4` in its game profile): `getBannerURL(1400)`,
+    /// and where a game has no banner, **one of its `screenshot_urls` at
+    /// random**, chosen once each time the page opens (its
+    /// `useState(() => Math.random())`). So a game without a banner shows a
+    /// different screenshot on each visit, in Discord and here; taking the
+    /// first one is why GTA VI's never matched (Alex, 2026-11-18).
+    func gameBackdropChoices(_ game: Game, width: CGFloat) -> [URL] {
+        switch game.media.banner {
+        case .hash(let hash):
+            if let url = CDN.gameAsset(id: game.id, hash: hash, side: width) { return [url] }
+        case .url(let url):
+            return [url]
+        case nil:
+            break
+        }
+        return gameScreenshotURLs(game, width: width)
+    }
+
     /// Every screenshot a game's carousel can show, proxied ones and hosted ones
     /// together.
     ///
@@ -329,7 +348,10 @@ extension AppModel {
             messageID: nil,
             channelID: nil,
             authorName: owner,
-            sentAt: .now
+            sentAt: .now,
+            // Opened from a profile's board, which is drawn over the viewer's
+            // own place under the profiles.
+            isAboveSheets: true
         )
     }
 

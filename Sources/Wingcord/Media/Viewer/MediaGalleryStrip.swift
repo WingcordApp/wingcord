@@ -52,7 +52,9 @@ struct MediaGalleryStrip: View {
             }
             .scrollIndicators(.never)
             .frame(width: min(Self.width(count: count), 440))
-            .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass, style: .continuous))
+            // **No glass behind the thumbnails** (Alex, 2026-11-18): clear
+            // glass lensed the strip's own pictures into each other, which is
+            // exactly what made them hard to read over the dimmed viewer.
             .onAppear { proxy.scrollTo(request.current?.id, anchor: .center) }
             .onChange(of: request.index) {
                 // Into view as the reader pages, as Discord's `scrollIntoViewNode`

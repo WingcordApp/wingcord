@@ -93,6 +93,10 @@ public struct ActivityApp: Hashable, Sendable, Identifiable {
     /// The application's own flags, which is where the privileged gateway
     /// intents live — see `dataAccess`.
     public var flags: UInt64 = 0
+
+    /// Discord's `ApplicationFlags.PROMOTED` (`1 << 29`): a sponsored app,
+    /// which Discord's launchers badge "PROMOTED".
+    public var isPromoted: Bool { flags & (1 << 29) != 0 }
     /// Whether the app sells anything. Discord draws "In-App Purchases" under
     /// the name for one that does.
     public var isMonetized = false
@@ -440,15 +444,23 @@ public struct ActivityDirectory: Hashable, Sendable {
     /// The shelf's own order — Discord's ranking, which a call's Suggested
     /// Activities read from the top of.
     public var shelf: [ApplicationID]
+    /// The voice launcher's collections — `surface=3`,
+    /// `APP_LAUNCHER_IN_VOICE_BANNER` — which are not the text launcher's:
+    /// Discord's call launcher leads with its own "Activities", promoted
+    /// ones first. Empty until read; the call launcher then falls back to
+    /// the text launcher's.
+    public var voiceCollections: [ActivityCollection]
 
     public init(
         collections: [ActivityCollection] = [],
         apps: [ApplicationID: ActivityApp] = [:],
-        shelf: [ApplicationID] = []
+        shelf: [ApplicationID] = [],
+        voiceCollections: [ActivityCollection] = []
     ) {
         self.collections = collections
         self.apps = apps
         self.shelf = shelf
+        self.voiceCollections = voiceCollections
     }
 
     public var isEmpty: Bool { collections.isEmpty && apps.isEmpty }

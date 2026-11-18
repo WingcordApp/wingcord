@@ -44,6 +44,7 @@ extension SessionController {
                         model.users[id] = user
                     }
                     model.messageSearch?.page = page
+                    resolveCardExtras(in: page.messages)
                     model.messageSearch?.submitted = query
                     model.messageSearch?.isIndexing = false
                     model.identityRevision &+= 1

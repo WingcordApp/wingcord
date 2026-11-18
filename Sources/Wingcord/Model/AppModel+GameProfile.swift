@@ -23,6 +23,7 @@ extension AppModel {
             hasCoverArt: gameArtIsCover(game, kind: .cover),
             markURL: gameArtURL(game, kind: .mark, side: 64),
             artworkURL: gameArtworkURL(game, width: 1024),
+            backdropChoices: gameBackdropChoices(game, width: 1400),
             globalRank: game.globalRank,
             media: gameMedia(of: game),
             themes: game.themes,

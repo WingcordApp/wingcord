@@ -72,7 +72,7 @@ struct CaptureBar: View {
                 .help("Record the \(controller.target.title.lowercased()) you choose next.")
 
             Button("Close", systemImage: "xmark", action: controller.hideBar)
-                .labelStyle(.iconOnly)
+                .labelStyle(.glassCircleIcon)
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
                 .controlSize(.extraLarge)
@@ -179,7 +179,7 @@ struct CaptureRecordingPill: View {
             }
             .disabled(!controller.isRecording)
             Button("Discard", systemImage: "trash", action: controller.discardRecording)
-                .labelStyle(.iconOnly)
+                .labelStyle(.glassCircleIcon)
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
                 .controlSize(.large)

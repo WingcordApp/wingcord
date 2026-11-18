@@ -20,6 +20,10 @@ struct GamePresentation: Equatable, Sendable {
     /// art is unrecognisable where the mark still reads.
     var markURL: URL?
     var artworkURL: URL?
+    /// What the picture across the top of the page (`GameBackdrop`) is drawn
+    /// from: the banner alone where there is one, else every screenshot, one
+    /// of which the page picks at random when it opens — Discord's rule.
+    var backdropChoices: [URL]
     /// The rank badge, or nil for a game Discord does not rank. Absent for most
     /// games and for two of the three captured ones.
     var globalRank: Int?

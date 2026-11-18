@@ -99,6 +99,7 @@ struct GuildRailContainer: View {
             isHomeSelected: model.selectedGuildID == nil,
             homeMentionCount: 0,
             homeHasUnread: false,
+            homeCallSince: model.directCallClock,
             showAllServers: showsAllServersButton ? { SidebarPager.shared.toggleAllServers() } : nil,
             readAll: model.hasUnreadServers ? { model.markAllServersRead() } : nil,
             selectHome: { model.selectGuild(nil) },

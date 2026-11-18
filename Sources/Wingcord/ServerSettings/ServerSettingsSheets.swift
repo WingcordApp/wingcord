@@ -191,7 +191,10 @@ struct StickerSheet: View {
                         }
                     ),
                     addLabel: "Related Emoji",
-                    updateLabel: { "Related Emoji, \($0.name)" }
+                    updateLabel: { "Related Emoji, \($0.name)" },
+                    // A sticker's related emoji is a Unicode glyph
+                    // (GUILD_STICKER_RELATED_EMOJI).
+                    destination: .unicodeOnly
                 )
             }
 
@@ -233,6 +236,9 @@ struct StickerSheet: View {
 /// rounded to two is a control that lies about its own precision.
 struct SoundSheet: View {
     var existing: SoundboardSound?
+    /// The server the sound is for: its own emoji are the ones a sound can
+    /// wear (Discord's SOUNDBOARD).
+    var guildID: GuildID?
     var commit: (Draft) -> Void
 
     struct Draft {
@@ -284,7 +290,8 @@ struct SoundSheet: View {
                 EmojiSlotButton(
                     emoji: $draft.emoji,
                     addLabel: "Related Emoji",
-                    updateLabel: { "Related Emoji, \($0.name)" }
+                    updateLabel: { "Related Emoji, \($0.name)" },
+                    destination: guildID.map(EmojiDestination.community) ?? .unicodeOnly
                 )
             }
 

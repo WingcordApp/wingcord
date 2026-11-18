@@ -30,7 +30,10 @@ extension SessionController {
 
         async let shelf = try? rest.activityShelf()
         async let collections = try? rest.activityCollections(locale: locale)
-        let (shelfApps, rows) = await (shelf, collections)
+        // The voice launcher's own (Alex, 2026-11-18): its Activities and its
+        // promoted games are not the text launcher's.
+        async let voice = try? rest.activityCollections(locale: locale, surface: 3)
+        let (shelfApps, rows, voiceRows) = await (shelf, collections, voice)
 
         guard let ranked = shelfApps, let rows, !rows.isEmpty else {
             // Nothing partial: a launcher showing four of nine collections with
@@ -46,20 +49,27 @@ extension SessionController {
         let apps = Dictionary(ranked.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         // What was resolved elsewhere stays beside the shelf's own.
         var merged = model.activityDirectory.apps.merging(apps) { _, shelf in shelf }
-        let enriched = rows.map { collection in
-            var collection = collection
-            collection.apps = collection.apps.map { app in
-                var app = app
-                app.tileAssetID = apps[app.id]?.tileAssetID
-                if app.coverHash == nil { app.coverHash = apps[app.id]?.coverHash }
-                merged[app.id] = app
-                return app
+        func enrich(_ collections: [ActivityCollection]) -> [ActivityCollection] {
+            collections.map { collection in
+                var collection = collection
+                collection.apps = collection.apps.map { app in
+                    var app = app
+                    app.tileAssetID = apps[app.id]?.tileAssetID ?? app.tileAssetID
+                    if app.coverHash == nil { app.coverHash = apps[app.id]?.coverHash }
+                    merged[app.id] = app
+                    return app
+                }
+                return collection
             }
-            return collection
         }
+        let enriched = enrich(rows)
+        let voiceEnriched = enrich(voiceRows ?? [])
 
         model.activityDirectory = ActivityDirectory(
-            collections: enriched, apps: merged, shelf: ranked.map(\.id)
+            collections: enriched,
+            apps: merged,
+            shelf: ranked.map(\.id),
+            voiceCollections: voiceEnriched
         )
         model.activitySectionsCache = nil
         model.activityRevision &+= 1

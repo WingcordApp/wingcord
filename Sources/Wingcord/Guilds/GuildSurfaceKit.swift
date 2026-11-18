@@ -518,3 +518,31 @@ private struct SurfaceButtonLabel: View {
         .padding(.horizontal, Spacing.tight)
     }
 }
+
+/// A server page arriving: each section rises a few points into place on a
+/// soft spring, a beat after the one above it — once, when the page opens.
+/// Under Reduce Motion it fades, without the travel. The Server Guide's first
+/// (Alex, 2026-11-18: "I like the animation of how the server guide appears"),
+/// and Channels & Roles' since.
+///
+/// **The stagger is capped** at the eighth section: a long page's lower
+/// sections are off screen when it opens, and the ones a reader scrolls to
+/// must not wait their turn behind a queue they never saw.
+struct SurfaceEntrance: ViewModifier {
+    var index: Int
+    var isShown: Bool
+
+    @Environment(\.motion) private var motion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isShown ? 1 : 0)
+            .offset(y: isShown || motion.reduceMotion ? 0 : 12)
+            .animation(
+                motion.reduceMotion
+                    ? .easeOut(duration: 0.2)
+                    : .spring(response: 0.46, dampingFraction: 0.86).delay(Double(min(index, 8)) * 0.05),
+                value: isShown
+            )
+    }
+}

@@ -47,12 +47,15 @@ extension DiscordREST {
     /// `platform=4` is desktop, and `active_state=1` drops the rows Discord has
     /// retired. Sorted here rather than at the call site because the route
     /// answers in an order that is not `position` and never was.
-    public func activityCollections(locale: String) async throws -> [ActivityCollection] {
+    /// `surface`: Discord's `1` directory, `2` the text launcher
+    /// (`APP_LAUNCHER_IN_TEXT`), `3` the voice launcher
+    /// (`APP_LAUNCHER_IN_VOICE_BANNER`) — each answers its own collections.
+    public func activityCollections(locale: String, surface: Int = 2) async throws -> [ActivityCollection] {
         try await get(
             "/application-directory-static/collections",
             route: "application-directory-static/collections",
             query: [
-                URLQueryItem(name: "surface", value: "2"),
+                URLQueryItem(name: "surface", value: String(surface)),
                 URLQueryItem(name: "active_state", value: "1"),
                 URLQueryItem(name: "platform", value: "4"),
                 URLQueryItem(name: "locale", value: locale),

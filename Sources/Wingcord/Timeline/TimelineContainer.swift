@@ -6,6 +6,10 @@ struct TimelineContainer: View {
     var channelID: ChannelID
     var topInset: CGFloat = 0
     var bottomInset: CGFloat = 0
+    /// How much of `bottomInset` the typing and slowmode row takes — it rides
+    /// in the composer's bar — so the clearance can count it as air
+    /// (`TimelineMetrics.clearance(above:)`).
+    var statusHeight: CGFloat = 0
     /// Whether this is the transcript the toolbar's summaries follow — the pill
     /// names the stretch it shows, the steps move it — and the one that carries
     /// the new-messages pill.
@@ -51,9 +55,10 @@ struct TimelineContainer: View {
             activityInviteStatuses: model.activityInviteStatuses(in: channelID),
             uploadProgress: model.uploadProgress(in: channelID),
             topInset: chromeBottom,
-            // The rows stop short of the composer by Discord's own air; the
-            // chrome laid over the transcript still measures from the bar.
-            bottomInset: bottomInset + TimelineMetrics.composerClearance,
+            // The rows stop short of the composer by a little air — less
+            // where the typing or slowmode row already holds some; the chrome
+            // laid over the transcript still measures from the bar.
+            bottomInset: bottomInset + TimelineMetrics.clearance(above: statusHeight),
             // Read here for the reason the accents are: the transcript is a
             // drawn canvas, and a card that resolved without something SwiftUI
             // owns changing would never be told to draw it.
@@ -80,7 +85,11 @@ struct TimelineContainer: View {
             // Only while the bar is up: its place is the one thing tracked.
             summaries: showsSummaries ? summaries : [],
             // Narrow for the jump's reason.
-            selectedSummary: model.selectedSummary.flatMap { $0.channelID == channelID ? $0 : nil },
+            // The toolbar's topic steers the conversation's transcript only; a
+            // column beside a page opens at the channel's newest messages.
+            selectedSummary: hostsSummaries
+                ? model.selectedSummary.flatMap { $0.channelID == channelID ? $0 : nil }
+                : nil,
             // Read here for the reason the accents are, and it is the one input
             // whose *absence* was a visible defect: see
             // `AppModel.isWindowCovered`.
@@ -134,12 +143,19 @@ struct TimelineContainer: View {
         // **The topics, at the trailing edge and the middle of what can be
         // read** — Discord's place for them — between the chrome above and the
         // composer below.
+        //
+        // **Only on the conversation's own transcript** (Alex, 2026-11-18):
+        // in a column beside a page — a channel opened from the guide or
+        // Browse Channels — its topic list and its message preview had no
+        // room and covered the column's header and its rows.
         .overlay(alignment: .trailing) {
-            TopicMinimap(channelID: channelID, scroll: scroll)
-                .padding(.trailing, Spacing.tight)
-                .padding(.top, chromeBottom)
-                .padding(.bottom, bottomInset)
-                .ignoresSafeArea(.container, edges: .bottom)
+            if hostsSummaries {
+                TopicMinimap(channelID: channelID, scroll: scroll)
+                    .padding(.trailing, Spacing.tight)
+                    .padding(.top, chromeBottom)
+                    .padding(.bottom, bottomInset)
+                    .ignoresSafeArea(.container, edges: .bottom)
+            }
         }
         // **Under the toolbar, over the rows' top.** Measured from the
         // transcript's own top, as the inset is, whatever the pane does with

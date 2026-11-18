@@ -4,9 +4,9 @@ import Testing
 import WingcordCore
 @testable import Wingcord
 
-/// The typing pill, drawn offscreen — with `WINGCORD_RENDER_DIR` set, each case
+/// The typing line, drawn offscreen — with `WINGCORD_RENDER_DIR` set, each case
 /// is written there as a PNG to look at; without it the cases still lay out,
-/// which is what catches a pill that collapses to nothing.
+/// which is what catches a line that collapses to nothing.
 @MainActor
 @Suite("Typing indicator renders")
 struct TypingIndicatorRenderTests {
@@ -17,7 +17,7 @@ struct TypingIndicatorRenderTests {
         suggestion: .yapping
     )
 
-    @Test("The plain pill, a custom one, and two typers drawing the plain one")
+    @Test("The plain line, a custom one, and two typers drawing the plain one")
     func renders() throws {
         let cases: [(String, TypingIndicator)] = [
             ("typing-plain", TypingIndicator(names: ["Ana"])),

@@ -94,6 +94,8 @@ struct ServerGuidePresentation: Hashable, Sendable {
     var monogram: String
     var bannerURL: URL?
     var memberCount: Int?
+    /// Who is online, where the server's profile has said (`GuildProfile`).
+    var onlineCount: Int? = nil
     var mark: GuildMark?
     var welcome: Welcome?
     var actions: [Row]
@@ -342,6 +344,14 @@ extension AppModel {
     /// why the row that raises this is not a button at all in that case.
     func previewChannel(_ channelID: ChannelID) {
         guard canOpen(channelID) else { return }
+        // **A forum opens; it is not previewed** (Alex, 2026-11-18: the column
+        // stood empty). Its posts are a board, not a transcript, and the
+        // column has only a transcript to show.
+        if channelIndex[channelID]?.isForumLike == true {
+            previewedChannelID = nil
+            selectChannel(channelID)
+            return
+        }
         // A second click on the row you are already previewing closes it, which
         // is what every disclosure in this app does.
         guard previewedChannelID != channelID else {
@@ -367,6 +377,29 @@ extension AppModel {
         )
     }
 
+    /// **Discord's own test for a Server Guide**: a Community server with both
+    /// the guide and onboarding switched on (`!features.has(COMMUNITY) ||
+    /// !features.has(GUILD_SERVER_GUIDE) || !features.has(GUILD_ONBOARDING)`
+    /// rules it out). Known from the server itself, so the row is never drawn
+    /// for a server without one — it used to be, until the guide's route came
+    /// back and took it away again (Alex, 2026-11-18: "the server guide
+    /// disappears after some time").
+    func offersServerGuide(_ guildID: GuildID) -> Bool {
+        guard let features = guilds[guildID]?.features,
+              features.isSuperset(of: ["COMMUNITY", "GUILD_SERVER_GUIDE", "GUILD_ONBOARDING"])
+        else { return false }
+        // **And only for a newcomer who has not finished it** — Discord's
+        // second test (`111487`'s neighbour): a server being previewed, or a
+        // member who joined under a week ago with COMPLETED_HOME_ACTIONS unset.
+        // Finished, or a member for longer, and the row is gone (Alex,
+        // 2026-11-18: "after you finish the server guide it disappears").
+        if isPreviewing(guildID) { return true }
+        guard let me = currentUserID, let member = members[guildID]?[me], let joined = member.joinedAt
+        else { return false }
+        return !member.flags.contains(.completedHomeActions)
+            && Date.now.timeIntervalSince(joined) < 7 * 24 * 60 * 60
+    }
+
     /// The rows above the first category, in the order the server offers them.
     ///
     /// Called by the sidebar builder. The guide and the game servers appear only
@@ -378,7 +411,7 @@ extension AppModel {
         if offersServerHub(guildID) {
             rows.append(.serverHub)
         }
-        if let guide = serverGuides[guildID], guide.isEnabled, !guide.isEmpty {
+        if offersServerGuide(guildID), let guide = serverGuides[guildID], guide.isEnabled, !guide.isEmpty {
             rows.append(.serverGuide)
         }
         // "Channels & Roles" only once there are questions to answer. Until the
@@ -450,6 +483,7 @@ extension AppModel {
                 CDN.guildBanner(guildID: guildID, hash: $0, width: 720)
             },
             memberCount: guild.memberCount,
+            onlineCount: guildProfiles[guild.id]?.onlineCount,
             mark: guild.mark,
             welcome: welcomePresentation(guide?.welcome, ownerID: guild.ownerID),
             actions: actions,

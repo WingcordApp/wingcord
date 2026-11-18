@@ -59,6 +59,10 @@ struct FlyoutRow: View {
     /// `ConnectionMark`, which falls back to a symbol for a brand it has none
     /// for. Wins over `symbolName`.
     var brandService: String?
+    /// One of Discord's own marks, bare, in the row's ink — a store in a list
+    /// of where to get a game, as Discord draws it (`DiscordBrandIcon`). Wins
+    /// over `brandService`.
+    var discordIcon: DiscordBrandIcon?
     /// A role's colour, as the dot Discord puts before a role's name. Wins over
     /// `symbolName`; loses to `brandService`.
     var dotColor: Color?
@@ -79,7 +83,10 @@ struct FlyoutRow: View {
     var body: some View {
         Button(action: act) {
             HStack(spacing: Spacing.snug) {
-                if let brandService {
+                if let discordIcon {
+                    DiscordBrandIconView(icon: discordIcon)
+                        .frame(width: 16, height: 16)
+                } else if let brandService {
                     ConnectionMark(service: brandService, side: 16)
                 } else if let dotColor {
                     Circle()

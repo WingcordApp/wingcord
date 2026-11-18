@@ -234,6 +234,8 @@ struct WidgetApplicationDTO: Decodable, Sendable {
     var icon: String?
     var is_verified: Bool?
     var connection_entrypoint_url: URL?
+    /// Discord's application type — 5 is a game (`ApplicationTypes.GAME`).
+    var type: Int?
     var linked_games: [LinkedGameDTO]?
 
     struct LinkedGameDTO: Decodable, Sendable {
@@ -242,6 +244,9 @@ struct WidgetApplicationDTO: Decodable, Sendable {
         /// read here — `/games` answers for all of that, and taking it from two
         /// places is two answers that can disagree.
         var id: ApplicationID?
+        /// The nested application's type alone: whether this link IS a game.
+        var application: Kind?
+        struct Kind: Decodable, Sendable { var type: Int? }
     }
 
     var domain: WidgetApplication? {
@@ -252,7 +257,12 @@ struct WidgetApplicationDTO: Decodable, Sendable {
             iconHash: icon,
             isVerified: is_verified ?? false,
             connectionEntrypointURL: connection_entrypoint_url,
-            linkedGameIDs: (linked_games ?? []).compactMap(\.id)
+            linkedGameIDs: (linked_games ?? []).compactMap(\.id),
+            // **Discord's `getCanonicalGameId`**: the application itself when
+            // it is a game, else the first linked application that is one —
+            // not merely the first link, which for Fortnite named something
+            // with no game record and no profile (Alex, 2026-11-18).
+            gameID: type == 5 ? id : linked_games?.first { $0.application?.type == 5 }?.id
         )
     }
 }

@@ -24,6 +24,7 @@ extension AppModel {
     /// no such bit and is not routed through here.
     func joinVoice(_ channelID: ChannelID) {
         guard permissionGate.canJoinVoice(channelID) else { return }
+        leaveActivity(switchingTo: channelID)
         let guildID = channelIndex[channelID]?.guildID
         voice.join(channelID: channelID, guildID: guildID)
     }
@@ -59,7 +60,9 @@ extension AppModel {
     /// survives the last person leaving — the same rule the header draws.
     func isDirectCallRunning(in channelID: ChannelID) -> Bool {
         connectedVoiceChannelID != channelID
-            && voiceStates.values.contains { $0.channelID == channelID && $0.userID != currentUserID }
+            // The reader's own state counts: in it from another device, a
+            // press here joins (and moves the call here) rather than ringing.
+            && voiceStates.values.contains { $0.channelID == channelID }
     }
 
     /// Joins a direct-message call that is already running.
@@ -69,12 +72,46 @@ extension AppModel {
     /// in their ear for a call they are on — so this joins and rings nobody,
     /// exactly as `answerCall` does.
     func joinCall(in channelID: ChannelID) {
+        leaveActivity(switchingTo: channelID)
         voice.join(channelID: channelID, guildID: nil)
+    }
+
+    /// When the direct-message call the reader is in began: the DM row's
+    /// clock, and the Home squircle's in the rail (Alex, 2026-11-18: "add a
+    /// call counter on the dm squircle"). Nil outside a DM or group call.
+    ///
+    /// **Stored values only**, never `voicePresentation`, which is rebuilt as
+    /// people speak: the rail would be redrawn with every voice that lit up.
+    var directCallClock: Date? {
+        guard let channelID = connectedVoiceChannelID,
+              let channel = channelIndex[channelID], channel.guildID == nil
+        else { return nil }
+        return voiceChannelInfo[channelID]?.sessionStartedAt ?? voiceConnectedSince
     }
 
     func leaveVoice() {
         showsNonVideoParticipants = true
+        leaveActivity(runningIn: connectedVoiceChannelID)
         voice.leave()
+    }
+
+    /// **Leaving a call leaves the activity running in it**, as Discord does
+    /// (Alex, 2026-11-18): an activity in a voice channel or a call is played
+    /// by the people in it, and a frame left running after the reader hung up
+    /// is a game nobody else can see them in. An activity somewhere else — the
+    /// hub's board, a text channel's — is not this call's, and stays.
+    func leaveActivity(runningIn channelID: ChannelID?) {
+        guard let channelID,
+              let running = runningActivity,
+              running.instance.location.channelID == channelID
+        else { return }
+        Task { await sessionController.leaveActivity() }
+    }
+
+    /// Moving to another call is leaving this one, activity and all.
+    private func leaveActivity(switchingTo channelID: ChannelID) {
+        guard connectedVoiceChannelID != channelID else { return }
+        leaveActivity(runningIn: connectedVoiceChannelID)
     }
 
     func declineCall(in channelID: ChannelID) { voice.decline(channelID: channelID) }
@@ -82,6 +119,7 @@ extension AppModel {
     /// Answers a ringing call.
     func answerCall(in channelID: ChannelID) {
         incomingCallChannelID = nil
+        leaveActivity(switchingTo: channelID)
         voice.join(channelID: channelID, guildID: nil)
     }
 

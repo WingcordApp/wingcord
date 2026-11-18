@@ -49,7 +49,13 @@ nonisolated enum AccountBadges {
         flags: UserFlags,
         decoration: UserDecoration?
     ) -> [ProfileBadge] {
-        if let named = decoration?.badges, !named.isEmpty {
+        // **The profile route's list is the whole answer once it has given
+        // one** (Alex, 2026-11-18: "wingcord shows the nitro icon for some
+        // profiles when discord doesnt"). Discord's client draws exactly that
+        // list; an empty one is "no badges", and a Nitro mark read off
+        // `premium_type` on top of it is one Discord never shows.
+        if let named = decoration?.badges,
+           decoration?.badgesFromProfile == true || !named.isEmpty {
             return named.map {
                 ProfileBadge(
                     id: $0.id,

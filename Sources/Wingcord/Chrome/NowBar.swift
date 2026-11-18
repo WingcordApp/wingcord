@@ -55,18 +55,15 @@ struct NowBar: View, Equatable {
         }
         .padding(.horizontal, Spacing.base)
         .frame(height: Metrics.nowBarHeight)
-        // **`.regular`, untinted** (Alex, 2026-10-15). Once rows really passed
-        // under it, `.clear` let a conversation's name read straight through
-        // the reader's own — the frosted variant keeps the rows moving behind
-        // the bar without letting their words collide with it. Untinted, as
-        // before: a tint is a flat value added to every pixel of the surface
-        // (measured: it doubled the veil a reference client carries).
-        .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
-        // **The plate goes over the material, never behind it.** Clipped to
-        // the bar's shape and held under full strength, so what is behind the
-        // window still refracts through and the name and the gear stay
-        // legible.
-        .overlay {
+        // **The plate goes over the material and under the words.** Over,
+        // never behind it: clipped to the bar's shape and held under full
+        // strength, so what is behind the window still refracts through. Under
+        // the words since 2026-11-18: drawn over the whole bar, its artwork —
+        // which hangs off the trailing edge — sat on the gear at 55 % and
+        // turned the white gear purple-grey (Alex: "update the settings icon
+        // in now bar to be white"). A background ahead of the glass is drawn
+        // on the material, behind the row.
+        .background {
             if let url = presentation.nameplateURL {
                 NowBarPlate(
                     still: url,
@@ -84,6 +81,13 @@ struct NowBar: View, Equatable {
                 .allowsHitTesting(false)
             }
         }
+        // **`.regular`, untinted** (Alex, 2026-10-15). Once rows really passed
+        // under it, `.clear` let a conversation's name read straight through
+        // the reader's own — the frosted variant keeps the rows moving behind
+        // the bar without letting their words collide with it. Untinted, as
+        // before: a tint is a flat value added to every pixel of the surface
+        // (measured: it doubled the veil a reference client carries).
+        .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
         .onHover { hovering in
             guard isHoveringPlate != hovering else { return }
             isHoveringPlate = hovering

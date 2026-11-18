@@ -433,7 +433,8 @@ struct EditableBioField: View {
                     .foregroundStyle(InkColor.secondary)
                     .help("Add an emoji")
                     .popover(isPresented: $isPickingEmoji, arrowEdge: .bottom) {
-                        ExpressionPicker(mode: .emoji, onPick: insert, onPickGIF: { _ in })
+                        // A bio belongs to no server (Discord's PROFILE).
+                        ExpressionPicker(mode: .emoji, onPick: insert, onPickGIF: { _ in }, destination: .personal)
                             .presentationBackground(.clear)
                             .profileFlyoutAppearance()
                     }

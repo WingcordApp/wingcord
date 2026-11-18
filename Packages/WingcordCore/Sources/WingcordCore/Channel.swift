@@ -87,6 +87,20 @@ public enum ChannelKind: Int, Hashable, Sendable, Codable {
         case .category, .unknown: "questionmark"
         }
     }
+
+    /// The symbol for a channel of this kind under a parent of `parent`.
+    ///
+    /// **A post wears its forum's mark, not the thread glyph** (Alex,
+    /// 2026-11-18: "forum posts have the threads icon"): it is a thread on the
+    /// wire, and Discord draws it with its forum's icon (`isForumPost() ?
+    /// ForumIcon : …`) — and a media channel's post with the media channel's.
+    public func symbolName(under parent: ChannelKind?) -> String {
+        switch (self, parent) {
+        case (.publicThread, .forum?): ChannelKind.forum.symbolName
+        case (.publicThread, .media?): ChannelKind.media.symbolName
+        default: symbolName
+        }
+    }
 }
 
 /// A channel, of any kind.

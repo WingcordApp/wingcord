@@ -108,8 +108,16 @@ struct HeaderGroupButton: View {
 
     private var fill: Color {
         if isActive { return HeaderControlFill.active }
-        return isHovering ? HeaderControlFill.hover : .clear
+        return isHovering ? HeaderControlFill.hover : Self.restingFill
     }
+
+    /// **Not `.clear`** (Alex, 2026-11-18: "i cant hit the video call button
+    /// unless i press specifically somewhere on the button"). In the header
+    /// band a press on fully clear pixels went past the button to the glass
+    /// and the band's window drag, so only the glyph took it; a fill no eye can
+    /// see makes the whole capsule the button's, as `SpotifyPlayerPresenter`'s
+    /// outside-click catcher is.
+    private static let restingFill = Color.black.opacity(0.001)
 }
 
 /// The `+⌄` capsule: a menu that creates things.

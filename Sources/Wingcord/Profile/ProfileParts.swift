@@ -1299,6 +1299,9 @@ struct PrivateProfilePill: View {
     /// The ⋯'s 30 on the card and the column. A little more on the full profile.
     var height: CGFloat = 30
 
+    @Environment(\.isOverBrightBanner) private var isOverBrightBanner
+    @Environment(\.motion) private var motion
+
     private var isLarge: Bool { height > 30 }
 
     var body: some View {
@@ -1313,7 +1316,9 @@ struct PrivateProfilePill: View {
         .padding(.horizontal, isLarge ? 14 : 12)
         .frame(height: height)
         .fixedSize()
-        .chromeOverMedia()
+        // Dimmed over a bright banner, faded in once the banner is measured.
+        .chromeOverBanner(dimmed: isOverBrightBanner)
+        .animation(motion.standard, value: isOverBrightBanner)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text("This profile is private"))
     }

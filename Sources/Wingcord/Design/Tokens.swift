@@ -221,15 +221,39 @@ nonisolated enum InkRamp {
         case primary, secondary, tertiary, quaternary
     }
 
-    /// White at these alphas in a dark room.
-    private static func darkAlpha(_ level: Level, increased: Bool) -> CGFloat {
+    /// **Solid, neutral greys in a dark room** — not white at an alpha.
+    ///
+    /// White at 74% and 55% picked up whatever was behind it: over a themed
+    /// purple ground it came out lavender-grey and low in contrast, which is
+    /// the whole of "the text and icons look washed out" next to SakuraCord's
+    /// and Swiftcord's (Alex, 2026-11-18). An opaque grey stays the grey it was
+    /// chosen as. Discord's own text greys, near enough: #DBDEE1 for read text,
+    /// a lighter muted grey than its #949BA4 because themed grounds here are
+    /// brighter than Discord's. Separators (quaternary) stay translucent, at
+    /// their old alphas: they are meant to sit in the ground, not on it.
+    private static func darkInk(_ level: Level, increased: Bool) -> NSColor {
+        func solid(_ packed: UInt32) -> NSColor {
+            NSColor(
+                srgbRed: CGFloat((packed >> 16) & 0xFF) / 255,
+                green: CGFloat((packed >> 8) & 0xFF) / 255,
+                blue: CGFloat(packed & 0xFF) / 255,
+                alpha: 1
+            )
+        }
         switch level {
-        case .primary: increased ? 1.00 : 0.94
-        case .secondary: increased ? 0.86 : 0.74
-        case .tertiary: increased ? 0.70 : 0.55
-        case .quaternary: increased ? 0.48 : 0.34
+        case .primary: return .white
+        case .secondary: return solid(increased ? 0xED_EE_F0 : darkSecondary)
+        case .tertiary: return solid(increased ? 0xC9_CC_D1 : darkTertiary)
+        case .quaternary: return NSColor(srgbRed: 1, green: 1, blue: 1, alpha: increased ? 0.48 : 0.34)
         }
     }
+
+    /// The dark room's read-text grey, packed for contrast checks.
+    static let darkSecondary: UInt32 = 0xDB_DE_E1
+    /// The dark room's quietest text grey — timestamps, previews, the least
+    /// important line — packed, so `InkContrast.legibleVeil` measures the
+    /// grey the ramp actually paints.
+    static let darkTertiary: UInt32 = 0xAD_B1_B8
 
     /// Black at these alphas in a light room.
     private static func lightAlpha(_ level: Level, increased: Bool) -> CGFloat {
@@ -249,13 +273,13 @@ nonisolated enum InkRamp {
             ])
             switch match {
             case .accessibilityHighContrastDarkAqua:
-                return NSColor(srgbRed: 1, green: 1, blue: 1, alpha: darkAlpha(level, increased: true))
+                return darkInk(level, increased: true)
             case .accessibilityHighContrastAqua:
                 return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: lightAlpha(level, increased: true))
             case .aqua:
                 return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: lightAlpha(level, increased: false))
             default:
-                return NSColor(srgbRed: 1, green: 1, blue: 1, alpha: darkAlpha(level, increased: false))
+                return darkInk(level, increased: false)
             }
         }
     }
@@ -695,7 +719,16 @@ nonisolated enum Proportions {
     /// or five words, which reads as a column of fragments. Narrower than the
     /// transcript it sits beside, so it stays legible as the secondary of the
     /// two.
-    static let threadColumnIdeal: CGFloat = 340
+    static let threadColumnIdeal: CGFloat = sideColumnIdeal
+
+    /// **Every column beside a page or a conversation is one width** (Alex,
+    /// 2026-11-18: "we should make all these sidebars the same size for it to
+    /// be unified"): a thread, a forum post, a channel opened from the guide,
+    /// Browse Channels or Channels & Roles, a voice channel's chat, a message
+    /// request, a new thread — the forum post's 460, the one that read well.
+    /// The tokens below keep their names so their notes still say why each
+    /// place has a column; they all answer this.
+    static let sideColumnIdeal: CGFloat = 460
 
     /// The same panel, when what is in it is a forum post.
     ///
@@ -703,7 +736,7 @@ nonisolated enum Proportions {
     /// is the aside and the conversation is the page; beside a *board* the post
     /// is the page and the list is the index you came in through. It gets the
     /// room accordingly — the board still shows a readable row at what is left.
-    static let postColumnIdeal: CGFloat = 460
+    static let postColumnIdeal: CGFloat = sideColumnIdeal
 
     /// The profile column beside a direct message.
     ///
@@ -738,7 +771,7 @@ nonisolated enum Proportions {
     /// transcript, which needs room for an avatar gutter and a line of prose,
     /// and it is a *peek* — a preview that takes half the window has replaced
     /// the page it was meant to sit beside.
-    static let previewColumnIdeal: CGFloat = 340
+    static let previewColumnIdeal: CGFloat = sideColumnIdeal
 
     /// The search panel's column.
     ///
@@ -803,7 +836,7 @@ nonisolated enum Typeface {
     /// Section headers in the member list and in settings.
     static let sectionHeader = Font.system(.caption, weight: .semibold)
     /// A category disclosure header in the channel list.
-    static let categoryHeader = Font.system(.caption2, weight: .bold)
+    static let categoryHeader = Font.system(.footnote, weight: .semibold)
     /// Unread counts. Monospaced digits so a badge does not jitter in width as
     /// the count ticks.
     static let badge = Font.system(.caption2, weight: .bold).monospacedDigit()

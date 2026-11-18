@@ -72,6 +72,85 @@ struct ActivitySuggestionCard: View {
 }
 
 /// An activity's cover art as a tile, its name for VoiceOver and the pointer.
+/// The call's Activities control's first answer — Discord's Activities Mini
+/// Shelf: "Suggested Activities", "See All ›", and the shelf's top five, in
+/// its own ranking (`AppModel.suggestedActivities`). The rebuild had sent the
+/// control straight to the full launcher (Alex, 2026-11-18: "add back the
+/// suggested activities flyout"); See All is the way there now.
+struct SuggestedActivitiesFlyout: View {
+    var channelID: ChannelID
+    var seeAll: () -> Void
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var isLoading = true
+
+    /// Three cards across — the launcher's own (`ActivityGridCard`), so the
+    /// flyout and the launcher See All opens read as one design (Alex,
+    /// 2026-11-18: "smooth, cool, beautiful").
+    private static let cardWidth: CGFloat = 196
+
+    var body: some View {
+        let suggestions = model.suggestedActivities(3)
+        VStack(alignment: .leading, spacing: Spacing.snug) {
+            HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
+                Text("Suggested Activities")
+                    .font(.system(.title3, weight: .semibold))
+                    .foregroundStyle(Ink.primary)
+                Spacer(minLength: Spacing.margin)
+                Button(action: seeAll) {
+                    HStack(spacing: 3) {
+                        Text("See All")
+                        Image(systemName: "chevron.right")
+                            .font(.system(.caption, weight: .semibold))
+                    }
+                    .font(.system(.subheadline, weight: .medium))
+                    .foregroundStyle(Palette.accent)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if suggestions.isEmpty {
+                // Loading; if the directory can't be read, See All above is
+                // still the way in.
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, minHeight: Self.cardWidth * 9 / 16 + 44)
+                }
+            } else {
+                HStack(alignment: .top, spacing: Spacing.snug) {
+                    ForEach(suggestions) { row in
+                        // A press starts it: the mini shelf is the quick way in.
+                        ActivityGridCard(
+                            row: row,
+                            onOpen: { launch(row.id) },
+                            onStart: nil,
+                            artWidth: Self.cardWidth * 2
+                        )
+                        .frame(width: Self.cardWidth)
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(Spacing.margin)
+        .frame(width: Self.cardWidth * 3 + Spacing.snug * 2 + Spacing.margin * 2)
+        .animation(.easeOut(duration: 0.2), value: suggestions.map(\.id))
+        .task {
+            await model.sessionController.loadActivityDirectory()
+            isLoading = false
+        }
+    }
+
+    private func launch(_ id: ApplicationID) {
+        guard let app = model.activityApp(id) else { return }
+        dismiss()
+        Task { await model.sessionController.launchActivity(app, in: channelID, section: nil) }
+    }
+}
+
 private struct ActivityArtTile: View {
     var row: ActivityRow
     var size: CGSize

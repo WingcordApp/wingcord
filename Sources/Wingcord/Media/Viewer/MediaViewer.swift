@@ -376,13 +376,14 @@ private struct MediaViewerChrome: View {
             } else if stage.frameCount > 1 {
                 MediaFilmControls(stage: stage)
                     .frame(maxWidth: 560)
-            } else if stage.isZoomable {
-                MediaZoomControls(stage: stage)
             }
         }
         // A GIF has nothing to scrub, and AVKit's player brings its own: no
-        // bar at all, not an empty one.
-        if !item.loopsSilently, !item.usesSystemPlayer {
+        // bar at all, not an empty one. **Nor has a still picture** (Alex,
+        // 2026-11-18: "removing the zoom bar"): it zooms under a pinch, a
+        // scroll or a double-click, and the bar's slider was a second way in
+        // sitting over the photograph.
+        if !item.loopsSilently, !item.usesSystemPlayer, item.isVideo || stage.frameCount > 1 {
             bar
                 .padding(.horizontal, Spacing.snug)
                 .padding(.vertical, Spacing.base)

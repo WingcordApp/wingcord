@@ -41,11 +41,27 @@ nonisolated enum TimelineMetrics {
     static let runBottomPadding: CGFloat = 2
     /// Air between the newest message and the composer.
     ///
-    /// **Discord's own figure**: the message list ends in a 40 px spacer
-    /// (`.scrollerSpacer`) and the chat form rides 16 px up over it
-    /// (`.form { margin-top: -16px }`), which leaves 24 of clear space above
-    /// the text box. Without it the last line sat on the composer's glass.
-    static let composerClearance: CGFloat = 24
+    /// **12, not Discord's 24** (Alex, 2026-11-18: "wayy too much space
+    /// between the composer and the messages ... the one on swiftcord is
+    /// better"). Discord's list ends in a 40 px spacer the chat form rides
+    /// 16 px up over, which leaves 24 — but Discord's text box sits on a flat
+    /// floor, where this composer floats as glass with its own air around it,
+    /// so the same 24 read as a gap. Swiftcord leaves about 15; this with a
+    /// run's 2-point foot is 14. Without any, the last line sat on the glass.
+    static let composerClearance: CGFloat = 12
+
+    /// The air left above the composer when the typing or slowmode row
+    /// already takes `status` points of it.
+    ///
+    /// **The row is the air, not stacked on it**: it rides in the composer's
+    /// bar so the newest message is never hidden behind it, and it used to add
+    /// its 25 points on top of the clearance, which with slowmode on came to
+    /// 55 points between the last message and the composer (his Image 144).
+    /// Now the gap is the larger of the two, with a hairline of air between
+    /// the row and the message over it.
+    static func clearance(above status: CGFloat) -> CGFloat {
+        max(composerClearance - status, Spacing.tight)
+    }
 
     /// The header line: author name and timestamp.
     static let headerHeight: CGFloat = 20
@@ -270,8 +286,18 @@ nonisolated enum TimelineMetrics {
     static let tapbackInset: CGFloat = 4
     /// A badge's height, and its width when it carries no count: a circle.
     static let tapbackSide: CGFloat = reactionGlyphSide + tapbackInset * 2
-    /// How far inside the bubble's top corner the first badge's centre sits.
-    static let tapbackCornerInset = CGSize(width: 6, height: 2)
+    /// How far a badge reaches into the bubble it rides — short of the
+    /// bubble's text inset (`BubbleMetrics.horizontalPadding`, 12), so a badge
+    /// bites the corner and never covers a word (Alex, 2026-11-18: a "✅ 2" sat
+    /// over "after"). It used to reach 18 points in.
+    static let tapbackBite: CGFloat = 8
+    /// How far above the bubble's top edge a badge's centre sits, so it rides
+    /// the corner rather than the first line.
+    static let tapbackLift: CGFloat = 2
+    /// How far a bubble's quoted line sits in from the bubble's outer edge —
+    /// the room the line joining them takes to curve down onto the bubble
+    /// (`TimelineRowPainter.drawBubbleReplyLine`).
+    static let bubbleReplyIndent: CGFloat = 28
     /// Between two badges.
     static let tapbackGap: CGFloat = 3
     /// The gap cut round each badge into the bubble it rides, so the two read
@@ -279,7 +305,7 @@ nonisolated enum TimelineMetrics {
     static let tapbackNotch: CGFloat = 2.5
     /// How far a bubble steps down to make room for the half of its badges
     /// that rises above it.
-    static let tapbackRise: CGFloat = tapbackSide / 2 - tapbackCornerInset.height + 2
+    static let tapbackRise: CGFloat = tapbackSide / 2 + tapbackLift + 2
 
     /// A badge's width: a circle, or a capsule when a count follows the emoji.
     static func tapbackWidth(countWidth: CGFloat?) -> CGFloat {

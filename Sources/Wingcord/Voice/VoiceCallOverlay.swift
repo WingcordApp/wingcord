@@ -44,6 +44,10 @@ struct VoiceCallOverlay: View {
     /// the channel stage instead, and below the floor the tiles are smaller than
     /// the faces in them.
     @State private var height: CGFloat = VoiceCallOverlay.restingHeight
+    /// The conversation's height, for the drag's ceiling.
+    @State private var room: CGFloat = 0
+    /// Hide Members: the strip under a focused game or stream, put away.
+    @State private var hidesMembers = false
     /// Live drag offset, applied on top of `height` and 1:1 with the pointer.
     @State private var drag: CGFloat = 0
     @State private var isFullHeight = false
@@ -56,12 +60,26 @@ struct VoiceCallOverlay: View {
     static let minimumHeight: CGFloat = 168
     static let maximumHeight: CGFloat = 460
     static let restingHeight: CGFloat = 244
+    /// How much of the conversation a game may take by drag, and how much it
+    /// opens to. **A game is not sized like a call** (Alex, 2026-11-18: "i
+    /// cant resize the activity card", Wordle cut off): the 460 cap was made
+    /// for a row of faces, and a game's page needs the room its own layout
+    /// asks for — so while one is played the band reaches most of the
+    /// conversation, a few messages and the composer still in sight.
+    static let playingShare: CGFloat = 0.85
+    static let playingOpenShare: CGFloat = 0.7
+
+    /// How tall the band may be dragged in a conversation `room` tall.
+    private func bandCeiling(for room: CGFloat) -> CGFloat {
+        if isPlaying { return max(Self.minimumHeight, room * Self.playingShare) }
+        return min(Self.maximumHeight, max(Self.minimumHeight, room * 0.62))
+    }
     /// The strip at the band's foot that holds the handle, under the tiles.
     static let grabberStrip: CGFloat = 12
 
     var body: some View {
         GeometryReader { proxy in
-            let ceiling = min(Self.maximumHeight, max(Self.minimumHeight, proxy.size.height * 0.62))
+            let ceiling = bandCeiling(for: proxy.size.height)
             let resolved = resolvedHeight(ceiling: ceiling)
 
             band
@@ -74,9 +92,18 @@ struct VoiceCallOverlay: View {
                 // game needs, to start with**: the grabber still resizes it
                 // (Alex, 2026-11-17: "i cant resize the voice header when an
                 // activity is open"; it was pinned to the ceiling).
-                .onChange(of: activity?.isJoined == true) { _, joined in
-                    guard joined else { return }
-                    withAnimation(motion.reposition) { height = ceiling }
+                .onChange(of: proxy.size.height, initial: true) { _, value in
+                    room = value
+                }
+                // A game opens the band to most of the conversation, and the
+                // grabber takes it anywhere up to its ceiling; leaving the game
+                // brings the band back inside a call's.
+                .onChange(of: isPlaying) { _, playing in
+                    withAnimation(motion.reposition) {
+                        height = playing
+                            ? max(height, proxy.size.height * Self.playingOpenShare)
+                            : min(height, bandCeiling(for: proxy.size.height))
+                    }
                 }
         }
         // The band arrives from the edge it lives on and leaves the same way —
@@ -101,6 +128,10 @@ struct VoiceCallOverlay: View {
     /// sits under the game, always shown, instead of over its foot.
     private var isPlaying: Bool { activity?.isJoined == true }
 
+    /// A game or a person's stream has the stage, so the people under it are
+    /// a strip that Hide Members can put away.
+    private var isFocused: Bool { isPlaying || presentation.spotlightUserID != nil }
+
     private var band: some View {
         tiles
             .padding(.horizontal, Spacing.snug)
@@ -124,6 +155,7 @@ struct VoiceCallOverlay: View {
             }
             .animation(motion.reposition, value: isFullHeight)
             .animation(motion.reposition, value: isPlaying)
+            .animation(motion.reposition, value: hidesMembers)
     }
 
     /// Below the tiles: the handle's strip, and — while a game is played —
@@ -144,7 +176,8 @@ struct VoiceCallOverlay: View {
             watch: watch,
             spotlight: spotlight,
             activity: activity,
-            joinActivity: joinActivity
+            joinActivity: joinActivity,
+            hidesStrip: hidesMembers && isFocused
         )
     }
 
@@ -157,6 +190,17 @@ struct VoiceCallOverlay: View {
             toggleScreenShare: toggleScreenShare,
             leave: leave
         ) {
+            // **Discord's Hide Members** (Alex, 2026-11-18): with a game or a
+            // stream on the stage, the people under it can be put away so the
+            // band is all stage.
+            if isFocused {
+                CallCapsuleAccessory(
+                    title: hidesMembers ? "Show Members" : "Hide Members",
+                    systemImage: hidesMembers ? "person.2" : "person.2.slash"
+                ) {
+                    hidesMembers.toggle()
+                }
+            }
             CallFullScreenButton()
             CallExpandControl(isExpanded: $isFullHeight)
         }
@@ -194,12 +238,19 @@ struct VoiceCallOverlay: View {
                 // pointer does. A drag handle with no adjustable action is a
                 // control that only exists for a mouse.
                 let step: CGFloat = direction == .increment ? 32 : -32
-                height = min(Self.maximumHeight, max(Self.minimumHeight, height + step))
+                height = min(bandCeiling(for: room), max(Self.minimumHeight, height + step))
             }
     }
 
+    /// **Measured in the window, never in the handle's own space** (Alex,
+    /// 2026-11-18: "it flickers when i resize it"). The handle sits at the
+    /// band's foot and moves with every point the band grows, so a local
+    /// translation is measured from a frame that is itself moving: the pointer
+    /// goes down ten, the band follows ten, the handle's space says nothing
+    /// moved, and the height oscillates frame to frame. The sidebar's handle
+    /// has always been global for the same reason.
     private var resize: some Gesture {
-        DragGesture(minimumDistance: 1)
+        DragGesture(minimumDistance: 1, coordinateSpace: .global)
             .onChanged { value in
                 guard !isFullHeight else { return }
                 drag = value.translation.height
@@ -207,7 +258,7 @@ struct VoiceCallOverlay: View {
             .onEnded { value in
                 guard !isFullHeight else { return }
                 let target = min(
-                    Self.maximumHeight,
+                    bandCeiling(for: room),
                     max(Self.minimumHeight, height + value.translation.height)
                 )
                 let settled = height + drag

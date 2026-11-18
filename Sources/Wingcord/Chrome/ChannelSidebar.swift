@@ -149,15 +149,15 @@ struct ChannelSidebar: View, Equatable {
         ZStack(alignment: .top) {
             if hasBanner, let header = presentation.header {
                 TravellingBanner(header: header, layout: layout, scroll: scroll, pointer: bannerPointer)
-                    // Up to the window's top edge, under the toolbar, so the
-                    // sidebar toggle sits on the artwork instead of on a bare
-                    // strip above it. It is also what makes the banner's frame
-                    // start at `-topInset`, which is the placement every other
-                    // number here is measured against.
-                    .ignoresSafeArea(.container, edges: .top)
+                    // **Under the switcher, as the list's first thing**, no
+                    // longer up under the toolbar where the controls sat on the
+                    // picture (Alex, 2026-11-18). Carried up by the list, it
+                    // fades under the chrome exactly as a row does.
+                    .fadesUnderSidebarChrome()
             }
-            // The rows fade out under the panel's chrome; the banner behind
-            // them and the title over them are their own layers and keep it.
+            // The rows fade out under the panel's chrome, and so does the
+            // banner behind them (above); the name over them fades by its own
+            // opacity as it rides off the artwork.
             VStack(spacing: 0) {
                 // The conversations' search, fixed over the list as Messages
                 // keeps its own — the system's field on glass.
@@ -642,8 +642,9 @@ private struct TravellingPill: View {
             // The toolbar title answers the menu bar once it has the name.
             answersMenuBar: !layout.showsToolbarTitle
         )
+            // The same margin both sides, inside the banner's own inset.
             .padding(.leading, SidebarBannerLayout.pillLeading)
-            .padding(.trailing, Spacing.snug)
+            .padding(.trailing, SidebarBannerLayout.pillLeading)
             .offset(y: layout.pillTop)
             .opacity(layout.pillOpacity)
             // A pill faded to nothing must not still be taking clicks out of
@@ -712,6 +713,7 @@ private struct ServerNamePill: View {
 
     @State private var isMenuOpen = false
     @State private var page = ServerMenuPage()
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: Spacing.base) {
@@ -721,14 +723,15 @@ private struct ServerNamePill: View {
             } label: {
                 label
             }
-            // `.plain` + a content shape, THEN the glass. The borderless style
-            // with `.fixedSize` collapses the label frame on this platform.
             .buttonStyle(.plain)
-            // Hugs the label. Everything above this in the chain must leave the
-            // width alone.
-            .fixedSize()
-            .interactiveChromeOverMedia()
-            .animation(motion.glassMorph, value: name)
+            // **No `.fixedSize()`**: hugging the whole name ran a long one past
+            // the banner's edge (Alex, 2026-11-18). The button takes what the
+            // row has before the spacer does, and the name truncates in it.
+            .layoutPriority(1)
+            .onHover { isHovered = $0 }
+            .animation(motion.hover, value: isHovered)
+            // The whole name, for when the banner had to cut it short.
+            .help(name)
             .accessibilityLabel(Text(name))
             .accessibilityHint("Server options")
             // **Inline, because this is one view rather than a list row.** §2
@@ -758,9 +761,12 @@ private struct ServerNamePill: View {
         }
     }
 
-    /// Fixed ink rather than the vibrant hierarchy: this label composites
-    /// against a picture nobody chose, where a hierarchical style resolves to
-    /// whatever the artwork happens to be and stops being readable.
+    /// **Written on the picture, not on a pill** (Alex, 2026-11-18): white
+    /// and bold with a soft shadow, as a name over artwork is set — fixed
+    /// white rather than the ink hierarchy, because it composites against a
+    /// picture nobody chose. A soft dark glow behind it keeps it readable
+    /// where the artwork is bright or has already faded into a light panel,
+    /// and a faint plate under the pointer says it is a button.
     private var label: some View {
         HStack(spacing: Spacing.tight) {
             if let mark {
@@ -768,15 +774,26 @@ private struct ServerNamePill: View {
                     .padding(.trailing, Spacing.hair)
             }
             Text(name)
-                .font(.system(.subheadline, weight: .semibold))
-                .foregroundStyle(InkColor.primary)
+                .font(.system(.headline, weight: .bold))
+                .foregroundStyle(Color.white)
                 .lineLimit(1)
+                .truncationMode(.tail)
             Image(systemName: "chevron.down")
-                .font(.system(.caption2, weight: .bold))
-                .foregroundStyle(InkColor.secondary)
+                .font(.system(.caption, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.85))
         }
+        .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
         .padding(.horizontal, Spacing.snug)
         .frame(minHeight: Metrics.control)
+        .background {
+            Capsule().fill(Color.white.opacity(isHovered ? 0.16 : 0))
+        }
+        .background {
+            Capsule()
+                .fill(Color.black.opacity(0.3))
+                .blur(radius: 12)
+                .allowsHitTesting(false)
+        }
         .contentShape(.capsule)
     }
 }

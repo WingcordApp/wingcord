@@ -18,11 +18,17 @@ import SwiftUI
 /// animation of the same arrival. Nothing is written with `withAnimation`
 /// either (`INVARIANTS.md` §3).
 struct MediaViewerPresenter: ViewModifier {
+    /// Which of the two places this one is: under the profiles, for what the
+    /// transcript opens (so a profile raised from the viewer comes up over
+    /// it), or above the sheets, for what a sheet opens (Alex, 2026-11-18: a
+    /// game profile's pictures opened behind it).
+    var aboveSheets = false
+
     @Environment(AppModel.self) private var model
 
     func body(content: Content) -> some View {
         content.overlay {
-            if let request = model.mediaViewer {
+            if let request = model.mediaViewer, request.isAboveSheets == aboveSheets {
                 MediaViewer(
                     request: request,
                     step: { model.stepMedia(by: $0) },
@@ -41,8 +47,9 @@ struct MediaViewerPresenter: ViewModifier {
 }
 
 extension View {
-    /// Apply once, at the window root.
-    func presentsMedia() -> some View {
-        modifier(MediaViewerPresenter())
+    /// Apply twice at the window root: once under the profiles, and once with
+    /// `aboveSheets` after the game profile.
+    func presentsMedia(aboveSheets: Bool = false) -> some View {
+        modifier(MediaViewerPresenter(aboveSheets: aboveSheets))
     }
 }

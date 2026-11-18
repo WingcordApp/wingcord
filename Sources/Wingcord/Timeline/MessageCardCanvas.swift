@@ -22,6 +22,24 @@ import WingcordCore
 /// inside `updateNSView` would re-frameset on every SwiftUI pass, and the height
 /// has to be known before the row is placed or the list measures itself twice.
 /// See `MessageCard`.
+/// What the transcript fetches after a message lands — what an invite turned
+/// out to be, a Spotify link's card, Discord's hosted cards and how they
+/// measured, a server card's colours — handed to a card the way the
+/// transcript hands them to its own layout.
+///
+/// **Without them a card drew less than the channel does** (Alex, 2026-11-18:
+/// "in the inbox, server invites are not being rendered"): the inbox, pins
+/// and search laid messages out with none of these, so an invite stayed a
+/// bare link and a component card stayed unmeasured.
+struct MessageCardExtras {
+    var spotify: [String: SpotifyUnfurl] = [:]
+    var invites: [String: InviteLookup] = [:]
+    var voiceInvites: [ChannelID: VoiceInviteState] = [:]
+    var expandedInvites: Set<InviteCardFold> = []
+    var palettes: [URL: [UInt32]] = [:]
+    var hostedCardSizes: [HostedCardKey: HostedCardMeasure] = [:]
+}
+
 struct MessageCard: Identifiable, Sendable {
     let id: MessageID
     /// The laid-out rows — one message is one row, but the engine's unit is a
@@ -50,7 +68,9 @@ struct MessageCard: Identifiable, Sendable {
         settings: TimelineSettings,
         mentions: MentionContext,
         channelName: String,
-        authors: [UserID: TimelineLayoutEngine.AuthorInfo]
+        authors: [UserID: TimelineLayoutEngine.AuthorInfo],
+        extras: MessageCardExtras = MessageCardExtras(),
+        guildID: GuildID? = nil
     ) -> MessageCard {
         var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
         let rows = engine.layout(
@@ -67,7 +87,14 @@ struct MessageCard: Identifiable, Sendable {
                 channelName: channelName,
                 authors: authors,
                 calendar: .current,
-                settings: settings
+                settings: settings,
+                spotify: extras.spotify,
+                invites: extras.invites,
+                voiceInvites: extras.voiceInvites,
+                expandedInvites: extras.expandedInvites,
+                palettes: extras.palettes,
+                hostedCardSizes: extras.hostedCardSizes,
+                guildID: guildID
             ),
             cache: &cache
         )

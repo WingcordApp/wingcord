@@ -32,21 +32,21 @@ struct ActivityControlBar: View {
                     Button("Invite to Activity", systemImage: "person.crop.circle.badge.plus") {
                         model.inviteToRunningActivity()
                     }
-                    .labelStyle(.iconOnly)
+                    .labelStyle(.glassCircleIcon)
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
                     .help("Invite to Activity")
                 }
                 if showsReturn {
                     Button("Return to Activity", systemImage: "arrow.uturn.backward") { model.returnToActivity() }
-                        .labelStyle(.iconOnly)
+                        .labelStyle(.glassCircleIcon)
                         .buttonStyle(.glass)
                         .buttonBorderShape(.circle)
                         .help("Return to Activity")
                 }
                 if showsPopOut {
                     Button("Pop Out", systemImage: "macwindow.on.rectangle") { model.popOutActivity() }
-                        .labelStyle(.iconOnly)
+                        .labelStyle(.glassCircleIcon)
                         .buttonStyle(.glass)
                         .buttonBorderShape(.circle)
                         .help("Pop Out")
@@ -54,7 +54,7 @@ struct ActivityControlBar: View {
                 Button("Leave Activity", systemImage: "rectangle.portrait.and.arrow.right") {
                     Task { await model.sessionController.leaveActivity() }
                 }
-                .labelStyle(.iconOnly)
+                .labelStyle(.glassCircleIcon)
                 .buttonStyle(.glassProminent)
                 .buttonBorderShape(.circle)
                 .tint(Palette.destructive)

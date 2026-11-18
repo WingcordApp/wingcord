@@ -200,7 +200,11 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
         return TimelineSettings(
             isCompact: settings.isCompactMode,
             usesBubbles: settings.usesMessageBubbles,
-            tintsOwnBubbles: settings.tintsOwnBubbles,
+            // **Frosted over a picture or a colour theme, whatever the tint**
+            // (Alex, 2026-11-18: "i dont think these are frosted bubbles they
+            // still take the accent color"): the accent is a plain room's.
+            tintsOwnBubbles: settings.tintsOwnBubbles
+                && (WallpaperFrost.shared.image == nil || !BubbleTint.showsFrost),
             showsEmbeds: settings.showsEmbeds,
             uses24HourTime: settings.uses24HourTime,
             showsSeconds: settings.showsSeconds,

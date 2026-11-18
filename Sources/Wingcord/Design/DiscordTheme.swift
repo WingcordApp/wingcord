@@ -311,13 +311,30 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
     /// **A light theme's veil is white, and its numbers are its own**: 85 % under
     /// the chat, thinned as Discord's light custom themes thin it,
     /// `0.85·(0.6 + 0.4·m)`.
+    ///
+    /// **A dark theme too bright to read is veiled further** (Alex,
+    /// 2026-11-18: the text looked washed out): the preset's end of the range
+    /// rises to `legibleVeil` where that is more. The most vivid end stays
+    /// Discord's, so the vividness slider keeps its whole travel and a reader
+    /// who wants the brighter ground can still have it.
     func readingVeil(vividness: Double) -> Double {
-        let veil = switch base {
-        case .dark: Self.veil(from: 0.80, to: 0.48 + 0.32 * 0.3, vividness: vividness)
-        case .light: Self.veil(from: 0.85, to: 0.85 * (0.6 + 0.4 * 0.3), vividness: vividness)
+        switch base {
+        case .dark:
+            Self.veil(
+                from: max(0.80 * veilScale, legibleVeil),
+                to: (0.48 + 0.32 * 0.3) * veilScale,
+                vividness: vividness
+            )
+        case .light:
+            Self.veil(from: 0.85, to: 0.85 * (0.6 + 0.4 * 0.3), vividness: vividness) * veilScale
         }
-        return veil * veilScale
     }
+
+    /// The veil this theme's brightest stop needs for the dark room's quietest
+    /// ink to read at the HIG's 7:1 — `InkContrast.legibleVeil`. Zero for
+    /// most presets, whose 80 % already does; Vice City's orange under its
+    /// 0.8 multiplier is the one that needs it.
+    var legibleVeil: Double { InkContrast.legibleVeil(over: stops.map(\.color)) }
 
     /// How much black Discord lays over the gradient under a server's channel
     /// list.
@@ -329,12 +346,19 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
     ///
     /// A light theme's channel list sits under 70 % of white, thinned as
     /// `0.42 + 0.28·m`.
+    ///
+    /// A dark theme's preset end rises to `legibleVeil`, as the chat's does.
     func sidebarVeil(vividness: Double) -> Double {
-        let veil = switch base {
-        case .dark: Self.veil(from: 0.75, to: 0.45 + 0.30 * 0.3, vividness: vividness)
-        case .light: Self.veil(from: 0.70, to: 0.42 + 0.28 * 0.3, vividness: vividness)
+        switch base {
+        case .dark:
+            Self.veil(
+                from: max(0.75 * veilScale, legibleVeil),
+                to: (0.45 + 0.30 * 0.3) * veilScale,
+                vividness: vividness
+            )
+        case .light:
+            Self.veil(from: 0.70, to: 0.42 + 0.28 * 0.3, vividness: vividness) * veilScale
         }
-        return veil * veilScale
     }
 
     /// What a preset scales every veil by: Discord's

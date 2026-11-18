@@ -1623,6 +1623,38 @@ nonisolated enum TimelineRowPainter {
     /// A bubble row's own marks: the bubble under the words, lifted while the
     /// pointer is on the row and tinted where it mentions the reader, and the
     /// time beside it on the side the row leaves open.
+    /// The line from a bubble's quoted message down onto the bubble (Alex,
+    /// 2026-11-18: "Add a line between the reply and the bubble to make it
+    /// more beautiful"): the elbow's ink, weight and turn, out of the quote's
+    /// outer end and landing on the bubble's top just inside its corner. Only
+    /// where the bubble follows the quote directly — a name between them would
+    /// be crossed.
+    private static func drawBubbleReplyLine(
+        from quote: CGRect, to bubble: CGRect, isTrailing: Bool, offset: CGPoint, context: CGContext
+    ) {
+        guard quote.width > 0, bubble.minY - quote.maxY < 12 else { return }
+        let radius = TimelineMetrics.replyElbowRadius
+        let midY = offset.y + quote.midY
+        let start = isTrailing ? offset.x + quote.maxX + 4 : offset.x + quote.minX - 4
+        let legX = isTrailing ? offset.x + bubble.maxX - 14 : offset.x + bubble.minX + 14
+        let bottom = offset.y + bubble.minY + 4
+        guard isTrailing ? start < legX - radius : start > legX + radius else { return }
+        context.saveGState()
+        context.setStrokeColor(ThemeInk.current.selectionFill)
+        context.setLineWidth(TimelineMetrics.replyElbowWidth)
+        context.setLineCap(.round)
+        context.beginPath()
+        context.move(to: CGPoint(x: start, y: midY))
+        context.addArc(
+            tangent1End: CGPoint(x: legX, y: midY),
+            tangent2End: CGPoint(x: legX, y: bottom),
+            radius: radius
+        )
+        context.addLine(to: CGPoint(x: legX, y: bottom))
+        context.strokePath()
+        context.restoreGState()
+    }
+
     private static func drawBubble(
         _ bubbles: BubbleRow,
         of row: MessageRow,
@@ -1632,13 +1664,23 @@ nonisolated enum TimelineRowPainter {
         context: CGContext
     ) {
         if let bubble = bubbles.bubble, !state.hidesBubble {
+            // Under the bubble, so the line's end tucks into its rim.
+            if let header = row.replyHeader {
+                drawBubbleReplyLine(
+                    from: header.rect, to: bubble.rect, isTrailing: bubbles.side == .trailing,
+                    offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY), context: context
+                )
+            }
             let ink = ThemeInk.current
             let tint = BubbleTint.current
             context.saveGState()
             context.translateBy(x: rowFrame.minX, y: rowFrame.minY)
             context.addPath(bubble.path)
             switch bubble.ground {
-            case .accent: context.setFillColor(state.isHovered ? ink.ownBubbleHover : ink.ownBubble)
+            case .accent:
+                // Over a frost the accent is glass too (`BubbleTint.accentAlpha`).
+                let paint = state.isHovered ? ink.ownBubbleHover : ink.ownBubble
+                context.setFillColor(paint.copy(alpha: paint.alpha * tint.accentAlpha) ?? paint)
             case .own: context.setFillColor(state.isHovered ? tint.ownHover : tint.own)
             case .neutral: context.setFillColor(state.isHovered ? tint.otherHover : tint.other)
             }
@@ -1753,6 +1795,19 @@ nonisolated enum TimelineRowPainter {
                 ),
                 maxWidth: header.nameRect.width + 4,
                 tracking: header.nameTracking,
+                context: context
+            )
+        }
+        // The quoted author's server tag, in the roster's chip — the layout
+        // decided where (`layoutReplyHeader`).
+        if let tag = header.tag {
+            drawTagChip(
+                tag,
+                in: header.tagRect.offsetBy(dx: offset.x, dy: offset.y),
+                badge: header.tagBadgeURL,
+                style: style,
+                images: images,
+                scale: scale,
                 context: context
             )
         }

@@ -1333,6 +1333,10 @@ enum DemoFixtures {
         }
         guard channels.count >= 6 else { return }
 
+        // The features Discord's guide needs (`offersServerGuide`).
+        for guide in [first, third] {
+            model.guilds[guide]?.features.formUnion(["COMMUNITY", "GUILD_SERVER_GUIDE", "GUILD_ONBOARDING"])
+        }
         model.serverGuides[first] = ServerGuide(
             guildID: first,
             isEnabled: true,

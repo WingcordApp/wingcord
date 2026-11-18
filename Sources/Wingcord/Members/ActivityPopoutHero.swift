@@ -10,6 +10,10 @@ struct ActivityPopoutHero: View {
     var tint: ActivityCardTint?
     var open: (ActivityPopoutPresentation.Destination) -> Void
 
+    @Environment(AppModel.self) private var model
+    /// The stores' list is up, under a game with more than one.
+    @State private var isPickingStore = false
+
     private static let artWidth: CGFloat = 72
 
     var body: some View {
@@ -107,7 +111,11 @@ struct ActivityPopoutHero: View {
         }
     }
 
-    /// "Get on Steam" — one store a button, two a Play menu (`607781`). Glass,
+    /// "Get on Steam" — one store a button, two a Play button that lists them
+    /// (`607781`). **Full width, as Discord's** (`fullWidth` defaults to true
+    /// there): the list was a `Menu`, and macOS sizes a menu button to its
+    /// words, so "Play" sat as a small pill in the middle of the card (Alex,
+    /// 2026-11-18: "the play button on activities is too small"). Glass,
     /// Alex's rule for buttons, where Discord's is solid white.
     @ViewBuilder
     private var store: some View {
@@ -115,31 +123,56 @@ struct ActivityPopoutHero: View {
             Button { open(.link(offer.url)) } label: { storeLabel(offer.store, offer.store.callToAction) }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
-                .controlSize(.large)
+                .controlSize(.extraLarge)
                 .help("Open \(offer.store.title) in your browser")
         } else if popout.storeOffers.count > 1 {
-            Menu {
-                ForEach(popout.storeOffers) { offer in
-                    Button(offer.store.title) { open(.link(offer.url)) }
-                }
-            } label: {
-                storeLabel(nil, "Play")
+            Button { isPickingStore.toggle() } label: {
+                storeLabel(nil, "Play", chevron: isPickingStore ? "chevron.up" : "chevron.down")
             }
-            .menuStyle(.button)
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
-            .controlSize(.large)
-            .menuIndicator(.hidden)
-            .frame(maxWidth: .infinity)
+            .controlSize(.extraLarge)
+            .help("Select a platform to get the game")
+            // The game profile's list, in Discord's words.
+            .popover(isPresented: $isPickingStore, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Select a platform to get the game")
+                        .font(.system(.caption, weight: .semibold))
+                        .foregroundStyle(Ink.tertiary)
+                        .padding(.horizontal, Spacing.base)
+                        .padding(.vertical, Spacing.tight)
+                    ForEach(popout.storeOffers) { offer in
+                        FlyoutRow(title: offer.store.profileLabel, discordIcon: offer.store.discordIcon) {
+                            isPickingStore = false
+                            open(.link(offer.url))
+                        }
+                        .accessibilityLabel(Text(offer.store.profileAccessibilityLabel))
+                    }
+                }
+                .padding(.vertical, Spacing.tight)
+                .frame(width: 260)
+            }
+            // The pointer goes into the list, off the popout: a hover-opened
+            // popout must stay while the reader chooses.
+            .onChange(of: isPickingStore) { _, picking in
+                if picking { model.pinActivityCard() }
+            }
         }
     }
 
-    private func storeLabel(_ store: GameStore?, _ text: String) -> some View {
+    private func storeLabel(_ store: GameStore?, _ text: String, chevron: String? = nil) -> some View {
         HStack(spacing: 6) {
             if let store {
-                BrandGlyph(service: store.brandService).fill(.white).frame(width: 15, height: 15)
+                DiscordBrandIconView(icon: store.discordIcon)
+                    .foregroundStyle(.white)
+                    .frame(width: 15, height: 15)
             }
             Text(text).font(.system(.subheadline, weight: .semibold)).lineLimit(1)
+            if let chevron {
+                Image(systemName: chevron)
+                    .font(.system(size: 10, weight: .bold))
+                    .accessibilityHidden(true)
+            }
         }
         .frame(maxWidth: .infinity)
     }

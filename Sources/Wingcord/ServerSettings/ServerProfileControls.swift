@@ -355,7 +355,9 @@ private struct TraitSlot: View {
                 addLabel: "Add emoji, trait \(number)",
                 updateLabel: { "Change emoji, \($0.name), trait \(number)" },
                 side: 26,
-                isEnabled: isEnabled
+                isEnabled: isEnabled,
+                // Discord's GUILD_PROFILE takes no custom emoji.
+                destination: .unicodeOnly
             )
             TextField(
                 "Trait \(number)",

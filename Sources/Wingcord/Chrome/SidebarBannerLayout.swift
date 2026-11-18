@@ -11,26 +11,16 @@ import CoreGraphics
 /// of empty column between the artwork and the rows, with each of the three
 /// individually defensible.
 ///
-/// ## The one measured input
+/// ## Under the switcher, not under the chrome (2026-11-18)
 ///
-/// `chromeInset` is the only thing here that has to be asked for rather than
-/// derived, and every failure this type exists to prevent came from it being
-/// wrong rather than from the arithmetic below. Measured on a live macOS 27
-/// window, all four in the same frame:
-///
-/// - the toolbar strip is **52.00** points tall;
-/// - a `GeometryProxy` that **ignores** the safe area reports **0.00** for it,
-///   and one that respects it reports **52.00** — so the reader that looks like
-///   the right one to use is the one that cannot answer;
-/// - `.ignoresSafeArea(.container, edges: .top)` lifts a fixed-height view to
-///   the window's own top edge, so the banner's frame reports `y = -52.00`;
-/// - with a drawn height of `chromeInset + bannerHeight`, the two cancel and the
-///   artwork's lower lip lands at exactly `bannerHeight` in the column's space.
-///
-/// With a zero inset in hand the banner was built a toolbar's height short, its
-/// lower lip landed 52 points above where the pill and the list both assumed it
-/// was, and the pill — placed correctly against an edge that was not there —
-/// floated in the gap underneath the artwork.
+/// The banner used to run up under the toolbar to the window's top edge, so the
+/// arithmetic here was built on the measured chrome inset (52 points on a live
+/// macOS 27 window) — and the sidebar toggle, the create menu and the page
+/// switcher all sat on the picture (Alex: "the sidebar looks very bad when
+/// there's a server banner"). It is the list's first thing now: 16:9 at the
+/// column's width, under the switcher, its foot fading into the glass, the
+/// server's name written on it. `chromeInset` is still measured and carried for
+/// the views that read it; it places nothing here any more.
 nonisolated struct SidebarBannerLayout: Equatable {
     /// Whether this server has artwork at all. Most do not — a banner is a boost
     /// perk — and every measurement below collapses to nothing when it is false.
@@ -52,62 +42,61 @@ nonisolated struct SidebarBannerLayout: Equatable {
     /// gives its width back to the name (`ShellLayout.foldsSidebarToggle`).
     var foldsSidebarToggle: Bool = false
 
-    // MARK: The two constants
+    // MARK: The constants
 
-    /// The artwork's height **below the chrome**.
+    /// The banner's side inset: the channel rows' own, so the picture lines up
+    /// with the list it heads.
+    static let sideInset: CGFloat = Spacing.base
+
+    /// The gap between the page switcher and the banner's top.
     ///
-    /// A guild banner is authored at 960x540 — a 16:9 strip. Aspect-filled into
-    /// a 220pt-wide column at 116pt tall it was cropped to roughly a third of
-    /// its height, which is why every server's banner read as an unrecognisable
-    /// detail. At 172 the column shows about half, and the pill has colour under
-    /// its whole body rather than straddling the seam.
-    static let bannerHeight: CGFloat = 172
+    /// **The run the column's rows fade over as they pass under the chrome**
+    /// (`SidebarChromeFade.run`): the banner rests just below it, whole, and
+    /// fades the way a row does once the list carries it up.
+    static let topMargin: CGFloat = SidebarChromeFade.run
 
-    /// Vertical room the pill occupies, its own breathing space included. It is
-    /// also the distance the pill's fade is spread over.
-    static var pillSlot: CGFloat { Metrics.control + Spacing.base }
+    /// The banner's top corners. Its foot has none: it fades into the glass.
+    static let cornerRadius: CGFloat = 12
 
-    /// The pill's leading edge, from the column's — which is the banner's too,
-    /// now that the banner runs edge to edge. Where it always stood, so the
-    /// pill did not move when the artwork lost its inset and its corner.
-    static var pillLeading: CGFloat { Spacing.base + Spacing.snug }
+    /// The height a banner takes before the column has been measured.
+    static let fallbackHeight: CGFloat = 140
+
+    /// Vertical room the name occupies from the artwork's foot, its breathing
+    /// space included — high enough that it reads on picture rather than on
+    /// the faded foot. Also the distance the name's fade is spread over.
+    static var pillSlot: CGFloat { Metrics.control + Spacing.base + Spacing.snug }
+
+    /// The name's leading edge, from the column's: inside the banner's own
+    /// inset by `Spacing.snug`.
+    static var pillLeading: CGFloat { sideInset + Spacing.snug }
 
     // MARK: Derived
 
-    /// The banner's height with no pull applied — the size the zoom is measured
-    /// against, and the height the artwork is fetched for.
+    /// The artwork's height: **Discord's 16:9** at the width the column gives
+    /// it — the whole banner, uncropped, as Discord's channel list shows it (a
+    /// banner is authored at 960x540). Clamped so a very narrow or very wide
+    /// column keeps a header rather than a sliver or a poster.
     ///
-    /// The artwork runs **under the toolbar**, up to the window's own top edge,
-    /// so the sidebar toggle floats over the picture rather than over a bare
-    /// strip above it. That overhang is this term.
-    var bannerRestingHeight: CGFloat { chromeInset + Self.bannerHeight }
+    /// It used to be 172 plus the chrome it ran under, behind the toolbar and
+    /// the page switcher, with the name on a pill at its lip (Alex,
+    /// 2026-11-18: "the sidebar looks very bad when there's a server banner").
+    var bannerHeight: CGFloat {
+        guard columnWidth > 0 else { return Self.fallbackHeight }
+        return min(200, max(110, ((columnWidth - Self.sideInset * 2) * 9 / 16).rounded()))
+    }
 
-    /// The height the banner view is laid out at, pull included.
+    /// The banner's height at rest.
+    var bannerRestingHeight: CGFloat { bannerHeight }
+
+    /// The height the banner view is laid out at.
     var bannerDrawnHeight: CGFloat { bannerRestingHeight }
 
-    // There used to be a `stretch` term here, and a matching spring in
-    // `ChannelSidebar`, that grew and zoomed the artwork when the list was
-    // pulled past its top. It is gone on purpose: the effect had to be driven
-    // from `NSScrollView`'s elastic offset, which springs back to zero between
-    // trackpad flicks, so it needed a held high-water mark, a scroll-phase
-    // observer and a second animation curve just to stop collapsing mid-gesture
-    // — and it still deformed the column's geometry under everything else drawn
-    // there. The banner is a fixed height now.
-
-    /// Where the banner's frame starts, in the column's own space: above it, by
-    /// exactly the chrome it runs under.
-    ///
-    /// This is the placement `.ignoresSafeArea(.container, edges: .top)`
-    /// performs, written down rather than assumed — measured on a live window as
-    /// `y = -52.00` against a 52.00 inset.
-    var bannerTop: CGFloat { -chromeInset }
+    /// Where the banner's frame starts, in the column's own space: under the
+    /// page switcher, as the list's first thing — no longer up under the
+    /// toolbar, where the controls sat on the picture.
+    var bannerTop: CGFloat { Self.topMargin }
 
     /// The artwork's lower lip, in the column's own space.
-    ///
-    /// **Derived from the drawn frame rather than restated**, so the overhang
-    /// cannot be added to the height and forgotten here — which is the shape the
-    /// defect took: a banner drawn one height and a pill placed against another.
-    /// The two terms cancel at rest and this comes out as `bannerHeight`.
     var bannerBottom: CGFloat {
         hasBanner ? bannerTop + bannerDrawnHeight - travel : 0
     }
@@ -117,17 +106,17 @@ nonisolated struct SidebarBannerLayout: Equatable {
     /// motion when it comes back into view.
     var isBannerInView: Bool { hasBanner && bannerBottom > 0 }
 
-    /// The pill's top edge: on the banner's lower lip, travelling with it.
+    /// The name's top edge: in the artwork's lower corner, travelling with it.
     ///
     /// **Unclamped, deliberately.** It used to stop at zero and park there,
     /// which left the server's name in a second row of chrome eight points below
     /// the toolbar's own — two bars saying different things. It now rides the
-    /// artwork out of the column and hands the name to a real toolbar item on
-    /// the way out; see `showsToolbarTitle`.
+    /// artwork out of the column and hands the name to the header on the way
+    /// out; see `showsToolbarTitle`.
     var pillTop: CGFloat { bannerBottom - Self.pillSlot }
 
-    /// The pill's lower edge. `Spacing.base` above the artwork's, which is what
-    /// "sitting in the corner" means.
+    /// The name's lower edge, `pillSlot` less its own height above the
+    /// artwork's foot.
     var pillBottom: CGFloat { pillTop + Metrics.control }
 
     /// How solid the floating pill is as it runs out of banner to sit on.
@@ -172,7 +161,7 @@ nonisolated struct SidebarBannerLayout: Equatable {
     /// cancel exactly and had to be re-derived whenever either moved. Nothing
     /// parks under the chrome any more, so nothing needs reserving there.
     var listReserve: CGFloat {
-        hasBanner ? Self.bannerHeight + Spacing.base : 0
+        hasBanner ? bannerTop + bannerHeight + Spacing.base : 0
     }
 
     // MARK: The header's span

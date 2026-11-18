@@ -110,12 +110,19 @@ public enum TypingSentence {
     ///
     /// - Parameter style: the one typer's own; ignored for more than one.
     public static func make(names: [String], style: TypingIndicatorStyle?) -> String {
+        pieces(names: names, style: style).map { $0.text }.joined()
+    }
+
+    /// `make`'s sentence in pieces, each saying whether it is a name — so the
+    /// line can set the names in bold, as Discord's does ("**Ana** and **Ben**
+    /// are typing…"), without hunting for a name inside the words around it.
+    public static func pieces(names: [String], style: TypingIndicatorStyle?) -> [(text: String, isName: Bool)] {
         switch names.count {
-        case 0: ""
-        case 1: "\(names[0]) is \((style?.suggestion ?? .unspecified).verb)\u{2026}"
-        case 2: "\(names[0]) and \(names[1]) are typing\u{2026}"
-        case 3: "\(names[0]), \(names[1]) and \(names[2]) are typing\u{2026}"
-        default: "Several people are typing\u{2026}"
+        case 0: []
+        case 1: [(names[0], true), (" is \((style?.suggestion ?? .unspecified).verb)\u{2026}", false)]
+        case 2: [(names[0], true), (" and ", false), (names[1], true), (" are typing\u{2026}", false)]
+        case 3: [(names[0], true), (", ", false), (names[1], true), (" and ", false), (names[2], true), (" are typing\u{2026}", false)]
+        default: [("Several people are typing\u{2026}", false)]
         }
     }
 

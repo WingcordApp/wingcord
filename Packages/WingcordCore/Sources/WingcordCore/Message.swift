@@ -240,6 +240,8 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var forwarded: ForwardedMessage? { payload?.forwarded }
     /// What a Server Hub message is about. Nil for everything else.
     public var guildSpaceData: GuildSpaceMessageData? { payload?.guildSpaceData }
+    /// A call's record on its `CALL` message. Nil for everything else.
+    public var call: MessageCall? { payload?.call }
     public var mentionedUserIDs: [UserID] { payload?.mentionedUserIDs ?? [] }
     /// The roles this message pinged. On the payload already — this is the
     /// accessor that was missing beside its two neighbours, which is why
@@ -301,6 +303,16 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var isSystemEvent: Bool {
         switch kind {
         case .default, .reply, .chatInputCommand, .contextMenuCommand, .threadStarterMessage:
+            false
+        // **Drawn as ordinary messages, as Discord draws them.** Its system
+        // renderer map leaves these kinds out (`f1ea8c8b1054ad64`), so they go
+        // down the normal path with their content, embeds and components.
+        // Here they fell to the system row with no sentence, which says only
+        // "Message".
+        case .guildInviteReminder, .interactionPremiumUpsell, .guildDeadchatRevivePrompt,
+             .customGift, .guildGamingStatsPrompt, .voiceHangoutInvite, .changelog,
+             .hdStreamingUpgraded, .chatWallpaperSet, .chatWallpaperRemoved, .emojiAdded,
+             .mediaMentionMessage:
             false
         default:
             true
@@ -382,6 +394,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     /// (`content_inventory_entry`), the card a reply to somebody's activity
     /// carries into the conversation (docs/ACTIVITY-CARDS.md decision 11).
     public let contentEntry: RecentActivity?
+    /// A call's record — `call`: who was in it and when it ended. Nil for
+    /// everything else.
+    public let call: MessageCall?
 
     public init(
         attachments: [Attachment] = [],
@@ -406,7 +421,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         sharedTheme: SharedClientTheme? = nil,
         mediaMention: MediaMention? = nil,
         guildSpaceData: GuildSpaceMessageData? = nil,
-        contentEntry: RecentActivity? = nil
+        contentEntry: RecentActivity? = nil,
+        call: MessageCall? = nil
     ) {
         self.activityInvite = activityInvite
         self.listenAlong = listenAlong
@@ -431,6 +447,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         self.mediaMention = mediaMention
         self.guildSpaceData = guildSpaceData
         self.contentEntry = contentEntry
+        self.call = call
     }
 
     /// The same box with one array replaced.
@@ -467,7 +484,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             sharedTheme: sharedTheme,
             mediaMention: mediaMention,
             guildSpaceData: guildSpaceData,
-            contentEntry: contentEntry
+            contentEntry: contentEntry,
+            call: call
         )
     }
 
@@ -496,7 +514,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             sharedTheme: sharedTheme,
             mediaMention: mediaMention,
             guildSpaceData: guildSpaceData,
-            contentEntry: contentEntry
+            contentEntry: contentEntry,
+            call: call
         )
     }
 
@@ -525,7 +544,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             sharedTheme: sharedTheme,
             mediaMention: mediaMention,
             guildSpaceData: guildSpaceData,
-            contentEntry: contentEntry
+            contentEntry: contentEntry,
+            call: call
         )
     }
 
@@ -554,7 +574,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             sharedTheme: sharedTheme,
             mediaMention: mediaMention,
             guildSpaceData: guildSpaceData,
-            contentEntry: contentEntry
+            contentEntry: contentEntry,
+            call: call
         )
     }
 
@@ -568,6 +589,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             && reference == nil && forwarded == nil && webhookID == nil && nonce == nil
             && activityInvite == nil && listenAlong == nil && interaction == nil && thread == nil
             && sharedTheme == nil && mediaMention == nil && guildSpaceData == nil && contentEntry == nil
+            && call == nil
     }
 
     public static func == (lhs: MessagePayload, rhs: MessagePayload) -> Bool {
@@ -595,7 +617,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
                 && lhs.sharedTheme == rhs.sharedTheme
                 && lhs.mediaMention == rhs.mediaMention
                 && lhs.guildSpaceData == rhs.guildSpaceData
-                && lhs.contentEntry == rhs.contentEntry)
+                && lhs.contentEntry == rhs.contentEntry
+                && lhs.call == rhs.call)
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -644,6 +667,55 @@ public enum MessageKind: Int, Hashable, Sendable, Codable {
     /// A Server Hub event: the whiteboard is busy, the leaderboard turned over,
     /// the music has a new top (`guild_space_data`).
     case guildSpace = 69
+    // The rest of Discord's kinds (`MessageTypes` in the web bundle), so none
+    // of them is mistaken for an unknown one. Those Discord draws as a line
+    // have one in `SystemMessageText`; the ones it draws as ordinary messages
+    // are listed in `isSystemEvent`.
+    case guildStream = 13
+    case guildDiscoveryDisqualified = 14
+    case guildDiscoveryRequalified = 15
+    case guildDiscoveryGracePeriodInitialWarning = 16
+    case guildDiscoveryGracePeriodFinalWarning = 17
+    case guildInviteReminder = 22
+    case roleSubscriptionPurchase = 25
+    case interactionPremiumUpsell = 26
+    case guildApplicationPremiumSubscription = 32
+    case privateChannelIntegrationAdded = 33
+    case privateChannelIntegrationRemoved = 34
+    case premiumReferral = 35
+    case guildIncidentAlertModeEnabled = 36
+    case guildIncidentAlertModeDisabled = 37
+    case guildIncidentReportRaid = 38
+    case guildIncidentReportFalseAlarm = 39
+    case guildDeadchatRevivePrompt = 40
+    case customGift = 41
+    case guildGamingStatsPrompt = 42
+    case purchaseNotification = 44
+    case voiceHangoutInvite = 45
+    case changelog = 47
+    case nitroNotification = 48
+    case channelLinkedToLobby = 49
+    case giftingPrompt = 50
+    case inGameMessageNux = 51
+    case guildJoinRequestAccepted = 52
+    case guildJoinRequestRejected = 53
+    case guildJoinRequestWithdrawn = 54
+    case hdStreamingUpgraded = 55
+    case chatWallpaperSet = 56
+    case chatWallpaperRemoved = 57
+    case reportToModDeletedMessage = 58
+    case reportToModTimeoutUser = 59
+    case reportToModKickUser = 60
+    case reportToModBanUser = 61
+    case reportToModClosedReport = 62
+    case emojiAdded = 63
+    case premiumGroupInvite = 64
+    /// Somebody started a voice hangout.
+    case voiceSession = 65
+    /// A friend request was accepted; `content` is the note it came with.
+    case friendRequestAccepted = 67
+    /// A comment at a moment of a clip — an ordinary message.
+    case mediaMentionMessage = 68
     case unknown = -1
 
     public init(rawValue: Int) {
@@ -674,6 +746,48 @@ public enum MessageKind: Int, Hashable, Sendable, Codable {
         case 31: .stageTopic
         case 46: .pollResult
         case 69: .guildSpace
+        case 13: .guildStream
+        case 14: .guildDiscoveryDisqualified
+        case 15: .guildDiscoveryRequalified
+        case 16: .guildDiscoveryGracePeriodInitialWarning
+        case 17: .guildDiscoveryGracePeriodFinalWarning
+        case 22: .guildInviteReminder
+        case 25: .roleSubscriptionPurchase
+        case 26: .interactionPremiumUpsell
+        case 32: .guildApplicationPremiumSubscription
+        case 33: .privateChannelIntegrationAdded
+        case 34: .privateChannelIntegrationRemoved
+        case 35: .premiumReferral
+        case 36: .guildIncidentAlertModeEnabled
+        case 37: .guildIncidentAlertModeDisabled
+        case 38: .guildIncidentReportRaid
+        case 39: .guildIncidentReportFalseAlarm
+        case 40: .guildDeadchatRevivePrompt
+        case 41: .customGift
+        case 42: .guildGamingStatsPrompt
+        case 44: .purchaseNotification
+        case 45: .voiceHangoutInvite
+        case 47: .changelog
+        case 48: .nitroNotification
+        case 49: .channelLinkedToLobby
+        case 50: .giftingPrompt
+        case 51: .inGameMessageNux
+        case 52: .guildJoinRequestAccepted
+        case 53: .guildJoinRequestRejected
+        case 54: .guildJoinRequestWithdrawn
+        case 55: .hdStreamingUpgraded
+        case 56: .chatWallpaperSet
+        case 57: .chatWallpaperRemoved
+        case 58: .reportToModDeletedMessage
+        case 59: .reportToModTimeoutUser
+        case 60: .reportToModKickUser
+        case 61: .reportToModBanUser
+        case 62: .reportToModClosedReport
+        case 63: .emojiAdded
+        case 64: .premiumGroupInvite
+        case 65: .voiceSession
+        case 67: .friendRequestAccepted
+        case 68: .mediaMentionMessage
         default: .unknown
         }
     }

@@ -150,6 +150,27 @@ struct DetailHeader: View {
             ) {
                 toggleCall(chrome)
             }
+            // **Video beside the call, in its capsule** — Discord's pair
+            // (Alex, 2026-11-18). Before the call it starts one with the
+            // camera on, or joins the running one with it; in the call it is
+            // the camera.
+            if chrome.isInCall {
+                HeaderGroupButton(
+                    systemImage: model.isCameraOn ? "video.slash.fill" : "video.fill",
+                    label: model.isCameraOn ? "Turn Off Camera" : "Turn On Camera",
+                    isActive: model.isCameraOn
+                ) {
+                    model.toggleCamera()
+                }
+            } else {
+                HeaderGroupButton(
+                    systemImage: "video.fill",
+                    label: chrome.isCallOngoing ? "Join with Video" : "Start a Video Call"
+                ) {
+                    guard let channelID = model.selectedChannelID else { return }
+                    model.startVideoCall(in: channelID)
+                }
+            }
         } else if chrome.canShowVoiceChat {
             HeaderGroupButton(
                 systemImage: "bubble.left.and.text.bubble.right",
@@ -492,7 +513,17 @@ struct HeaderTitleCapsule: View {
 /// The soft band behind the header, so its glass reads against a quiet field
 /// rather than whatever the wallpaper or the transcript has under it —
 /// Noodle's header shade, drawn behind the controls and in front of the ground.
-private struct HeaderShade: View {
+///
+/// **Drawn under the sidebar column as well** (`WindowShell`): the toolbar runs
+/// the window's whole width, and with the shade on the detail column alone the
+/// strip above the floating panel showed the ground undarkened — a bright
+/// line along the sidebar's top that stopped at the panel's corner (Alex,
+/// 2026-11-18, his Images 147–149).
+struct HeaderShade: View {
+    /// How far down it reaches: the toolbar's row by default; a side
+    /// column's header passes its own (`ColumnTranscript`).
+    var height: CGFloat = ShellMetrics.headerHeight + 18
+
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -505,7 +536,7 @@ private struct HeaderShade: View {
             startPoint: .top,
             endPoint: .bottom
         )
-        .frame(height: ShellMetrics.headerHeight + 18)
+        .frame(height: height)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

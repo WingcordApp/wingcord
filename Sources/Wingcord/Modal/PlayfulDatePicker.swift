@@ -111,6 +111,11 @@ extension PlayfulDatePicker {
 
     /// The month's days in weeks — blanks before the first and after the last,
     /// the week starting where the reader's calendar starts it.
+    ///
+    /// **Always six weeks**, as the system's own calendar lays a month out. A
+    /// month that fits in five used to leave its sixth row off, so the popover
+    /// shrank, and — opening upward from its field — moved the arrows a row
+    /// away from the pointer that had just pressed one (Alex, 2026-11-18).
     static func days(of month: Date, calendar: Calendar) -> [Date?] {
         guard let range = calendar.range(of: .day, in: .month, for: month) else { return [] }
         let weekday = calendar.component(.weekday, from: month)
@@ -119,7 +124,7 @@ extension PlayfulDatePicker {
         for day in range {
             cells.append(calendar.date(byAdding: .day, value: day - 1, to: month))
         }
-        while cells.count % 7 != 0 { cells.append(nil) }
+        while cells.count < 42 { cells.append(nil) }
         return cells
     }
 

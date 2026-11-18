@@ -192,7 +192,10 @@ struct CustomStatusBubble: View {
                         guard case .insert(let text) = item.pick else { return }
                         answer?.send(text)
                     },
-                    onPickGIF: { _ in }
+                    onPickGIF: { _ in },
+                    // Sent in a DM, where no server is home: every custom
+                    // emoji needs Nitro (Alex, 2026-11-18).
+                    destination: .personal
                 )
                 .presentationBackground(.clear)
                 .profileFlyoutAppearance()

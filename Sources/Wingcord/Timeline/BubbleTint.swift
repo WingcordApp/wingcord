@@ -32,6 +32,11 @@ nonisolated struct BubbleTint: Sendable {
     var badgeHover: CGColor
     /// The glass's edge, on a frosted bubble only.
     var rim: CGColor?
+    /// How much of the reader's accent bubble is paint: all of it on a plain
+    /// ground, a little less over a frost — so a tinted bubble is frosted too,
+    /// the accent as glass rather than a sticker on the picture (Alex,
+    /// 2026-11-18: "make them blurry").
+    var accentAlpha: CGFloat = 1
 
     private struct Inputs: Sendable {
         var frost: FrostLevels?
@@ -113,6 +118,8 @@ nonisolated struct BubbleTint: Sendable {
         tint.badge = denser(tint.badge)
         tint.badgeHover = denser(tint.badgeHover)
         tint.rim = inputs.isLight ? black(0.28) : white(0.38)
+        // Asked for contrast: the accent stays solid paint.
+        tint.accentAlpha = 1
         return tint
     }
 
@@ -145,7 +152,7 @@ nonisolated struct BubbleTint: Sendable {
                 own: black(clear), ownHover: black(max(needed, clear - 0.06)),
                 other: black(dense), otherHover: black(max(needed, dense - 0.06)),
                 badge: black(dense), badgeHover: black(max(needed, dense - 0.06)),
-                rim: white(0.14)
+                rim: white(0.14), accentAlpha: 0.8
             )
         case (let frost?, true):
             let clear = min(max(0.42, milk(over: frost.darkest)), 0.82)
@@ -154,7 +161,7 @@ nonisolated struct BubbleTint: Sendable {
                 own: white(clear), ownHover: white(min(clear + 0.08, 0.95)),
                 other: white(dense), otherHover: white(min(dense + 0.08, 0.95)),
                 badge: white(dense), badgeHover: white(min(dense + 0.08, 0.95)),
-                rim: white(0.55)
+                rim: white(0.55), accentAlpha: 0.84
             )
         case (nil, false):
             return BubbleTint(

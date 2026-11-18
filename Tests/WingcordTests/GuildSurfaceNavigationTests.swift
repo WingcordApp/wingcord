@@ -105,6 +105,10 @@ struct GuildSurfaceNavigationTests {
     @Test("A guide with something in it comes first")
     func guideLeadsTheList() {
         let model = model()
+        // Discord's tests for a guide (`offersServerGuide`): the server's
+        // features, and a newcomer who has not finished it.
+        model.guilds[guildID]?.features.formUnion(["COMMUNITY", "GUILD_SERVER_GUIDE", "GUILD_ONBOARDING"])
+        model.members[guildID] = [readerID: Member(userID: readerID, joinedAt: .now)]
         model.serverGuides[guildID] = ServerGuide(
             guildID: guildID,
             isEnabled: true,
@@ -116,6 +120,32 @@ struct GuildSurfaceNavigationTests {
         // Order is the server's own: the front page, the way in, the
         // moderators' Members, the extras.
         #expect(model.guildSurfaceRows(for: guildID) == [.serverGuide, .browseChannels, .members, .gameServers])
+    }
+
+    @Test("A finished guide, or a member of more than a week, has no row — as on Discord")
+    func guideLeavesWhenDone() {
+        let model = model()
+        model.guilds[guildID]?.features.formUnion(["COMMUNITY", "GUILD_SERVER_GUIDE", "GUILD_ONBOARDING"])
+        model.serverGuides[guildID] = ServerGuide(
+            guildID: guildID,
+            isEnabled: true,
+            resources: [ServerGuide.Resource(id: 0, channelID: ChannelID(rawValue: 2001), title: "Links")]
+        )
+        model.members[guildID] = [readerID: Member(userID: readerID, joinedAt: .now, flags: .completedHomeActions)]
+        #expect(!model.guildSurfaceRows(for: guildID).contains(.serverGuide))
+        model.members[guildID] = [readerID: Member(userID: readerID, joinedAt: .now.addingTimeInterval(-8 * 24 * 60 * 60))]
+        #expect(!model.guildSurfaceRows(for: guildID).contains(.serverGuide))
+    }
+
+    @Test("A guide's answer alone is not a row: the server must offer one, as Discord asks")
+    func guideNeedsTheFeatures() {
+        let model = model()
+        model.serverGuides[guildID] = ServerGuide(
+            guildID: guildID,
+            isEnabled: true,
+            resources: [ServerGuide.Resource(id: 0, channelID: ChannelID(rawValue: 2001), title: "Links")]
+        )
+        #expect(!model.guildSurfaceRows(for: guildID).contains(.serverGuide))
     }
 
     /// 403, 404 and `[]` all mean the same thing to this row, and all three are

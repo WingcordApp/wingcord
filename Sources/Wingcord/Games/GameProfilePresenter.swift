@@ -44,6 +44,11 @@ struct GameProfilePresenter: ViewModifier {
                         .buttonStyle(.plain)
                         .cancelAction(unless: model.isCovered(.gameProfile))
                         .accessibilityLabel(Text("Close game profile"))
+                        // Past the titlebar, as the profile's scrim goes
+                        // (`INVARIANTS.md`): stopped at the safe area, it left
+                        // the toolbar strip bright over a dimmed window (Alex,
+                        // 2026-11-18).
+                        .ignoresSafeArea()
                         .transition(.opacity)
 
                         page(request, container: proxy.size)

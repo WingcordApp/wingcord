@@ -246,16 +246,24 @@ public struct Game: Hashable, Sendable, Identifiable {
         }
     }
 
-    /// The links the profile prints as a row of marks.
+    /// The links the profile prints as a row of marks — Discord's own row:
+    /// every website in its eleven kinds, in its order (a stable sort, as its
+    /// JavaScript one is), then one App Store and one Play Store page, each
+    /// the first link on the store's own host or else built from the store's
+    /// id in `third_party_skus` (Discord's `n1`, the Reviews card's rule).
     ///
-    /// **The store and reference links are deliberately not here.** Steam has
-    /// its own button above the fold and Discord has its own card; a wiki entry
-    /// is not somewhere the game speaks from. What is left is the set the three
-    /// captures actually draw — the official site and the social accounts — and
-    /// each of those has a brand mark, so the row reads as marks rather than as
-    /// a line of identical globes.
+    /// **The stores with buttons of their own are not here** (Steam, Epic,
+    /// Battle.net, Riot, Minecraft…), nor Wikipedia or a Discord invite, as in
+    /// Discord's row; Fandom, Itch and Roblox are (Alex, 2026-11-18).
     public var socialLinks: [GameWebsite] {
-        websites.filter(\.category.isSocialLink)
+        let ranked = websites.enumerated()
+            .compactMap { index, site in site.category.linkRank.map { (rank: $0, index: index, site: site) } }
+            .sorted { ($0.rank, $0.index) < ($1.rank, $1.index) }
+            .map(\.site)
+        let phones = MobileStore.allCases.compactMap { store in
+            storePage(for: store).map { GameWebsite(url: $0, category: store.categories[0]) }
+        }
+        return ranked + phones
     }
 }
 
@@ -528,12 +536,27 @@ public enum GameLinkCategory: Int, Hashable, Sendable {
 
     /// Whether it belongs in the profile's links row. See `Game.socialLinks`.
     public var isSocialLink: Bool {
+        linkRank != nil || MobileStore.allCases.contains { $0.categories.contains(self) }
+    }
+
+    /// Where it sits in the links row — Discord's `pF` order (official page,
+    /// Facebook, X, Instagram, YouTube, Bluesky, Reddit, Twitch, Roblox, Itch,
+    /// Fandom) — or nil where the row leaves it out. The phone stores come
+    /// after, one each (`Game.socialLinks`).
+    public var linkRank: Int? {
         switch self {
-        case .official, .facebook, .twitter, .twitch, .instagram, .youtube,
-             .reddit, .bluesky:
-            true
-        default:
-            false
+        case .official: 0
+        case .facebook: 1
+        case .twitter: 2
+        case .instagram: 3
+        case .youtube: 4
+        case .bluesky: 5
+        case .reddit: 6
+        case .twitch: 7
+        case .roblox: 8
+        case .itch: 9
+        case .wikia: 10
+        default: nil
         }
     }
 
@@ -564,22 +587,23 @@ public enum GameLinkCategory: Int, Hashable, Sendable {
         }
     }
 
+    /// Discord's own words for it, where its links row names it.
     public var title: String {
         switch self {
-        case .official: "Official site"
+        case .official: "Official web page"
         case .wikia: "Fandom"
         case .wikipedia: "Wikipedia"
         case .facebook: "Facebook"
-        case .twitter: "X"
+        case .twitter: "X (Twitter)"
         case .twitch: "Twitch"
         case .instagram: "Instagram"
         case .youtube: "YouTube"
         case .iphone: "App Store"
         case .ipad: "App Store"
-        case .android: "Google Play"
+        case .android: "Play Store"
         case .steam: "Steam"
         case .reddit: "Reddit"
-        case .itch: "itch.io"
+        case .itch: "Itch"
         case .epicGames: "Epic Games Store"
         case .gog: "GOG"
         case .discord: "Discord"

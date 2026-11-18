@@ -33,7 +33,7 @@ struct TypingIndicatorFlyout: View {
         FlyoutScaffold(title: "Typing Indicator", subtitle: "What others see while you type alone.", width: 380) {
             HStack(spacing: Spacing.tight) {
                 Button("Surprise Me", systemImage: "dice.fill", action: surprise)
-                    .labelStyle(.iconOnly)
+                    .labelStyle(.glassCircleIcon)
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
                     .help("Surprise Me")
@@ -239,10 +239,12 @@ private struct EmojiSlot: View {
             }
         }
         .popover(isPresented: $isPicking, arrowEdge: .bottom) {
+            // The reader's own indicator belongs to no server (Discord's
+            // TYPING_INDICATOR): every custom emoji needs Nitro.
             ExpressionPicker(mode: .emoji, onPick: { item in
                 isPicking = false
                 if let picked = EmojiRef(picked: item) { pick(picked) }
-            }, onPickGIF: { _ in })
+            }, onPickGIF: { _ in }, destination: .personal)
             .presentationBackground(.clear)
             .profileFlyoutAppearance()
         }

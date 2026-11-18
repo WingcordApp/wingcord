@@ -49,21 +49,19 @@ struct RemoteImage<Placeholder: View>: View {
         if let decoded, decodedURL == url { return decoded }
         guard let key else { return nil }
         if let url, LottieFilmstrip.handles(url) {
-            return AnimatedImageStore.shared.cached(filmKey(for: key))?.frames.first
+            return LottiePosters.shared.cached(posterKey(for: key))
         }
         return ImageStore.shared.cached(key, bucket: bucket)
     }
 
-    /// Lottie's slot in the filmstrip cache.
+    /// Lottie's poster.
     ///
     /// **A vector animation has no still anywhere**: `CGImageSource` cannot open
     /// it and the CDN serves no bitmap for it, so the only way to draw one at
-    /// all is to rasterise it and take a frame. Its first frame is the poster,
-    /// which is what a badge or a row thumbnail wants — the strip it comes from
-    /// is a few kilobytes at these sizes, and nothing here subscribes to a clock
-    /// for it.
-    private func filmKey(for key: ImageStore.Key) -> AnimatedImageStore.Key {
-        AnimatedImageStore.Key(url: key.url, maximumPixelSize: key.maximumPixelSize)
+    /// all is to rasterise a frame — once, kept on disk (`LottiePosters`). It
+    /// used to be the first frame of a whole filmstrip.
+    private func posterKey(for key: ImageStore.Key) -> LottiePosters.Key {
+        LottiePosters.Key(url: key.url, pixels: key.maximumPixelSize)
     }
 
     var body: some View {
@@ -88,14 +86,14 @@ struct RemoteImage<Placeholder: View>: View {
             let isLottie = LottieFilmstrip.handles(key.url)
             if decodedURL != key.url {
                 decoded = isLottie
-                    ? AnimatedImageStore.shared.cached(filmKey(for: key))?.frames.first
+                    ? LottiePosters.shared.cached(posterKey(for: key))
                     : ImageStore.shared.cached(key, bucket: bucket)
                 decodedURL = decoded == nil ? nil : key.url
             }
             guard decoded == nil else { return }
 
             let image = isLottie
-                ? await AnimatedImageStore.shared.image(for: filmKey(for: key))?.frames.first
+                ? await LottiePosters.shared.poster(for: posterKey(for: key))
                 : await ImageStore.shared.image(for: key, bucket: bucket)
             // A cancelled task can still resume and write a stale answer into
             // shared state, so the id is re-checked after the await.

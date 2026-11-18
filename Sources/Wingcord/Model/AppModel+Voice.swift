@@ -257,8 +257,11 @@ extension AppModel {
         guard connectedVoiceChannelID != channelID else { return [] }
         let guildID = channelIndex[channelID]?.guildID
         let users = self.users
+        // **The reader too**, when they are in it from another device (Alex,
+        // 2026-11-18): not connected here means any state of theirs in this
+        // call is another session's, and Discord's lobby shows them in it.
         return voiceStates.values
-            .filter { $0.channelID == channelID && $0.userID != currentUserID }
+            .filter { $0.channelID == channelID }
             .sorted { $0.userID.rawValue < $1.userID.rawValue }
             .map { state in
                 var tile = participant(from: state, inGuild: guildID, users: users)

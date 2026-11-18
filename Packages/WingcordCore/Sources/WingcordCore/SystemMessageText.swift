@@ -21,6 +21,10 @@ public struct SystemSentence: Hashable, Sendable {
     /// Drawn bold after the suffix — Discord's `$b` run, the topic a stage
     /// started, ended or changed to. Empty for every other sentence.
     public var emphasis = ""
+    /// Drawn after the emphasis in the sentence's own ink — the rest of a line
+    /// whose bold run sits in the middle ("… took 1st Place from **Ben**
+    /// on the leaderboard …").
+    public var tail = ""
     /// The SF Symbol drawn in the gutter where an avatar would be.
     public var symbolName: String
     /// What the glyph is tinted with.
@@ -70,7 +74,9 @@ public enum SystemMessageText {
         for message: Message,
         name: String,
         subject: String? = nil,
-        nameOf: (UserID) -> String? = { _ in nil }
+        nameOf: (UserID) -> String? = { _ in nil },
+        viewerID: UserID? = nil,
+        guildName: String? = nil
     ) -> SystemSentence? {
         switch message.kind {
         case .userJoin:
@@ -186,9 +192,24 @@ public enum SystemMessageText {
                 symbolName: "person.badge.minus", tint: .destructive
             )
         case .call:
+            // Discord's `ij`: a green phone for a call, a red one for a call the
+            // reader missed — over, and not among its participants — and how
+            // long it lasted once it has ended, in moment's words.
+            let call = message.call
+            let lasted = call?.endedAt.map { callDuration($0.timeIntervalSince(message.sentAt)) }
+            let missed = call?.endedAt != nil
+                && viewerID.map { call?.participantIDs.contains($0) == false } == true
+            if missed {
+                return SystemSentence(
+                    prefix: "You missed a call from ", name: name,
+                    suffix: lasted.map { " that lasted \($0)." } ?? ".",
+                    symbolName: "phone.down.fill", tint: .destructive
+                )
+            }
             return SystemSentence(
-                prefix: "", name: name, suffix: " started a call.",
-                symbolName: "phone.fill", tint: .quiet
+                prefix: "", name: name,
+                suffix: lasted.map { " started a call that lasted \($0)." } ?? " started a call.",
+                symbolName: "phone.fill", tint: .affirmative
             )
 
         // A stage's own lines (`Rv+TSM`, `zla/ux`, `dKW5C+`, `tv2DNy`,
@@ -233,7 +254,131 @@ public enum SystemMessageText {
         case .autoModerationAction:
             // AutoMod's own card — see `AutoModMessage`.
             return nil
+
+        case .friendRequestAccepted:
+            // Discord's `iH` (`IquUXd`, `ZOZy2q`, `S6PRsh`, `H/9Tlj`): the name is
+            // always the other person's — the caller resolves it — and the note
+            // is `content`, in bold. "You accepted …" when the row is the
+            // reader's own.
+            let note = message.content
+            if viewerID != nil, message.authorID == viewerID {
+                return SystemSentence(
+                    prefix: "You accepted ", name: name,
+                    suffix: note.isEmpty ? "\u{2019}s friend request." : "\u{2019}s friend request. They said: ",
+                    emphasis: note,
+                    symbolName: "person.fill.checkmark", tint: .affirmative
+                )
+            }
+            return SystemSentence(
+                prefix: "", name: name,
+                suffix: note.isEmpty ? " accepted your friend request." : " accepted your friend request. You said: ",
+                emphasis: note,
+                symbolName: "person.fill.checkmark", tint: .affirmative
+            )
+
+        case .voiceSession:
+            // `eX6e/3`, with Discord's green speaker.
+            return SystemSentence(
+                prefix: "", name: name, suffix: " started a voice hangout.",
+                symbolName: "speaker.wave.2.fill", tint: .affirmative
+            )
+
+        case .guildIncidentReportRaid:
+            return SystemSentence(
+                prefix: "", name: name, suffix: " reported a raid in \(guildName ?? "this server").",
+                symbolName: "exclamationmark.shield.fill", tint: .destructive
+            )
+        case .guildIncidentReportFalseAlarm:
+            return SystemSentence(
+                prefix: "", name: name, suffix: " resolved an Activity Alert.",
+                symbolName: "checkmark.shield.fill", tint: .affirmative
+            )
+
+        // Server Discovery's notices (`bYdG3f`, `tu6tOR`, `vzfXql`, `/TfvyR`).
+        case .guildDiscoveryDisqualified:
+            return SystemSentence(
+                prefix: "\(guildName ?? "This server") has been removed from Server Discovery because it no longer passes all the requirements. Check Server Settings for more details.",
+                name: "", suffix: "", symbolName: "exclamationmark.circle.fill", tint: .destructive
+            )
+        case .guildDiscoveryRequalified:
+            return SystemSentence(
+                prefix: "This server is eligible for Server Discovery again and has been automatically relisted!",
+                name: "", suffix: "", symbolName: "checkmark.circle.fill", tint: .affirmative
+            )
+        case .guildDiscoveryGracePeriodInitialWarning:
+            return SystemSentence(
+                prefix: "\(guildName ?? "This server") has failed Discovery activity requirements for 1 week. If it fails for 4 weeks in a row, it will be automatically removed from Discovery.",
+                name: "", suffix: "", symbolName: "exclamationmark.circle.fill", tint: .destructive
+            )
+        case .guildDiscoveryGracePeriodFinalWarning:
+            return SystemSentence(
+                prefix: "\(guildName ?? "This server") has failed Discovery activity requirements for 3 weeks in a row. If it fails for 1 more week, it will be removed from Discovery.",
+                name: "", suffix: "", symbolName: "exclamationmark.circle.fill", tint: .destructive
+            )
+
+        // A server's answer to an application (`21R6Ch`, `Bz/QC2`, `Kpkesg`,
+        // and their nameless forms where no server is known).
+        case .guildJoinRequestAccepted, .guildJoinRequestRejected, .guildJoinRequestWithdrawn:
+            let (outcome, symbol, tint): (String, String, SystemSentence.Tint) = switch message.kind {
+            case .guildJoinRequestAccepted: ("was approved! Welcome!", "person.crop.circle.badge.checkmark", .affirmative)
+            case .guildJoinRequestRejected: ("was rejected.", "person.crop.circle.badge.xmark", .destructive)
+            default: ("has been withdrawn.", "arrow.uturn.backward", .quiet)
+            }
+            guard let guildName else {
+                return SystemSentence(prefix: "This application \(outcome)", name: "", suffix: "",
+                                      symbolName: symbol, tint: tint)
+            }
+            return SystemSentence(
+                prefix: "", name: name, suffix: "\u{2019}s application to \(guildName) \(outcome)",
+                symbolName: symbol, tint: tint
+            )
+
+        // Discord draws these as ordinary messages — see `Message.isSystemEvent`.
+        case .guildInviteReminder, .interactionPremiumUpsell, .guildDeadchatRevivePrompt,
+             .customGift, .guildGamingStatsPrompt, .voiceHangoutInvite, .changelog,
+             .hdStreamingUpgraded, .chatWallpaperSet, .chatWallpaperRemoved, .emojiAdded,
+             .mediaMentionMessage:
+            return nil
+
+        // **Lines and cards Discord draws that this client has no words for
+        // yet.** Saying so beats the bare "Message" they used to read as —
+        // and names who it came from.
+        case .guildStream, .roleSubscriptionPurchase, .guildApplicationPremiumSubscription,
+             .privateChannelIntegrationAdded, .privateChannelIntegrationRemoved, .premiumReferral,
+             .guildIncidentAlertModeEnabled, .guildIncidentAlertModeDisabled, .purchaseNotification,
+             .nitroNotification, .channelLinkedToLobby, .giftingPrompt, .inGameMessageNux,
+             .reportToModDeletedMessage, .reportToModTimeoutUser, .reportToModKickUser,
+             .reportToModBanUser, .reportToModClosedReport, .premiumGroupInvite:
+            return SystemSentence(
+                prefix: "", name: name, suffix: " sent something Wingcord can\u{2019}t show yet.",
+                symbolName: "questionmark.bubble", tint: .quiet
+            )
         }
+    }
+
+    /// A call's length in moment.js's `humanize()` words, which is what
+    /// Discord's line says (`480012`: `call.duration.humanize()`): "a few
+    /// seconds", "a minute", "5 minutes", "an hour", "3 hours", "a day" — each
+    /// unit rounded half up, at moment's default thresholds.
+    public static func callDuration(_ interval: TimeInterval) -> String {
+        let s = max(0, interval)
+        let seconds = Int(s.rounded())
+        let minutes = Int((s / 60).rounded())
+        let hours = Int((s / 3_600).rounded())
+        let days = Int((s / 86_400).rounded())
+        let months = Int((s / 86_400 * 4_800 / 146_097).rounded())
+        let years = Int((s / 86_400 * 400 / 146_097).rounded())
+        if seconds <= 44 { return "a few seconds" }
+        if minutes <= 1 { return "a minute" }
+        if minutes < 45 { return "\(minutes) minutes" }
+        if hours <= 1 { return "an hour" }
+        if hours < 22 { return "\(hours) hours" }
+        if days <= 1 { return "a day" }
+        if days < 26 { return "\(days) days" }
+        if months <= 1 { return "a month" }
+        if months < 11 { return "\(months) months" }
+        if years <= 1 { return "a year" }
+        return "\(years) years"
     }
 
     // MARK: Server Hub
@@ -260,10 +405,18 @@ public enum SystemMessageText {
                     symbolName: "flag.checkered", tint: .affirmative
                 )
             case .leaderChanged:
-                let previous = board.secondaryUserID.flatMap(nameOf) ?? "the last leader"
+                let achievement = GuildSpaceFormat.achievement(board.value, stat: board.stat)
+                // **The one overtaken is in bold**, as Discord sets them.
+                guard let previous = board.secondaryUserID.flatMap(nameOf) else {
+                    return SystemSentence(
+                        prefix: "", name: name,
+                        suffix: " took 1st Place from the last leader on the leaderboard with \(achievement).",
+                        symbolName: "trophy.fill", tint: .celebratory
+                    )
+                }
                 return SystemSentence(
-                    prefix: "", name: name,
-                    suffix: " took 1st Place from \(previous) on the leaderboard with \(GuildSpaceFormat.achievement(board.value, stat: board.stat)).",
+                    prefix: "", name: name, suffix: " took 1st Place from ", emphasis: previous,
+                    tail: " on the leaderboard with \(achievement).",
                     symbolName: "trophy.fill", tint: .celebratory
                 )
             }

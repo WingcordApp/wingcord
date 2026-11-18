@@ -188,7 +188,9 @@ struct ActivityCardPopout: View {
                         isPickingEmoji = false
                         if case .insert(let token) = item.pick { send(token) }
                     },
-                    onPickGIF: { _ in }
+                    onPickGIF: { _ in },
+                    // A reply to an activity is a DM: no server is home there.
+                    destination: .personal
                 )
                 .environment(model)
                 .presentationBackground(.clear)

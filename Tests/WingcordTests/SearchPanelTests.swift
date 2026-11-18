@@ -484,9 +484,10 @@ struct SearchPanelTests {
 
         let first = try #require(model.searchSuggestions(for: "").first)
         #expect(first.title == "Find in robin_harper1")
-        // Picking it commits what is already typed rather than changing it: the
-        // row says where, not what.
-        #expect(first.completion.isEmpty)
+        // In a one-to-one conversation picking it searches the other person's
+        // messages (Alex, 2026-11-18): it adds `from:` them, so it runs even on
+        // an empty field.
+        #expect(first.completion == "from: robin_harper1 ")
         #expect(first.avatarURL != nil)
     }
 

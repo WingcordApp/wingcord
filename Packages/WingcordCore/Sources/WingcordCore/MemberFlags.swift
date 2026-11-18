@@ -19,6 +19,10 @@ public struct MemberFlags: OptionSet, Hashable, Sendable, Codable {
     public static let bypassesVerification = MemberFlags(rawValue: 1 << 2)
     public static let startedOnboarding = MemberFlags(rawValue: 1 << 3)
     public static let isGuest = MemberFlags(rawValue: 1 << 4)
+    /// Started the Server Guide's actions (`STARTED_HOME_ACTIONS`).
+    public static let startedHomeActions = MemberFlags(rawValue: 1 << 5)
+    /// Finished them — and Discord takes the guide's row away (`COMPLETED_HOME_ACTIONS`).
+    public static let completedHomeActions = MemberFlags(rawValue: 1 << 6)
     /// AutoMod quarantined them for their name or server nickname.
     public static let quarantinedName = MemberFlags(rawValue: 1 << 7)
     /// AutoMod quarantined them for their bio.

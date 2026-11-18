@@ -151,6 +151,17 @@ struct MemberListTests {
         #expect(list.rows[2] == Self.member(2))
     }
 
+    @Test("An update this client could not read keeps the row it had, as Discord's store does")
+    func unreadableUpdateKeepsTheRow() {
+        var list = MemberList()
+        let groups = [MemberList.Group(id: .online, count: 2)]
+        list.apply([.sync(start: 0, rows: [.group(.online), Self.member(1), Self.member(2)])], groups: groups)
+        list.apply([.update(1, nil)], groups: groups)
+        #expect(list.rows[1] == Self.member(1))
+        list.apply([.update(1, Self.member(5))], groups: groups)
+        #expect(list.rows[1] == Self.member(5))
+    }
+
     @Test("An invalidated range goes back to placeholders")
     func invalidate() {
         var list = MemberList()

@@ -134,6 +134,11 @@ struct WingcordApp: App {
                 // after the profiles: a tenure badge is clicked on a badge row
                 // that can be inside either of them.
                 .presentsTenureBadge()
+                // **The viewer again, for what a sheet opens** — a game
+                // profile's pictures, a profile board's clips — so it draws
+                // over the sheet that raised it. The one above serves the
+                // transcript, under the profiles.
+                .presentsMedia(aboveSheets: true)
                 .presentsSpotifyPlayer()
                 .presentsUserMenu()
                 .presentsDirectMessageMenu()

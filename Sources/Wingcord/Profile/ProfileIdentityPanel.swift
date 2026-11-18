@@ -50,6 +50,22 @@ struct ProfileIdentityPanel: View {
     /// being looked at" answered on the same signal.
     @State private var isHovered = false
 
+    /// Whether the banner's top is bright (`BannerBrightness`), for the glass
+    /// in the corners. Read from the cache first, so a profile opened again is
+    /// right on its first frame.
+    @State private var measuredBannerBright = false
+
+    private var isBannerBright: Bool {
+        guard let url = profile.bannerURL else { return false }
+        return BannerBrightness.cached(url) ?? measuredBannerBright
+    }
+
+    /// The corners' ink: a picture banner decides it — white, on glass dimmed
+    /// over a bright one — and without one, the card's own ground does.
+    private var cornerInkScheme: ColorScheme {
+        profile.bannerURL != nil ? .dark : (ground.wantsDarkInk ? .light : .dark)
+    }
+
     /// The card a frame and an effect are authored for. 452 ÷ 1,280 of the
     /// design's sheet, which is the same third of ours.
     static let width: CGFloat = 360
@@ -144,11 +160,17 @@ struct ProfileIdentityPanel: View {
             }
         }
         .onHover { isHovered = $0 }
+        .task(id: profile.bannerURL) {
+            measuredBannerBright = false
+            guard let url = profile.bannerURL else { return }
+            measuredBannerBright = await BannerBrightness.isBright(url)
+        }
         // A little bigger than the card's: this is the larger surface.
         .overlay(alignment: .topLeading) {
             if profile.isProfilePrivate {
                 PrivateProfilePill(height: Self.privatePillHeight)
-                    .environment(\.colorScheme, ground.wantsDarkInk ? .light : .dark)
+                    .environment(\.colorScheme, cornerInkScheme)
+                    .environment(\.isOverBrightBanner, isBannerBright)
                     .padding(Spacing.base)
             }
         }

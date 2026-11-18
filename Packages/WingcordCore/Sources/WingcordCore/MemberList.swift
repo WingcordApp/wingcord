@@ -110,7 +110,10 @@ public struct MemberList: Hashable, Sendable {
                 shift(from: index, by: 1)
                 place(row, at: index)
             case .update(let index, let row):
-                place(row, at: index)
+                // An update this client could not read keeps the row it had —
+                // Discord's own store returns there too — rather than punching
+                // a hole in a row the list still has.
+                if let row { place(row, at: index) }
             case .delete(let index):
                 rows[index] = nil
                 shift(from: index + 1, by: -1)

@@ -722,6 +722,10 @@ final class AppModel {
     /// for `pendingJump`'s reason: whoever asks has no reference to the view
     /// that owns the scroll.
     var presentRequest: PresentRequest?
+    /// The present a jump into history left behind, per channel — kept so the
+    /// way back is instant while nothing new has arrived (`jumpToPresent`).
+    /// Not observed: nothing draws it.
+    @ObservationIgnored var keptPresents: [ChannelID: KeptPresent] = [:]
     /// Distinguishes two requests for the same channel, for `jumpToken`'s
     /// reason.
     @ObservationIgnored var presentToken: UInt64 = 0
@@ -1827,6 +1831,9 @@ final class AppModel {
     /// `reactionEmojiCatalog(in:)`. Its own memo, so a reaction in a thread
     /// beside the channel does not evict the composer's.
     @ObservationIgnored var reactionEmojiCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
+    /// The catalogs of the pickers that send elsewhere — a status, a bio, a
+    /// server's own page (`emojiCatalog(for:)`), one per destination.
+    @ObservationIgnored var destinationEmojiCatalogCache: [EmojiDestination: (key: ExpressionMemoKey, value: ExpressionCatalog)] = [:]
     @ObservationIgnored var stickerCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
     /// Discord's emoji names for the selected server — see `emojiNameTable`.
     @ObservationIgnored var emojiNameTableCache: (key: EmojiNameTableKey, value: EmojiNameTable)?
@@ -2463,6 +2470,7 @@ final class AppModel {
         channelsAndRolesCache = nil
         emojiCatalogCache = nil
         reactionEmojiCatalogCache = nil
+        destinationEmojiCatalogCache = [:]
         emojiNameTableCache = nil
         usageCatalogCache = [:]
         invokedCommands.removeAll()

@@ -813,7 +813,7 @@ final class AppSettings {
     /// message, for its preview line — one request when the list first
     /// appears (`SessionController.loadDirectMessagePreviews`). Off, a row
     /// shows a preview only for conversations opened this session.
-    var loadsMessagePreviews = true {
+    var loadsMessagePreviews = false {
         didSet { defaults.set(loadsMessagePreviews, forKey: Key.loadsMessagePreviews) }
     }
 
@@ -1678,7 +1678,16 @@ final class AppSettings {
             .flatMap(SidebarStyle.init(rawValue:)) ?? .floating
         sidebarPages = defaults.string(forKey: Key.sidebarPages)
             .flatMap(SidebarPageLayout.init(rawValue:)) ?? .twoPages
-        loadsMessagePreviews = defaults.object(forKey: Key.loadsMessagePreviews) as? Bool ?? true
+        loadsMessagePreviews = defaults.object(forKey: Key.loadsMessagePreviews) as? Bool ?? false
+        // **Off by default since 2026-11-18** (Alex: "disable message previews
+        // by default, i think they can take a hit on performance" — each one
+        // is a request per conversation). Turned off once for an install that
+        // already had the old default stored; a choice made after that stands.
+        if defaults.object(forKey: Key.messagePreviewsDefaultedOff) == nil {
+            defaults.set(true, forKey: Key.messagePreviewsDefaultedOff)
+            defaults.set(false, forKey: Key.loadsMessagePreviews)
+            loadsMessagePreviews = false
+        }
         showsServerBanners = defaults.object(forKey: Key.showsServerBanners) as? Bool ?? true
         isSidebarShown = defaults.object(forKey: Key.sidebarShown) as? Bool ?? true
         storedSidebarWidth = ShellMetrics.clampedSidebarWidth(
@@ -1930,6 +1939,7 @@ final class AppSettings {
         static let sidebarStyle = "shell.sidebarStyle"
         static let sidebarPages = "shell.sidebarPages"
         static let loadsMessagePreviews = "shell.loadsMessagePreviews"
+        static let messagePreviewsDefaultedOff = "shell.messagePreviewsDefaultedOff"
         static let showsServerBanners = "shell.showsServerBanners"
         static let sidebarShown = "shell.sidebarShown"
         static let sidebarWidth = "shell.sidebarWidth"

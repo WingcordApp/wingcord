@@ -32,9 +32,20 @@ struct VoiceHUD: View {
     var toggleScreenShare: () -> Void = {}
     var openChannel: () -> Void = {}
     var leave: () -> Void = {}
+    /// The activity the reader is in, which heads the card (`ActivityHUDRow`).
+    var activity: ActivityHUDPresentation? = nil
+    var openActivity: () -> Void = {}
+    var leaveActivity: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.snug) {
+            if let activity {
+                ActivityHUDRow(activity: activity, open: openActivity, leave: leaveActivity)
+                Rectangle()
+                    .fill(Palette.edge)
+                    .frame(height: 1)
+                    .accessibilityHidden(true)
+            }
             Button(action: openChannel) {
                 VoiceHUDHeader(presentation: presentation)
                     .contentShape(.rect)
@@ -167,6 +178,8 @@ struct VoiceHUDContainer: View {
     @Environment(\.motion) private var motion
 
     var body: some View {
+        let activity = model.activityHUD
+        let leaveActivity = { Task { await model.sessionController.leaveActivity() } }
         Group {
             if let presentation = model.voicePresentation {
                 VoiceHUD(
@@ -181,13 +194,25 @@ struct VoiceHUDContainer: View {
                     toggleCamera: model.toggleCamera,
                     toggleScreenShare: model.toggleScreenShare,
                     openChannel: { model.selectChannel(presentation.channelID) },
-                    leave: model.leaveVoice
+                    leave: model.leaveVoice,
+                    activity: activity,
+                    openActivity: model.returnToActivity,
+                    leaveActivity: { _ = leaveActivity() }
                 )
                 // It arrives from the edge it lives on, the sidebar's foot, and
                 // leaves the same way.
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let activity {
+                // An activity with no call around it: the row on its own card.
+                ActivityHUDCard(
+                    activity: activity,
+                    open: model.returnToActivity,
+                    leave: { _ = leaveActivity() }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(motion.panel, value: model.connectedVoiceChannelID)
+        .animation(motion.panel, value: activity)
     }
 }

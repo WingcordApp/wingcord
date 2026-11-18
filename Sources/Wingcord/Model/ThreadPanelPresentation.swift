@@ -33,7 +33,8 @@ extension AppModel {
         return ThreadPanelPresentation(
             channelID: channelID,
             name: thread?.name ?? "Thread",
-            symbolName: thread?.kind.symbolName ?? DiscordGlyph.thread,
+            // A post's column wears its forum's mark, not the thread glyph.
+            symbolName: thread.map { $0.kind.symbolName(under: parent?.kind) } ?? DiscordGlyph.thread,
             subtitle: Self.subtitle(thread: thread, owner: thread?.ownerID.flatMap { users[$0] }),
             isPost: parent?.isForumLike ?? false,
             isMuted: isMuted,

@@ -151,6 +151,10 @@ nonisolated enum ShellMetrics {
     /// the panel's top edge — and no single rounded corner is concentric with
     /// the window's across two different gaps. Now the sides come in to the
     /// top's 5, and the corner is the window's own less that (`SidebarPanel`).
+    ///
+    /// **Eight was tried and taken back** (Alex, 2026-11-18): Craft's gap needs
+    /// the header controls down to 30, and at 30 the icons on both header rows
+    /// read as too small. The controls' size wins over the gap.
     static let floatingInset: CGFloat = 5
 
     /// How far a floating panel sits below the window's top edge.
@@ -178,7 +182,8 @@ nonisolated enum ShellMetrics {
 
     /// The header controls' diameter. Two points under the system toolbar
     /// item's 36, so a control centred on the traffic lights stays inside a
-    /// floating panel's top edge.
+    /// floating panel's top edge. (30, with an 8-point inset, made the icons
+    /// too small — Alex, 2026-11-18.)
     static let headerControl: CGFloat = 34
 
     /// The face in the detail header's title capsule.

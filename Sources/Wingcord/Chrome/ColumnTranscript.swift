@@ -31,22 +31,43 @@ struct ColumnTranscript<Header: View, Foot: View>: View {
     @State private var footHeight: CGFloat = 0
 
     var body: some View {
-        TimelineContainer(
+        let transcript = TimelineContainer(
             channelID: channelID,
             topInset: chromeHeight + headerHeight,
             bottomInset: footHeight
         )
         .ignoresSafeArea(.container, edges: [.top, .bottom])
+        // **The header's shade, as the conversation's toolbar has** (Alex,
+        // 2026-11-18, his Image 170): the column's title pill and its two
+        // buttons sat on the messages scrolling under them with nothing
+        // between, so the pill's name ran into a message's words. Over the
+        // rows, under the header, from the window's top to past the header.
+        .overlay(alignment: .top) {
+            HeaderShade(height: chromeHeight + headerHeight + 24)
+                .ignoresSafeArea(.container, edges: .top)
+                .allowsHitTesting(false)
+        }
         .floatingTopBar {
             header.onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                 Self.write($0, into: $headerHeight)
             }
         }
-        // `safeAreaBar`, not `safeAreaInset`: the foot registers as a bar, which
-        // is what the scroll edge effect keys off — see `floatingTopBar`.
-        .safeAreaBar(edge: .bottom, spacing: 0) {
-            foot.onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                Self.write($0, into: $footHeight)
+        Group {
+            // **No foot, no bar** (Alex, 2026-11-18: a preview's rows sat at
+            // the column's top over an empty strip). A preview has no composer,
+            // and a bottom bar built around an empty view is still a bar to
+            // lay out and measure; only the columns with a foot get one.
+            if Foot.self == EmptyView.self {
+                transcript
+            } else {
+                // `safeAreaBar`, not `safeAreaInset`: the foot registers as a
+                // bar, which is what the scroll edge effect keys off — see
+                // `floatingTopBar`.
+                transcript.safeAreaBar(edge: .bottom, spacing: 0) {
+                    foot.onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        Self.write($0, into: $footHeight)
+                    }
+                }
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: {

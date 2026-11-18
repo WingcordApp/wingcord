@@ -405,7 +405,8 @@ struct CurrentActivityCard: View {
     private func storeLabel(_ store: GameStore?, text: String) -> some View {
         HStack(spacing: 6) {
             if let store {
-                ConnectionMark(service: store.brandService, side: 16)
+                DiscordBrandIconView(icon: store.discordIcon)
+                    .frame(width: 16, height: 16)
             }
             Text(text)
                 .lineLimit(1)

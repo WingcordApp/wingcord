@@ -20,8 +20,13 @@ struct GameMediaStage: View {
     /// Nil means "the first one", so the tray needs no seeding pass and the
     /// selection survives a refresh that reorders nothing.
     @Binding var selection: URL?
+    /// Opens the media viewer at an item, with the rest as its gallery. A
+    /// click on a still opens it; a trailer keeps its own controls, and the
+    /// tray's expand button opens whatever is on the stage.
+    var open: ((Int) -> Void)? = nil
 
     @Environment(\.motion) private var motion
+    @Environment(AppModel.self) private var model
     /// Which run of thumbnails the tray is showing. The counter and the arrows
     /// are the same fact.
     @State private var page = 0
@@ -72,12 +77,18 @@ struct GameMediaStage: View {
                         url: video,
                         poster: poster,
                         autoplays: !motion.reduceMotion,
-                        isOnScreen: isStageOnScreen,
+                        // Paused under the viewer, which plays its own.
+                        isOnScreen: isStageOnScreen && model.mediaViewer == nil,
                         onPlayingChange: { isTrailerPlaying = $0 }
                     )
                 case .still(let url):
                     RemoteImage(url: url, side: 900, bucket: .artwork) { Palette.surfaceRaised }
                         .aspectRatio(contentMode: .fill)
+                        .contentShape(.rect)
+                        .onTapGesture { open?(currentIndex) }
+                        .pointerStyle(open == nil ? nil : .link)
+                        .accessibilityAddTraits(open == nil ? [] : .isButton)
+                        .accessibilityAction(named: Text("Open in Media Viewer")) { open?(currentIndex) }
                 case nil:
                     Palette.surfaceRaised
                 }
@@ -123,6 +134,16 @@ struct GameMediaStage: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(Ink.quaternary)
                 Spacer(minLength: Spacing.base)
+                // **Here, not on the trailer** (Alex, 2026-11-18): over the
+                // video it sat on AVKit's own volume pill, which runs across
+                // the player's top. Opens whatever is on the stage, a still or
+                // the trailer; a still also opens on a click.
+                if let open {
+                    arrow("arrow.up.left.and.arrow.down.right", "Open in Media Viewer", enabled: true) {
+                        open(currentIndex)
+                    }
+                    .help("Open in Media Viewer")
+                }
                 if pageCount > 1 {
                     arrow("chevron.left", "Previous", enabled: page > 0) { page -= 1 }
                     arrow("chevron.right", "Next", enabled: page < pageCount - 1) { page += 1 }
@@ -305,7 +326,10 @@ struct GameStoreButton: View {
     var body: some View {
         Button { openURL(offer.url) } label: {
             HStack(spacing: Spacing.base) {
-                ConnectionMark(service: offer.store.brandService, side: 18)
+                // Discord's own mark, bare, in the label's colour (Alex,
+                // 2026-11-18: the brand tile is not what Discord draws).
+                DiscordBrandIconView(icon: offer.store.discordIcon)
+                    .frame(width: 18, height: 18)
                 Text(offer.store.profileLabel)
                     .font(.system(.subheadline, weight: .semibold))
                     .lineLimit(1)
@@ -379,7 +403,7 @@ struct GameLaunchButtons: View {
                     .padding(.horizontal, Spacing.base)
                     .padding(.vertical, Spacing.tight)
                 ForEach(offers) { offer in
-                    FlyoutRow(title: offer.store.profileLabel, brandService: offer.store.brandService) {
+                    FlyoutRow(title: offer.store.profileLabel, discordIcon: offer.store.discordIcon) {
                         isPickerOpen = false
                         openURL(offer.url)
                     }
@@ -875,29 +899,59 @@ struct GameDetailsSection: View {
         .padding(.vertical, Spacing.base)
     }
 
-    /// The game's own accounts, as brand marks.
-    ///
-    /// **The same object a profile's connections are**, drawn by the same view:
-    /// these are the identical set of brands, and giving them a second treatment
-    /// is what makes Twitch purple in one pane and grey in another.
+    /// The game's own pages, as Discord draws them: its bare marks in the
+    /// icon ink, brighter under the pointer, each named in a tooltip with
+    /// Discord's words (`GameLinkCategory.title`). Every kind Discord's row
+    /// shows (`Game.socialLinks`), so up to thirteen: one line where they fit,
+    /// wrapped under the label where they don't.
     private var linksRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Spacing.snug) {
-            Text("Links")
-                .font(.system(.subheadline))
-                .foregroundStyle(InkColor.secondary)
-            Spacer(minLength: Spacing.base)
-            HStack(spacing: 5) {
-                ForEach(links) { link in
-                    Button { openURL(link.url) } label: {
-                        ConnectionMark(service: link.category.brandService ?? "link", side: 18)
-                    }
-                    .buttonStyle(.plain)
-                    .help(link.category.title)
-                    .accessibilityLabel(Text(link.category.title))
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: Spacing.snug) {
+                linksLabel
+                Spacer(minLength: Spacing.base)
+                HStack(spacing: 2) { linkButtons }
+            }
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                linksLabel
+                FlowLayout(spacing: 2) { linkButtons }
             }
         }
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, Spacing.base)
+    }
+
+    private var linksLabel: some View {
+        Text("Links")
+            .font(.system(.subheadline))
+            .foregroundStyle(InkColor.secondary)
+    }
+
+    private var linkButtons: some View {
+        ForEach(links) { link in
+            GameLinkButton(link: link) { openURL(link.url) }
+        }
+    }
+}
+
+/// One of a game's links: Discord's mark, muted until the pointer is on it.
+private struct GameLinkButton: View {
+    var link: GameWebsite
+    var open: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: open) {
+            DiscordBrandIconView(icon: link.category.discordIcon)
+                .frame(width: 18, height: 18)
+                .frame(width: 26, height: 26)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isHovered ? InkColor.primary : InkColor.secondary)
+        .onHover { isHovered = $0 }
+        .pointerStyle(.link)
+        .help(link.category.title)
+        .accessibilityLabel(Text(link.category.title))
     }
 }

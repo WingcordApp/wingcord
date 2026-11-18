@@ -19,10 +19,29 @@ struct PopularGameTileView: View {
                         Image(systemName: "gamecontroller.fill")
                             .font(.system(size: 26))
                             .foregroundStyle(Ink.tertiary)
-                        RemoteImage(url: tile.coverURL ?? tile.iconURL, side: ServerHubMetrics.gameTileWidth, bucket: .artwork) {
-                            Color.clear
+                        if let cover = tile.coverURL {
+                            RemoteImage(url: cover, side: ServerHubMetrics.gameTileWidth, bucket: .artwork) {
+                                Color.clear
+                            }
+                            .scaledToFill()
+                        } else if let icon = tile.iconURL {
+                            // **No box art: the icon, not stretched over the tile**
+                            // — Discord's own fallback (`coverFallbackIconUrl`). A
+                            // 256-point icon filling a portrait tile read as a
+                            // picture that had failed to load (Alex, 2026-11-18).
+                            ZStack {
+                                RemoteImage(url: icon, side: 64) { Color.clear }
+                                    .scaledToFill()
+                                    .scaleEffect(1.6)
+                                    .blur(radius: 22)
+                                    .saturation(1.3)
+                                    .opacity(0.85)
+                                RemoteImage(url: icon, side: 128) { Color.clear }
+                                    .frame(width: 60, height: 60)
+                                    .clipShape(.rect(cornerRadius: 14, style: .continuous))
+                                    .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
+                            }
                         }
-                        .scaledToFill()
                     }
                 }
                 .clipShape(shape)
