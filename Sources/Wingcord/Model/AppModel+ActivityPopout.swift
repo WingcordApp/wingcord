@@ -5,6 +5,18 @@ import WingcordCore
 
 extension AppModel {
 
+    /// Asks for the record of the game an activity names, when it isn't here
+    /// yet: the popout's portrait cover and store buttons come from it
+    /// (docs/BETA3.md §1.3).
+    func loadGameRecord(for activity: RecentActivity) {
+        switch activity.subject {
+        case .game(_, let applicationID?), .topGame(_, let applicationID?):
+            sessionController.loadGameRecord(applicationID)
+        default:
+            break
+        }
+    }
+
     /// The popout for one entry, as Discord's popouts for its kind draw it.
     func activityPopout(for entry: ActivityFeedEntry, inGuild guildID: GuildID?, now: Date) -> ActivityPopoutPresentation {
         let activity = entry.activity

@@ -11,12 +11,15 @@ import WingcordCore
 /// re-resolve the split view's widths and steal from the sidebar until the rail
 /// slides underneath.
 ///
-/// The material follows the same page's rules as the other three server pages:
-/// **the card is structure and only the bar is glass.** The card sits on the
-/// opaque reading surface, where glass has nothing to lens and renders as a flat
-/// panel — §4 rule 3 — so it is `.structuralSurface()` plus a hairline. The
-/// action bar is the one glass surface, because it is the one thing with content
-/// moving under it.
+/// **The card is content and only the bar is glass** (docs/BETA3.md D2, the
+/// HIG's own split: Liquid Glass is the layer of controls floating over
+/// content, never the content). The card used to be clear glass over the
+/// server's artwork, which read as a sheet of glass with words on it (Alex,
+/// 2026-11-18: "all glass … goes against HIG"); it is the raised solid
+/// surface now, with a hairline and a shadow to lift it off the picture. The
+/// action bar keeps the glass, because its buttons float over moving content.
+/// No welcome step: the card's head carries the server's face, name and how
+/// far through its questions the reader is.
 struct ServerJoinGatePane: View, Equatable {
     var presentation: ServerJoinGatePresentation
 
@@ -134,9 +137,8 @@ struct ServerJoinGatePane: View, Equatable {
 
     private var card: some View {
         VStack(alignment: .leading, spacing: Spacing.group) {
+            GateHeader(presentation: presentation)
             switch presentation.body {
-            case .welcome(let welcome):
-                WelcomeStep(presentation: presentation, welcome: welcome)
             case .question(let question):
                 QuestionStep(question: question, toggleOption: toggleOption)
             case .rules(let rules):
@@ -149,22 +151,15 @@ struct ServerJoinGatePane: View, Equatable {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.group)
-        // **Clear glass, and the ground is why.** The other three server pages
-        // put their cards on the opaque reading surface, where glass has nothing
-        // to lens and renders as a flat panel — §4 rule 3 — so those are
-        // `.structuralSurface()`. This card floats on the server's own artwork,
-        // which is media, and §4's rule for media is `.clear`: what passes under
-        // it is a picture, and `.regular` would frost it into the grey slab the
-        // material exists not to be. The tint goes IN the material rather than
-        // as a fill behind it — a fill under glass is rule 3 again, and is
-        // exactly what would stop it lensing.
-        .chromeOverMedia(
-            tinted: Palette.flyoutTint,
-            in: .rect(cornerRadius: Radius.card, style: .continuous)
-        )
-        // Not `.interactive()`: this is a page-sized body, and interactive glass
-        // recomputes its displacement toward the cursor every frame — on a
-        // surface this large that reads as the whole card breathing.
+        // **Solid, because it is what is read.** Questions and their answers are
+        // content; glass under them made every word depend on the server's
+        // picture. The raised surface is the theme's own, opaque.
+        .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(Palette.edge, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 24, y: 10)
         .overlay(alignment: .topTrailing) { closeButton }
     }
 
@@ -189,47 +184,41 @@ struct ServerJoinGatePane: View, Equatable {
     }
 }
 
-// MARK: - Welcome
+// MARK: - Whose questions
 
-private struct WelcomeStep: View {
+/// The server's face and name over every step, and how far through them the
+/// reader is — the welcome step's one job, kept without the step.
+private struct GateHeader: View {
     var presentation: ServerJoinGatePresentation
-    var welcome: ServerJoinGatePresentation.Welcome
 
-    private static let iconSide: CGFloat = 88
+    private static let iconSide: CGFloat = 40
 
     var body: some View {
-        VStack(spacing: Spacing.snug) {
+        HStack(spacing: Spacing.snug) {
             RemoteImage(url: presentation.iconURL, side: Self.iconSide) {
                 Text(presentation.monogram)
-                    .font(.system(size: Self.iconSide * 0.32, weight: .bold))
+                    .font(.system(size: Self.iconSide * 0.36, weight: .bold))
                     .foregroundStyle(Ink.secondary)
                     .frame(width: Self.iconSide, height: Self.iconSide)
-                    .background(Palette.surfaceRaised)
+                    .background(Palette.canvas)
             }
             .frame(width: Self.iconSide, height: Self.iconSide)
             .clipShape(.rect(cornerRadius: Self.iconSide * 0.3, style: .continuous))
-            .padding(.bottom, Spacing.base)
 
-            Text("Welcome to")
-                .font(.system(.callout))
-                .foregroundStyle(Ink.secondary)
-
-            Text(presentation.serverName)
-                .font(.system(.largeTitle, weight: .bold))
-                .foregroundStyle(Ink.primary)
-                .multilineTextAlignment(.center)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text(welcome.promise)
-                .font(.system(.body))
-                .foregroundStyle(Ink.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, Spacing.tight)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(presentation.serverName)
+                    .font(.system(.headline))
+                    .foregroundStyle(Ink.primary)
+                    .lineLimit(1)
+                if presentation.stepCount > 1 {
+                    Text("Step \(presentation.stepNumber) of \(presentation.stepCount)")
+                        .font(.system(.subheadline))
+                        .foregroundStyle(Ink.secondary)
+                        .monospacedDigit()
+                }
+            }
+            Spacer(minLength: Metrics.control)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, Spacing.margin)
         .accessibilityElement(children: .combine)
     }
 }
@@ -565,8 +554,6 @@ private struct ServerJoinGateBar: View {
     /// gave will get them, and what pressing Finish actually means.
     private var guidance: String? {
         switch presentation.body {
-        case .welcome:
-            nil
         case .question(let question):
             // A required question with nothing chosen is the one moment the
             // forward control refuses, so this is where the reason goes.

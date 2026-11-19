@@ -40,6 +40,14 @@ final class HoverAvatarFilm {
     /// Called when a frame actually changed, so the owner can invalidate.
     var onFrameChange: (() -> Void)?
 
+    /// Where this film plays — "chat", "member list" — for the log lines that
+    /// say what happened when the pointer arrived (docs/BETA3.md §1.2).
+    let surface: StaticString
+
+    init(surface: StaticString = "a list") {
+        self.surface = surface
+    }
+
     private var subject: Subject?
     private var avatar = Strip()
     private var decoration = Strip()
@@ -95,25 +103,37 @@ final class HoverAvatarFilm {
         // serves an animated avatar as `.gif` and a still one as `.webp`, so
         // there is nothing to discover and nothing to ask for — the same fact
         // `CDN.canAnimate` answers everywhere else.
-        if let url = wanted.avatarURL, CDN.canAnimate(url) {
-            changed = begin(
-                .avatar,
-                AnimatedImageStore.Key(url: url, maximumPixelSize: pixels)
-            ) || changed
+        var pictureNote: StaticString = "none"
+        if let url = wanted.avatarURL {
+            if CDN.canAnimate(url) {
+                let begun = begin(.avatar, AnimatedImageStore.Key(url: url, maximumPixelSize: pixels))
+                changed = begun.onScreen || changed
+                pictureNote = begun.note
+            } else {
+                pictureNote = "a still (not an animated avatar)"
+            }
         }
         // **A decoration carries no such tell.** They are APNG behind a `.png`
         // path whether or not they move, so the only way to know is to decode
         // one — and `AnimatedImageStore` remembers the ones that turn out to be
         // stills, so that costs a single fetch per asset for the session.
+        var decorationNote: StaticString = "none"
         if let url = wanted.decorationURL {
             let side = wanted.avatarSide * Metrics.decorationScale
-            changed = begin(
+            let begun = begin(
                 .decoration,
                 AnimatedImageStore.Key(
                     url: url,
                     maximumPixelSize: Int((side * max(wanted.scale, 1)).rounded(.up))
                 )
-            ) || changed
+            )
+            changed = begun.onScreen || changed
+            decorationNote = begun.note
+        }
+        // Only where something could move: a still face with no decoration is
+        // most rows, and says nothing about why a moving one stayed still.
+        if wanted.avatarURL.map(CDN.canAnimate) == true || wanted.decorationURL != nil {
+            Log.info(.media, "hover \(public: surface): picture \(public: pictureNote), decoration \(public: decorationNote)")
         }
         return changed
     }
@@ -129,29 +149,39 @@ final class HoverAvatarFilm {
     ///
     /// - Returns: whether a frame is on screen already, which happens when the
     ///   strip was cached and no hop was needed.
-    private func begin(_ slot: Slot, _ wanted: AnimatedImageStore.Key) -> Bool {
+    private func begin(_ slot: Slot, _ wanted: AnimatedImageStore.Key) -> (onScreen: Bool, note: StaticString) {
         self[slot].key = wanted
         // A cached filmstrip starts on this frame rather than after a hop, so a
         // pointer sweeping back over a row it has already visited does not
         // flicker through the still on the way.
         if let hit = AnimatedImageStore.shared.cached(wanted) {
-            return self[slot].install(hit)
+            return (self[slot].install(hit), "playing (from the cache)")
         }
         // An asset with no moving form is remembered by the store, so this asks
         // once per asset and never again.
-        guard !AnimatedImageStore.shared.isKnownStill(wanted) else { return false }
+        guard !AnimatedImageStore.shared.isKnownStill(wanted) else { return (false, "a still (known)") }
+        let surface = surface
+        let part: StaticString = slot == .avatar ? "picture" : "decoration"
         self[slot].task = Task { [weak self] in
             let film = await AnimatedImageStore.shared.image(for: wanted)
-            guard let self, !Task.isCancelled, let film else { return }
+            guard let self, !Task.isCancelled else { return }
+            guard let film else {
+                Log.info(.media, "hover \(public: surface): the \(public: part) didn't load, or is a still")
+                return
+            }
             // **The key is re-checked, not assumed.** A load that lands after
             // the pointer has moved on belongs to a row that is no longer
             // there, and installing it would put one person's face on another's
             // row.
             guard self[slot].key == wanted else { return }
-            guard self[slot].install(film) else { return }
+            guard self[slot].install(film) else {
+                Log.info(.media, "hover \(public: surface): the \(public: part) has one frame")
+                return
+            }
+            Log.info(.media, "hover \(public: surface): the \(public: part) is playing, \(film.frameCount) frames")
             self.onFrameChange?()
         }
-        return false
+        return (false, "loading")
     }
 
     /// Moves both strips to `time`.

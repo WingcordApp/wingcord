@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import SwiftUI
+import WingcordCore
 
 /// Draws an animated asset by swapping a layer's contents.
 ///
@@ -222,6 +223,12 @@ struct AnimatedDecoration: NSViewRepresentable {
             loadTask = Task { [weak self] in
                 let image = await AnimatedImageStore.shared.image(for: newKey)
                 guard let self, !Task.isCancelled, self.key == newKey else { return }
+                // Profiles, DM rows and nameplates play through here rather
+                // than a hover film (docs/BETA3.md §1.2). Once per asset: the
+                // store remembers the stills.
+                if image == nil {
+                    Log.info(.media, "a moving picture (profile, DM row or nameplate) didn't load, or is a still")
+                }
                 self.install(image)
             }
         }

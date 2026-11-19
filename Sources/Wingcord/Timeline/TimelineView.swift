@@ -1254,6 +1254,8 @@ final class TimelineCoordinator: NSObject {
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
         scrollView.reflectScrolledClipView(scrollView.contentView)
         isApplyingUpdate = false
+        // The landing's own bounds change was ignored above; the faces follow it.
+        canvas.placeStickyFaces()
         lastViewportMinY = scrollView.contentView.bounds.minY
         isNearBottom = TimelineViewportPolicy.isNearBottom(
             viewport: scrollView.contentView.bounds,
@@ -1670,6 +1672,12 @@ final class TimelineCoordinator: NSObject {
         isApplyingUpdate = false
 
         positionCanvas()
+        // **The faces where the viewport finally is.** Every bounds change the
+        // landing above made was ignored (`isApplyingUpdate`), and the faces
+        // were last placed by `apply`, for the viewport *before* the jump — so
+        // a channel opened at its foot showed no faces until a hand scroll
+        // (docs/BETA3.md §1.1).
+        canvas.placeStickyFaces()
         // The rows moved under the window; the frost's picture must not.
         frostView?.alignToWindow()
         reconcileUserCards()

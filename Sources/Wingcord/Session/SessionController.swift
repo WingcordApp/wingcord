@@ -194,6 +194,11 @@ final class SessionController {
     /// Game-profile fetches in flight. A game profile can be reached from four
     /// tiles on one board and every one of them must share a request.
     var gameProfileFetches: Set<ApplicationID> = []
+    /// Games whose own record an activity card asked for (`loadGameRecord`).
+    var gameRecordFetches: Set<ApplicationID> = []
+    /// When each conversation's newest page was last fetched ahead
+    /// (`prefetchNewestPage`), so a pointer wandering back asks once a minute.
+    var historyPrefetchedAt: [ChannelID: Date] = [:]
     /// Applications `/games` has already been asked about, answer or not.
     ///
     /// Not "in flight": the route says nothing about an application that is not
@@ -222,6 +227,11 @@ final class SessionController {
     /// The member list subscription in force, so the same request is never
     /// sent twice. See `subscribeMemberListPages`.
     private var memberListSubscription: MemberListSubscription?
+    /// Each server's last few member-list subscriptions, newest first — sent
+    /// together, so going back to a channel finds its list still live.
+    private var memberListChannels: [GuildID: [MemberListSubscription]] = [:]
+    /// Discord's own number.
+    private static let keptMemberLists = 5
     /// When each person a list on screen named without a record was last asked
     /// for by id — `repairMemberList`.
     private var listMemberAsks: [MemberRequest: Date] = [:]
@@ -393,6 +403,8 @@ final class SessionController {
         let rest = DiscordREST(metadata: metadata)
         self.rest = rest
         voice = VoiceController(model: model, rest: rest)
+        // The sidebar's resting pointer fetches ahead through this session.
+        HistoryPrefetcher.shared.prefetch = { [weak self] channelID in self?.prefetchNewestPage(channelID) }
         // Expired upload links are refreshed as the account — see
         // `AttachmentLinks`. The client is this controller's for its life, so
         // it is handed over once; signing out forgets what it refreshed.
@@ -1149,6 +1161,7 @@ final class SessionController {
             if let selected = model.selectedChannelID { askForCall(in: selected) }
         case .readySupplemental(let snapshot):
             applyReadySupplemental(snapshot)
+            noteMissingOwnMembers()
             // Discord asks for the activity feed as the connection opens.
             loadActivityFeed()
         case .resumed:
@@ -1401,6 +1414,7 @@ final class SessionController {
         model.memberLists = [:]
         model.memberListRevision &+= 1
         memberListSubscription = nil
+        memberListChannels.removeAll()
         // The people asked about on the old session were asked of a session
         // that is gone; READY's members are not all of them.
         memberRequests.removeAll()
@@ -1900,6 +1914,15 @@ final class SessionController {
 
         case .membersChunk(let guildID, let members, let users, let presences):
             ingestMembers(members, users: users, presences: presences, inGuild: guildID)
+            // The records a list row waited on can arrive here rather than with
+            // the list's own page (BETA3 §1.9).
+            if let channelID = model.selectedChannelID,
+               let key = model.memberListTarget(for: channelID)?.key,
+               key.guildID == guildID,
+               model.isMemberListHeadFilled(key)
+            {
+                LoadMarks.shared.mark(.listFull, in: channelID)
+            }
 
         case .memberRemoved(let guildID, let userID):
             // A kick, a ban or a leave. The roster's own list op takes them out
@@ -1929,6 +1952,10 @@ final class SessionController {
                model.memberListTarget(for: channelID)?.key == key
             {
                 LoadMarks.shared.mark(.roster, in: channelID)
+                if update.operations.contains(where: { if case .sync = $0 { true } else { false } }) {
+                    LoadMarks.shared.mark(.listSync, in: channelID)
+                }
+                if model.isMemberListHeadFilled(key) { LoadMarks.shared.mark(.listFull, in: channelID) }
                 repairMemberList(key)
             }
 
@@ -2263,6 +2290,10 @@ final class SessionController {
                     + Self.describe(error)
                 )
                 Self.log.error("history load failed: \(Self.describe(error), privacy: .public)")
+                // Discord and Wingcord disagreeing about access, both sides.
+                if case DiscordREST.Failure.forbidden(let code) = error {
+                    model.logRefusedHistory(channelID, code: code)
+                }
 
                 // Retrying a refusal is pointless — the answer will not change,
                 // and the log for this account shows the same 403 asked for
@@ -2587,19 +2618,30 @@ final class SessionController {
     ) {
         guard let target = model.memberListTarget(for: channelID), let socket else { return }
         let kept = memberListSubscription.flatMap { $0.key == target.key ? $0.pages : nil }
+            ?? memberListChannels[target.key.guildID]?.first { $0.channelID == target.channelID }?.pages
         let subscription = MemberListSubscription(
             key: target.key,
             channelID: target.channelID,
             pages: pages ?? kept ?? [0...MemberList.pageSize - 1]
         )
-        guard force || subscription != memberListSubscription else { return }
+        guard force || subscription != memberListSubscription else {
+            // Nothing to ask: the list on screen is the one already in force.
+            LoadMarks.shared.note("list kept", in: channelID)
+            if model.isMemberListHeadFilled(target.key) { LoadMarks.shared.mark(.listFull, in: channelID) }
+            return
+        }
         memberListSubscription = subscription
+        var recent = memberListChannels[subscription.key.guildID] ?? []
+        recent.removeAll { $0.channelID == subscription.channelID }
+        recent.insert(subscription, at: 0)
+        if recent.count > Self.keptMemberLists { recent.removeLast(recent.count - Self.keptMemberLists) }
+        memberListChannels[subscription.key.guildID] = recent
+        var channels: [ChannelID: [[Int]]] = [:]
+        for kept in recent { channels[kept.channelID] = kept.pages.map { [$0.lowerBound, $0.upperBound] } }
         Task {
-            await socket.subscribeToMemberList(
-                guildID: subscription.key.guildID,
-                channelID: subscription.channelID,
-                ranges: subscription.pages.map { [$0.lowerBound, $0.upperBound] }
-            )
+            await socket.subscribeToMemberLists(guildID: subscription.key.guildID, channels: channels)
+            // After the socket's own queue, which is part of the wait.
+            LoadMarks.shared.mark(.listAsked, in: channelID)
         }
     }
 
@@ -3822,6 +3864,15 @@ extension SessionController {
             return
         }
         model.offerApprovedApplicationIfNeeded(guildID)
+        ensureOwnMember(in: guildID)
+        // A server that opens with nothing in its list says why, now and once
+        // its late tables have had time to land (BETA3 §1.7).
+        model.logServerVisibilityIfEmpty(guildID, moment: "on open")
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard let self, model.selectedGuildID == guildID else { return }
+            model.logServerVisibilityIfEmpty(guildID, moment: "5 s later")
+        }
         guildPrefetchTask = Task { [weak self] in
             // Long enough that stepping through the rail asks about nothing,
             // short enough that stopping on a server has its rows before the
@@ -3853,6 +3904,63 @@ extension SessionController {
 
     /// The guild feature that says a server has a rules gate at all.
     static let verificationFeature = "MEMBER_VERIFICATION_GATE_ENABLED"
+
+    /// A conversation's newest page, asked for while the pointer rests on its
+    /// row (`HistoryPrefetcher`, docs/BETA3.md D7): opening it then finds the
+    /// page here instead of waiting the 0.3–1.4 s Discord takes. Only a
+    /// conversation the reader may read, whose page isn't held or on its way,
+    /// and once a minute at most — each is one request in that channel's own
+    /// budget (`RateLimiter.bucketKey`).
+    func prefetchNewestPage(_ channelID: ChannelID) {
+        guard !LaunchOptions.current.usesDemoFixtures,
+              model.selectedChannelID != channelID,
+              model.permissionGate.canReadHistory(channelID)
+        else { return }
+        let box = model.messages(in: channelID)
+        guard box?.messages.isEmpty ?? true, box?.isLoadingHistory != true else { return }
+        let now = Date()
+        if let last = historyPrefetchedAt[channelID], now.timeIntervalSince(last) < 60 { return }
+        historyPrefetchedAt[channelID] = now
+        Self.trace("prefetch \(channelID), the pointer rests on its row")
+        model.mutateBox(channelID) { box in
+            box.isLoadingHistory = true
+            box.historyFailure = nil
+        }
+        loadHistory(in: channelID, .older(before: nil))
+    }
+
+    /// Asks for the reader's own record in a server when it is missing.
+    ///
+    /// **Every permission in a server is resolved from it** — the roles it
+    /// names are what open a server whose channels all deny `@everyone` (a
+    /// server with a rules gate: 102 of 102 denied, docs/BETA3.md §1.7). READY
+    /// sends it positionally in `merged_members`, and a server whose record
+    /// never came resolved as `@everyone` alone: nothing visible at all.
+    /// Discord's client asks for its own member by id when it lacks one; so
+    /// does this, once per server and session (op 8, deduplicated with every
+    /// other member request).
+    func ensureOwnMember(in guildID: GuildID) {
+        guard let userID = model.currentUserID,
+              model.guilds[guildID] != nil,
+              model.members[guildID]?[userID] == nil,
+              model.guildPreview?.guildID != guildID,
+              let socket,
+              memberRequests.insert(MemberRequest(guildID: guildID, userID: userID)).inserted
+        else { return }
+        Log.info(.app, "server \(guildID): the reader's own member record is missing, asking for it")
+        Task { await socket.requestGuildMembers(guildID: guildID, userIDs: [userID]) }
+    }
+
+    /// How many servers READY left without the reader's own record — the
+    /// count that says whether §1.7 was one server or all of them.
+    private func noteMissingOwnMembers() {
+        guard let userID = model.currentUserID else { return }
+        let missing = model.guilds.keys.filter { model.members[$0]?[userID] == nil }
+        guard !missing.isEmpty else { return }
+        Log.info(.app, "after READY, \(missing.count) of \(model.guilds.count) servers have no own member record")
+        // The one on screen is asked for now; the rest as they are opened.
+        if let selected = model.selectedGuildID { ensureOwnMember(in: selected) }
+    }
 
     /// The page a server shows a new arrival.
     ///

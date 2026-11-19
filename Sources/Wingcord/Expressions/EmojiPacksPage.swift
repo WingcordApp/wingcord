@@ -11,6 +11,13 @@ import WingcordCore
 /// doesn't sell, so an account without Nitro gets one plain line instead.
 struct EmojiPacksPage: View {
     var topInset: CGFloat
+    /// Whether this account may send what it picks here, **where the picker
+    /// is sending it**: Nitro proper, or Fake Nitro's links in a message only.
+    /// A reaction or a status reply names the emoji itself, which Discord
+    /// refuses without Nitro whatever Fake Nitro says — read from the
+    /// picker's destination (`EmojiAllowance.packsUsable`), not from the
+    /// account alone, which let a reaction through (docs/BETA3.md §1.5).
+    var isUsable: Bool
     /// The pack to open at, expanded — an emoji card's View Set.
     var focusPackID: UInt64?
     var close: () -> Void
@@ -19,9 +26,6 @@ struct EmojiPacksPage: View {
     @Environment(AppModel.self) private var model
     @State private var width: CGFloat = 0
 
-    /// Whether this account may send what it picks here: Nitro proper, or
-    /// Fake Nitro's links (`AppModel.emojiPacksUsable`).
-    private var isUsable: Bool { model.emojiPacksUsable }
 
     var body: some View {
         ScrollViewReader { reader in

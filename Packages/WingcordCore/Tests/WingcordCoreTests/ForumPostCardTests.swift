@@ -51,7 +51,12 @@ struct ForumPostCardTests {
     @Test("Files lead, then what the embeds lead with, and neither is the full-size original")
     func order() throws {
         let media = ForumPostCard.media(
-            of: opener(attachments: [file(1)], embeds: [embed("https://images-ext-1.discordapp.net/external/x.png")]),
+            // A picture larger than its card: since the proxy only ever shrinks
+            // (docs/BETA3.md §1.4), a smaller one is asked for at its own size.
+            of: opener(
+                attachments: [file(1, width: 2000, height: 1500)],
+                embeds: [embed("https://images-ext-1.discordapp.net/external/x.png")]
+            ),
             isMediaChannel: false,
             width: 450
         )

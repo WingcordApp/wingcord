@@ -88,8 +88,10 @@ struct ForumBoardAdditionsTests {
             url: "https://cdn.discordapp.com/attachments/1/2/a.png",
             proxyURL: "https://media.discordapp.net/attachments/1/2/a.png",
             contentType: "image/png",
-            width: 800,
-            height: 600
+            // Larger than any view it is drawn in: the proxy only shrinks, so a
+            // smaller picture is asked for at its own size (docs/BETA3.md §1.4).
+            width: 2000,
+            height: 1500
         )
     }
 

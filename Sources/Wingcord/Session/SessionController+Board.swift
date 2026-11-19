@@ -150,6 +150,29 @@ extension SessionController {
 
     // MARK: A game's own profile
 
+    /// A game's own record and nothing else — its cover and its store buttons —
+    /// for an activity card's popout (docs/BETA3.md §1.3).
+    ///
+    /// The popout drew the game's square icon and no Get on Steam until the
+    /// game's profile had been opened once, because only `loadGameProfile`
+    /// filled `games`. The profile's other three fetches stay the profile's.
+    /// Once per game and session; an answer of "no record" is kept as asked,
+    /// and a failure may be asked again.
+    func loadGameRecord(_ gameID: ApplicationID) {
+        guard model.games[gameID] == nil, gameRecordFetches.insert(gameID).inserted else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                if let game = try await rest.game(gameID), model.games[gameID] == nil {
+                    model.games[gameID] = game
+                }
+            } catch {
+                gameRecordFetches.remove(gameID)
+                Self.trace("game record \(gameID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
     /// Everything the game profile draws that is not already resident.
     ///
     /// **Four fetches, and three of them are optional in the honest sense**: a

@@ -85,6 +85,29 @@ extension ComponentDTO {
         case 23:
             guard let custom_id else { return nil }
             return .checkbox(customID: custom_id, isDefault: self.default ?? false)
+        case 5, 6, 7, 8:
+            // Discord's modal defaults: one choice, required.
+            guard let custom_id, let kind = InteractionModal.EntitySelect.Kind(rawValue: type ?? 0) else { return nil }
+            let minimum = min_values ?? 1
+            return .entitySelect(InteractionModal.EntitySelect(
+                kind: kind,
+                customID: custom_id,
+                placeholder: placeholder,
+                minValues: minimum,
+                maxValues: max_values ?? 1,
+                isRequired: required ?? (minimum > 0),
+                defaultIDs: (default_values ?? []).map(\.id),
+                channelTypes: channel_types ?? []
+            ))
+        case 19:
+            guard let custom_id else { return nil }
+            let minimum = min_values ?? 1
+            return .fileUpload(InteractionModal.FileUpload(
+                customID: custom_id,
+                minValues: minimum,
+                maxValues: max_values ?? 1,
+                isRequired: required ?? (minimum > 0)
+            ))
         case let type?:
             return .unsupported(type: type, customID: custom_id)
         case nil:
@@ -112,6 +135,14 @@ public struct ModalSubmission: Encodable, Sendable {
     var data: Payload
     var session_id: String
     var nonce: String
+    /// The files a form's uploads sent ahead, by the ids their fields name.
+    var attachments: [UploadedAttachment]?
+
+    struct UploadedAttachment: Encodable, Sendable {
+        var id: String
+        var filename: String
+        var uploaded_filename: String
+    }
 
     struct Payload: Encodable, Sendable {
         var id: String
@@ -124,8 +155,12 @@ public struct ModalSubmission: Encodable, Sendable {
         answers: [String: InteractionModal.Answer],
         guildID: GuildID?,
         sessionID: String,
-        nonce: String
+        nonce: String,
+        uploads: [UploadSlot] = []
     ) {
+        attachments = uploads.isEmpty ? nil : uploads.map {
+            UploadedAttachment(id: $0.id, filename: $0.filename, uploaded_filename: $0.uploadedFilename)
+        }
         application_id = modal.applicationID.description
         channel_id = modal.channelID.description
         guild_id = guildID?.description
@@ -191,6 +226,16 @@ indirect enum SubmittedField: Encodable, Sendable {
             } else {
                 self = .checkbox(customID: customID, value: isDefault)
             }
+        case .entitySelect(let select):
+            self = .values(
+                type: select.kind.rawValue, customID: select.customID,
+                values: InteractionModal.values(answers[select.customID])
+            )
+        case .fileUpload(let upload):
+            // By then the files are uploaded and the answer is their ids —
+            // `SessionController.submitInteractionModal` does it first.
+            let ids = InteractionModal.values(answers[upload.customID])
+            self = .values(type: 19, customID: upload.customID, values: ids.isEmpty ? nil : ids)
         case .unsupported(let type, let customID):
             self = customID.map { .values(type: type, customID: $0, values: nil) } ?? .bare(type: type)
         }

@@ -13,18 +13,30 @@ import WingcordCore
 final class LoadMarks {
     static let shared = LoadMarks()
 
+    /// **The member list's three moments** (docs/BETA3.md §1.9): `roster` is
+    /// the first update of any kind for the list, which can be a presence
+    /// change carrying only the group counts — so it said 190 ms while the rows
+    /// stayed placeholders. `listAsked` is the subscription leaving the socket,
+    /// `listSync` Discord's page of rows arriving, `listFull` the first rows
+    /// all drawable (sent, and their people's records held).
     enum Part: String, CaseIterable, Sendable {
         case history, painted, roster, faces
+        case listAsked = "list asked"
+        case listSync = "list page"
+        case listFull = "list full"
     }
 
     private var channelID: ChannelID?
     private var openedAt: ContinuousClock.Instant?
     private var isCached = false
     private var marks: [Part: Duration] = [:]
+    /// Short facts about the open that are not times ("list kept").
+    private var notes: [String] = []
     private var deadline: Task<Void, Never>?
 
-    /// How long the line waits for the parts that have not come.
-    private static let patience: Duration = .seconds(5)
+    /// How long the line waits for the parts that have not come. Long enough
+    /// that a list taking several seconds still gets its number.
+    private static let patience: Duration = .seconds(20)
 
     func opened(_ channelID: ChannelID, isCached: Bool) {
         if self.channelID != nil { flush() }
@@ -32,6 +44,7 @@ final class LoadMarks {
         self.isCached = isCached
         openedAt = .now
         marks = [:]
+        notes = []
         deadline?.cancel()
         deadline = Task { [weak self] in
             try? await Task.sleep(for: Self.patience)
@@ -49,6 +62,12 @@ final class LoadMarks {
         if wanted.allSatisfy({ marks[$0] != nil }) { flush() }
     }
 
+    /// Adds a fact to the line of the channel being opened, once.
+    func note(_ text: String, in channelID: ChannelID) {
+        guard channelID == self.channelID, !notes.contains(text) else { return }
+        notes.append(text)
+    }
+
     private func flush() {
         deadline?.cancel()
         deadline = nil
@@ -58,9 +77,10 @@ final class LoadMarks {
             let value = marks[part].map(LogMessage.describe) ?? "—"
             return "\(part.rawValue) \(value)"
         }
+        let facts = notes.isEmpty ? "" : " [\(notes.joined(separator: ", "))]"
         Log.info(
             .perf,
-            "channel \(channelID) came in\(public: isCached ? " (cached)" : ""): \(public: parts.joined(separator: ", "))"
+            "channel \(channelID) came in\(public: isCached ? " (cached)" : ""): \(public: parts.joined(separator: ", "))\(public: facts)"
         )
     }
 }

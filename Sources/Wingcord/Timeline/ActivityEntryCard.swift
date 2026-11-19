@@ -91,6 +91,8 @@ struct ActivityEntryCard: View {
         .onTapGesture { open(popout.titleDestination) }
         .environment(\.colorScheme, .dark)
         .accessibilityElement(children: .combine)
+        // The game's own record, for its portrait cover (docs/BETA3.md §1.3).
+        .onAppear { model.loadGameRecord(for: key.entry) }
         .task(id: popout.artURL) {
             guard let url = popout.artURL,
                   let image = await ImageStore.shared.image(for: ImageStore.Key(url: url, maximumPixelSize: 96))

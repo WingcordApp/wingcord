@@ -35,24 +35,26 @@ extension AppModel {
 
     /// The steps this server actually has, computed rather than assumed.
     ///
-    /// **Either gate can exist alone**, and most servers have exactly one of
-    /// them — so a flow with a fixed shape would show an empty question step or
-    /// silently skip an agreement. The welcome is always first because it is the
-    /// only step that names the server.
+    /// **Discord's onboarding, step for step** (docs/BETA3.md §2.1): it appears
+    /// only where a prompt is `in_onboarding`, opens on the first question, and
+    /// where the server also screens its members, ends on the rules — agreed
+    /// first when it is sent, as `forza onboarding.har` does. A server with
+    /// rules and no questions gets Discord's rules window instead
+    /// (`JoinApplicationSheet`), never this page, and a server with neither is
+    /// simply entered. No steps means no gate.
     func joinGateSteps(inGuild guildID: GuildID) -> [ServerJoinGate.Step] {
-        var steps: [ServerJoinGate.Step] = [.welcome]
-        steps.append(contentsOf: joinGatePrompts(inGuild: guildID).indices.map(ServerJoinGate.Step.question))
+        let prompts = joinGatePrompts(inGuild: guildID)
+        guard !prompts.isEmpty else { return [] }
+        var steps = prompts.indices.map(ServerJoinGate.Step.question)
         if joinGateHasRules(inGuild: guildID) { steps.append(.rules) }
         return steps
     }
 
-    /// Whether a server has anything to gate on at all.
-    ///
-    /// A server that asks nothing and demands nothing must never see this
-    /// surface: the welcome step alone is a screen that says hello and then has
-    /// nowhere to go, which is worse than landing in a channel.
+    /// Whether a server has questions to put to a newcomer at all — Discord's
+    /// test before it shows onboarding: with none, it shows nothing and the
+    /// member simply lands (`817818`'s `h9`).
     func isGating(_ guildID: GuildID) -> Bool {
-        !joinGatePrompts(inGuild: guildID).isEmpty || joinGateHasRules(inGuild: guildID)
+        !joinGatePrompts(inGuild: guildID).isEmpty
     }
 
     // MARK: Raising it
@@ -64,6 +66,9 @@ extension AppModel {
     /// server" path call this without either knowing about the other.
     func openJoinGate(_ guildID: GuildID, inviteCode: String? = nil) {
         if joinGate?.guildID == guildID { return }
+        // **Held, not shown**: `isJoinGateShown` waits for the questions. The
+        // gate used to be on screen from this moment, before anything had
+        // arrived — "0 questions about what you're here for".
         joinGate = ServerJoinGate(guildID: guildID, inviteCode: inviteCode)
         dismissedJoinGates.remove(guildID)
         sessionController.loadJoinGate(guildID, inviteCode: inviteCode)
@@ -88,7 +93,7 @@ extension AppModel {
     /// somebody else's questions.
     var isJoinGateShown: Bool {
         guard let gate = joinGate else { return false }
-        return gate.guildID == selectedGuildID
+        return gate.guildID == selectedGuildID && isGating(gate.guildID)
     }
 
     /// Whether the detail column is a **takeover** — a surface that is not a
@@ -111,6 +116,7 @@ extension AppModel {
     /// that fill asynchronously, so this is called again as they land rather
     /// than once on selection.
     func offerJoinGateIfNeeded(_ guildID: GuildID) {
+        settleJoiningGate(guildID)
         if offerJoinApplicationIfNeeded(guildID) { return }
         guard joinGate == nil,
               // **The server on screen, not merely the one that answered.**
@@ -131,18 +137,45 @@ extension AppModel {
         seedJoinGateSelection()
     }
 
-    /// Puts the application in front of a pending member whose server's form
-    /// asks questions — Discord opens its form wherever `V(guildId)` holds:
-    /// pending, in a server with the gate on. Once a session, like the gate,
-    /// and never over an application already waiting on a moderator.
+    /// A join's gate, once both of its tables are in.
+    ///
+    /// **Questions go on, and nothing else waits on this page.** A server with
+    /// questions keeps the gate (its rules last); one without any closes it and,
+    /// for a pending member, opens Discord's rules window; one with neither is
+    /// simply entered. Both loaders end in `offerJoinGateIfNeeded`, so this runs
+    /// as the second of them lands (docs/BETA3.md §1.6).
+    private func settleJoiningGate(_ guildID: GuildID) {
+        guard let gate = joinGate, gate.guildID == guildID,
+              guildOnboardings[guildID] != nil,
+              memberVerifications[guildID] != nil,
+              !isGating(guildID)
+        else { return }
+        joinGate = nil
+        guard isPendingMember(inGuild: guildID), memberVerifications[guildID]?.canSubmit == true else { return }
+        dismissedJoinGates.insert(guildID)
+        openJoinApplication(guildID, inviteCode: gate.inviteCode)
+    }
+
+    /// Puts Discord's member verification window in front of a pending member —
+    /// Discord opens its form wherever `V(guildId)` holds: pending, in a server
+    /// with the gate on. Once a session, like the gate, and never over an
+    /// application already waiting on a moderator.
+    ///
+    /// **Rules alone too**, not only a form with questions (docs/BETA3.md D1):
+    /// that window is Discord's for both, and the onboarding page drew the rules
+    /// of a server that asked nothing else. Where onboarding asks questions,
+    /// their page puts the rules last and this waits for it.
     private func offerJoinApplicationIfNeeded(_ guildID: GuildID) -> Bool {
         guard selectedGuildID == guildID,
               joinApplicationRequest == nil,
               !dismissedJoinGates.contains(guildID),
               !pendingJoinRequestGuildIDs.contains(guildID),
               isPendingMember(inGuild: guildID),
-              memberVerifications[guildID]?.asksQuestions == true
+              let form = memberVerifications[guildID]
         else { return false }
+        if !form.asksQuestions {
+            guard form.canSubmit, guildOnboardings[guildID] != nil, !isGating(guildID) else { return false }
+        }
         dismissedJoinGates.insert(guildID)
         openJoinApplication(guildID)
         return true
@@ -161,9 +194,9 @@ extension AppModel {
     /// questions was asked them again on every launch. Joining raises the gate
     /// on its own path, `openJoinGate`, and is not this.
     private func hasUnansweredJoinGate(_ guildID: GuildID) -> Bool {
+        guard isGating(guildID) else { return false }
         if joinGateHasRules(inGuild: guildID) { return true }
-        guard !joinGatePrompts(inGuild: guildID).isEmpty,
-              let userID = currentUserID,
+        guard let userID = currentUserID,
               let flags = members[guildID]?[userID]?.flags
         else { return false }
         return flags.isOnboardingUnfinished
@@ -219,9 +252,9 @@ extension AppModel {
         guard let gate = joinGate, !gate.isSubmitting else { return }
         let steps = joinGateSteps(inGuild: gate.guildID)
         let prompts = joinGatePrompts(inGuild: gate.guildID)
-        guard let here = steps.firstIndex(of: gate.step),
-              forward(at: here, steps: steps, prompts: prompts, gate: gate).isEnabled
-        else { return }
+        guard !steps.isEmpty else { return }
+        let here = steps.firstIndex(of: gate.step) ?? 0
+        guard forward(at: here, steps: steps, prompts: prompts, gate: gate).isEnabled else { return }
         guard here + 1 < steps.count else {
             submitJoinGate()
             return
@@ -284,17 +317,16 @@ extension AppModel {
 
         let prompts = joinGatePrompts(inGuild: gate.guildID)
         let steps = joinGateSteps(inGuild: gate.guildID)
-        let hasRules = joinGateHasRules(inGuild: gate.guildID)
+        // No questions, no page: the gate is held until they arrive.
+        guard !steps.isEmpty else { return nil }
         // The step the flow *thinks* it is on may have stopped existing — the
         // routes fill while the gate is open, so a server whose questions arrive
-        // late can grow steps under a reader already past the welcome. Clamping
-        // rather than trusting is what stops that photographing as a blank page.
+        // late can grow steps under a reader. Clamping rather than trusting is
+        // what stops that photographing as a blank page.
         let index = steps.firstIndex(of: gate.step) ?? 0
 
         let body: ServerJoinGatePresentation.Body
-        switch steps.indices.contains(index) ? steps[index] : .welcome {
-        case .welcome:
-            body = .welcome(.init(promise: welcomePromise(questions: prompts.count, hasRules: hasRules)))
+        switch steps[index] {
         case .question(let position):
             guard prompts.indices.contains(position) else { return nil }
             body = .question(questionPresentation(prompts[position], gate: gate))
@@ -321,17 +353,6 @@ extension AppModel {
             canGoBack: index > 0,
             forward: forward(at: index, steps: steps, prompts: prompts, gate: gate)
         )
-    }
-
-    /// "One question about what you're here for, then this server's rules."
-    private func welcomePromise(questions: Int, hasRules: Bool) -> String {
-        switch (questions, hasRules) {
-        case (0, true): "Just this server's rules to read, and you're in."
-        case (1, true): "One question about what you're here for, then this server's rules."
-        case (1, false): "One question about what you're here for, and that's it."
-        case (let count, true): "\(count) questions about what you're here for, then this server's rules."
-        case (let count, false): "\(count) questions about what you're here for, and that's it."
-        }
     }
 
     private func questionPresentation(

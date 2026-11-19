@@ -4534,11 +4534,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let url: URL? = if isVideo {
             // A clip on this Mac — a `--demo` fixture — is its own poster:
             // `ImageStore` takes its first frame (`posterFrame(of:)`).
-            CDN.videoPoster(proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight)
+            CDN.videoPoster(
+                proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight,
+                sourceSize: attachment.pixelSize
+            )
                 ?? URL(string: attachment.proxyURL).flatMap { $0.isFileURL ? $0 : nil }
         } else {
             CDN.resizedAttachment(
-                proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight, animated: isAnimated
+                proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight,
+                sourceSize: attachment.pixelSize, animated: isAnimated
             )
         }
         return AttachmentSlot(

@@ -210,7 +210,7 @@ nonisolated enum ComponentsLayoutEngine {
                     rect: CGRect(
                         x: origin.x + width - side, y: origin.y, width: side, height: side
                     ),
-                    url: CDN.resizedAttachment(proxyURL: source, width: side),
+                    url: CDN.resizedAttachment(proxyURL: source, width: side, height: side, sourceSize: thumbnail.pixelSize),
                     isCircle: false,
                     corner: EmbedLayoutEngine.corner,
                     decodeWidth: side,
@@ -309,8 +309,10 @@ nonisolated enum ComponentsLayoutEngine {
             card.images.append(EmbedImage(
                 rect: rect,
                 url: item.isVideo
-                    ? CDN.videoPoster(proxyURL: source, width: columnWidth, height: height)
-                    : CDN.resizedAttachment(proxyURL: source, width: columnWidth),
+                    ? CDN.videoPoster(proxyURL: source, width: columnWidth, height: height, sourceSize: item.pixelSize)
+                    : CDN.resizedAttachment(
+                        proxyURL: source, width: columnWidth, height: height, sourceSize: item.pixelSize
+                    ),
                 isCircle: false,
                 corner: EmbedLayoutEngine.corner,
                 decodeWidth: columnWidth,

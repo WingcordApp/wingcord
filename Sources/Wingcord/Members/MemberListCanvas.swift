@@ -596,7 +596,7 @@ final class MemberListCanvas: NSView {
     /// A roster draws two hundred faces; a decorated account animates most of
     /// them. `HoverAvatarFilm` holds the pair together and is shared with the
     /// transcript, which has the identical problem one row at a time.
-    private let avatarFilm = HoverAvatarFilm()
+    private let avatarFilm = HoverAvatarFilm(surface: "member list")
 
     /// This view's identity in the shared clock.
     private var playToken: ObjectIdentifier { ObjectIdentifier(self) }

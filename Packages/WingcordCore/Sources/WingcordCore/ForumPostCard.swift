@@ -67,7 +67,9 @@ public enum ForumPostCard {
             guard let poster = poster(ofVideoAt: attachment.proxyURL, width: width) else { return nil }
             return ForumPostMedia(url: poster, isSpoiler: attachment.isSpoiler, isVideo: true)
         }
-        guard let url = CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: width) else { return nil }
+        guard let url = CDN.resizedAttachment(
+            proxyURL: attachment.proxyURL, width: width, sourceSize: attachment.pixelSize
+        ) else { return nil }
         return ForumPostMedia(url: url, isSpoiler: attachment.isSpoiler, isAnimated: attachment.playsAsAnimated)
     }
 
@@ -78,7 +80,7 @@ public enum ForumPostCard {
             guard let poster = poster(ofVideoAt: source, width: width) else { return nil }
             return ForumPostMedia(url: poster, isSpoiler: isSpoiler || embed.isSpoiler, isVideo: true)
         }
-        guard let url = CDN.resizedAttachment(proxyURL: source, width: width) else { return nil }
+        guard let url = CDN.resizedAttachment(proxyURL: source, width: width, sourceSize: embed.pixelSize) else { return nil }
         return ForumPostMedia(url: url, isSpoiler: isSpoiler || embed.isSpoiler, isAnimated: embed.playsAsAnimated)
     }
 

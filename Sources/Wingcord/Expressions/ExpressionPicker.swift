@@ -181,7 +181,7 @@ struct ExpressionPicker: View {
                             EmojiPacksRailButton(
                                 isShowing: showsPacks,
                                 width: Self.railSide + Spacing.tight * 2,
-                                isEnabled: reactingIn == nil || model.emojiPacksUsable
+                                isEnabled: model.emojiAllowance(for: emojiDestination).packsUsable
                             ) {
                                 showsPacks.toggle()
                             }
@@ -196,6 +196,7 @@ struct ExpressionPicker: View {
                     if shown == .emoji, showsPacks {
                         EmojiPacksPage(
                             topInset: chromeHeight,
+                            isUsable: model.emojiAllowance(for: emojiDestination).packsUsable,
                             focusPackID: initialEmojiPackID,
                             close: { showsPacks = false },
                             onPick: onPick

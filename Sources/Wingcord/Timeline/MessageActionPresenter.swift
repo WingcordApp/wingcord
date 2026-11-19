@@ -50,8 +50,14 @@ struct MessageActionPresenter: ViewModifier {
             // A server's events, opened from the sidebar, the inbox, the live
             // card or a link — over the reactors list, under the profiles.
             .overlay { EventsLayer() }
-            // A form an application raised, over everything a message raises.
-            .overlay { InteractionModalLayer() }
+            // A form an application raised: the window's form card, as every
+            // other form (docs/BETA3.md §2.4).
+            .modal(item: Binding(
+                get: { model.interactionModal.map { InteractionFormRequest(id: $0.modal.id) } },
+                set: { if $0 == nil { model.interactionModal = nil } }
+            )) { _ in
+                InteractionFormSheet()
+            }
             // Who holds a role, beside the mention that was clicked — under
             // the profiles, so a card opened from a row comes up above it.
             .overlay { RoleMembersLayer() }

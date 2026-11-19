@@ -2592,6 +2592,10 @@ struct ComponentDTO: Decodable, Sendable {
         // Lenient: an entry in a shape this client can't read costs the card,
         // never the message.
         content_inventory_entry = try? container.decodeIfPresent(ContentEntryDTO.self, forKey: .content_inventory_entry)
+        // A picker's preselection and a channel picker's kinds — lenient for
+        // the same reason: a form is worth more than one field's defaults.
+        default_values = try? container.decodeIfPresent([DefaultValueDTO].self, forKey: .default_values)
+        channel_types = try? container.decodeIfPresent([Int].self, forKey: .channel_types)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2600,6 +2604,7 @@ struct ComponentDTO: Decodable, Sendable {
         case options, min_values, max_values
         case min_length, max_length, required, value, description, `default`, component
         case content_inventory_entry
+        case default_values, channel_types
     }
 
     var type: Int?
@@ -2642,6 +2647,16 @@ struct ComponentDTO: Decodable, Sendable {
     /// Component 16's activity — what a reply to somebody's activity carries
     /// (Discord's `CONTENT_INVENTORY_ENTRY`).
     var content_inventory_entry: ContentEntryDTO?
+    /// A member, role, mentionable or channel picker's preselection.
+    var default_values: [DefaultValueDTO]?
+    /// The kinds of channel a channel picker offers; empty or absent is all.
+    var channel_types: [Int]?
+
+    /// One preselected id, and what it names (`user`, `role`, `channel`).
+    struct DefaultValueDTO: Decodable, Sendable {
+        var id: String
+        var type: String?
+    }
 
     /// The activity a message is a reply to, from its top-level component 16.
     static func contentEntry(_ payload: [ComponentDTO]?) -> RecentActivity? {

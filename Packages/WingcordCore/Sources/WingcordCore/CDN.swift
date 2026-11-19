@@ -562,15 +562,23 @@ public enum CDN {
     /// phone photo to draw it 400pt wide is the single largest avoidable cost on
     /// an image-heavy channel, and this is where it is avoided.
     ///
-    /// **Both sides, always** — measured on the live proxy, 2026-09-29. Given
-    /// only a width it answers with the original, untouched: a 512x239 PNG
-    /// asked for at `width=200` came back 512x239, and this used to ask for
-    /// nothing else, so every picture in the transcript was downloaded whole.
-    /// Given both, it fits the picture inside them and never crops or enlarges
-    /// it (`width=200&height=2000` gave 200x93; `1024x1024` gave the 512x239
-    /// back). So `height` is a bound: the height the picture is drawn at when
-    /// the caller knows it, and otherwise four widths, which only a picture
-    /// four times taller than it is wide reaches.
+    /// **The picture's own shape, always** — measured on the live proxy,
+    /// 2026-11-18, on a 1672×941 PNG (docs/BETA3.md §1.4). Discord changed it
+    /// since 2026-09-29, when it fitted a picture inside the box and never
+    /// cropped it: it now **crops to whatever box it is given** —
+    /// `width=808&height=3232` came back 808×3232, a 1:4 slice of the middle —
+    /// and refuses either side past 4096 with a 400 (4096 answers, 4097 does
+    /// not). Given only a width it still answers with the original untouched.
+    ///
+    /// So the box is never invented. `height`, when the caller passes one, is
+    /// the box the picture is drawn into, cropped there anyway (a square
+    /// thumbnail, a grid cell); otherwise the height comes from `sourceSize`,
+    /// the picture's own pixels, which every attachment and embed carries. A
+    /// box past the file's own size shrinks to it — the proxy would only
+    /// enlarge it — and either side past 4096 shrinks both. With neither, the
+    /// answer is the original: a bigger download, but the right picture, where
+    /// four widths used to come back as a sliver or a 400 and left only the
+    /// blurred placeholder on screen.
     ///
     /// **A GIF keeps every frame**: a 32-frame Tenor GIF at `width=200&height=150`
     /// came back a 32-frame GIF at 150x150. What flattens one to a single frame
@@ -587,6 +595,7 @@ public enum CDN {
         proxyURL: String,
         width: CGFloat,
         height: CGFloat? = nil,
+        sourceSize: CGSize? = nil,
         animated: Bool = false,
         scale: CGFloat = 2
     ) -> URL? {
@@ -600,17 +609,56 @@ public enum CDN {
         guard let scheme = components.scheme, scheme == "http" || scheme == "https" else {
             return components.url
         }
-        let pixels = Int((width * scale).rounded(.up))
-        let bound = height.map { Int(($0 * scale).rounded(.up)) } ?? pixels * 4
         var items = components.queryItems ?? []
         items.removeAll {
             $0.name == "width" || $0.name == "height" || $0.name == "format" || $0.name == "animated"
         }
-        items.append(URLQueryItem(name: "width", value: String(pixels)))
-        items.append(URLQueryItem(name: "height", value: String(bound)))
+        if let box = proxyBox(width: width, height: height, sourceSize: sourceSize, scale: scale) {
+            items.append(URLQueryItem(name: "width", value: String(box.width)))
+            items.append(URLQueryItem(name: "height", value: String(box.height)))
+        }
         if animated { items.append(URLQueryItem(name: "animated", value: "true")) }
-        components.queryItems = items
+        components.queryItems = items.isEmpty ? nil : items
         return components.url
+    }
+
+    /// The most the media proxy draws on either side (measured 2026-11-18).
+    public static let proxyLimit = 4096
+
+    /// The pixel box to ask the proxy for, or nil for the original.
+    ///
+    /// See `resizedAttachment`: the proxy crops to the box, so the box is the
+    /// caller's own (`height`) or the picture's shape (`sourceSize`), never past
+    /// the file's own pixels and never past `proxyLimit` on either side.
+    public static func proxyBox(
+        width: CGFloat,
+        height: CGFloat?,
+        sourceSize: CGSize?,
+        scale: CGFloat
+    ) -> (width: Int, height: Int)? {
+        let source = sourceSize.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil }
+        var boxWidth = (width * scale).rounded(.up)
+        var boxHeight: CGFloat
+        if let height {
+            boxHeight = (height * scale).rounded(.up)
+        } else if let source {
+            boxHeight = boxWidth * source.height / source.width
+        } else {
+            return nil
+        }
+        guard boxWidth > 0, boxHeight > 0 else { return nil }
+        // Past the file's own size the proxy only enlarges: shrink the box,
+        // keeping its shape, until it fits inside the picture.
+        if let source {
+            let fit = min(1, source.width / boxWidth, source.height / boxHeight)
+            boxWidth *= fit
+            boxHeight *= fit
+        }
+        let limit = CGFloat(proxyLimit)
+        let cap = min(1, limit / max(boxWidth, boxHeight))
+        boxWidth *= cap
+        boxHeight *= cap
+        return (max(1, Int(boxWidth.rounded())), max(1, Int(boxHeight.rounded())))
     }
 
     /// Whether Discord's client plays a picture as moving — its
@@ -654,19 +702,21 @@ public enum CDN {
     /// placeholder, which is the honest answer.
     /// Both sides, for the reason `resizedAttachment` gives.
     public static func videoPoster(
-        proxyURL: String, width: CGFloat, height: CGFloat? = nil, scale: CGFloat = 2
+        proxyURL: String, width: CGFloat, height: CGFloat? = nil, sourceSize: CGSize? = nil, scale: CGFloat = 2
     ) -> URL? {
         guard var components = URLComponents(string: proxyURL),
               let scheme = components.scheme,
               scheme == "http" || scheme == "https"
         else { return nil }
-        let pixels = Int((width * scale).rounded(.up))
-        let bound = height.map { Int(($0 * scale).rounded(.up)) } ?? pixels * 4
         var items = components.queryItems ?? []
         items.removeAll { $0.name == "width" || $0.name == "height" || $0.name == "format" }
         items.append(URLQueryItem(name: "format", value: "webp"))
-        items.append(URLQueryItem(name: "width", value: String(pixels)))
-        items.append(URLQueryItem(name: "height", value: String(bound)))
+        // The same box rule as a picture's (`resizedAttachment`): the proxy
+        // crops a still to the box it is given, and refuses one past 4096.
+        if let box = proxyBox(width: width, height: height, sourceSize: sourceSize, scale: scale) {
+            items.append(URLQueryItem(name: "width", value: String(box.width)))
+            items.append(URLQueryItem(name: "height", value: String(box.height)))
+        }
         components.queryItems = items
         return components.url
     }

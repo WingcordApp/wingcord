@@ -140,6 +140,10 @@ struct AvatarView: View {
     /// A profile card is the opposite case: **one** face, opened deliberately,
     /// and the thing the reader came to look at. It plays whenever it can.
     var animates = false
+    /// Whether the decoration plays. **On by default**: a profile's one face
+    /// is the thing the reader came to look at. A list passes its pointer, so
+    /// a decoration moves only on the row under it.
+    var decorationAnimates = true
 
     @Environment(\.motion) private var motion
     /// The reader's own animation preference. Its label names avatars, so it
@@ -217,6 +221,8 @@ struct AvatarView: View {
         // A face that changes has to put its still back while the new one
         // resolves, or the avatar is empty in between.
         .onChange(of: url) { faceIsPlaying = false }
+        // A list's face plays per hover; each hover's film reports afresh.
+        .onChange(of: animates) { faceIsPlaying = false }
         .frame(width: side, height: side)
         .clipShape(.circle)
         .overlay {
@@ -248,19 +254,24 @@ struct AvatarView: View {
                     RemoteImage(url: decorationURL, side: side * Metrics.decorationScale) {
                         Color.clear
                     }
-                    .opacity(decorationIsPlaying ? 0 : 1)
-                    AnimatedDecoration(
-                        url: decorationURL,
-                        side: side * Metrics.decorationScale,
-                        onPlayback: { playing in
-                            guard decorationIsPlaying != playing else { return }
-                            decorationIsPlaying = playing
-                        }
-                    )
+                    .opacity(decorationIsPlaying && decorationAnimates ? 0 : 1)
+                    if decorationAnimates {
+                        AnimatedDecoration(
+                            url: decorationURL,
+                            side: side * Metrics.decorationScale,
+                            onPlayback: { playing in
+                                guard decorationIsPlaying != playing else { return }
+                                decorationIsPlaying = playing
+                            }
+                        )
+                    }
                 }
                 // A decoration that changes has to put its still back while the
                 // new one resolves, or the avatar wears nothing in between.
                 .onChange(of: decorationURL) { decorationIsPlaying = false }
+                // The film is rebuilt on every hover; until it reports, the
+                // still stays (a latch left from the last hover hid it early).
+                .onChange(of: decorationAnimates) { decorationIsPlaying = false }
                 .frame(
                     width: side * Metrics.decorationScale,
                     height: side * Metrics.decorationScale

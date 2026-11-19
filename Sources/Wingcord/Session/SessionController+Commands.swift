@@ -225,13 +225,44 @@ extension SessionController {
         state.failure = nil
         model.interactionModal = state
         let modal = state.modal
-        let answers = state.answers
+        var answers = state.answers
         Task { [weak self] in
             guard let self else { return }
             guard let sessionID = await socketSessionID() else {
                 model.interactionModal?.isSubmitting = false
                 model.interactionModal?.failure = "Not connected."
                 return
+            }
+            // **The files go up first** (docs/BETA3.md §2.4), through the same
+            // cloud upload a message's attachments take, and the form names
+            // them by their upload ids: each upload field's answer becomes its
+            // files' ids, and the files ride along as `attachments`.
+            var uploads: [UploadSlot] = []
+            let uploadFields: [InteractionModal.FileUpload] = modal.inputs.compactMap {
+                if case .fileUpload(let upload) = $0 { upload } else { nil }
+            }
+            let picked = uploadFields.flatMap { InteractionModal.files(answers[$0.customID]) }
+            if !picked.isEmpty {
+                do {
+                    let slots = try await rest.createUploadSlots(
+                        in: modal.channelID,
+                        for: picked.map { UploadRequest(filename: $0.name, size: $0.size) }
+                    )
+                    guard slots.count == picked.count else { throw CancellationError() }
+                    for (file, slot) in zip(picked, slots) { try await rest.upload(file.url, to: slot) }
+                    uploads = slots
+                    var offset = 0
+                    for field in uploadFields {
+                        let count = InteractionModal.files(answers[field.customID]).count
+                        answers[field.customID] = .values(slots[offset..<offset + count].map(\.id))
+                        offset += count
+                    }
+                } catch {
+                    guard model.interactionModal?.modal.id == modal.id else { return }
+                    model.interactionModal?.isSubmitting = false
+                    model.interactionModal?.failure = Self.reason(for: error, verb: "upload those files")
+                    return
+                }
             }
             let nonce = Self.nonce()
             do {
@@ -240,7 +271,8 @@ extension SessionController {
                     answers: answers,
                     guildID: model.channelIndex[modal.channelID]?.guildID,
                     sessionID: sessionID,
-                    nonce: nonce
+                    nonce: nonce,
+                    uploads: uploads
                 ))
             } catch {
                 guard model.interactionModal?.modal.id == modal.id else { return }

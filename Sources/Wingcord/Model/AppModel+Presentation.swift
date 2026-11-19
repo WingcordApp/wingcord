@@ -711,6 +711,7 @@ extension AppModel {
                 isMuted: state.muted,
                 voiceMembers: [],
                 avatarURL: avatarURL,
+                avatarDecorationURL: decoration?.avatarDecorationHash.flatMap { CDN.avatarDecoration(hash: $0) },
                 // A group with no icon gets its own initials rather than the
                 // channel glyph: the name IS the identity there, and a row of
                 // identical glyphs is a list nobody can scan.

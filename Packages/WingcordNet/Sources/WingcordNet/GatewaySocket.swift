@@ -711,6 +711,17 @@ public actor GatewaySocket {
         channelID: ChannelID,
         ranges: [[Int]]
     ) {
+        subscribeToMemberLists(guildID: guildID, channels: [channelID: ranges])
+    }
+
+    /// The same subscription for several of a server's channels at once —
+    /// **Discord keeps its last five subscribed** (docs/BETA3.md D6), so a list
+    /// the reader goes back to has stayed current and fills at once rather
+    /// than waiting for a fresh `SYNC`.
+    public func subscribeToMemberLists(
+        guildID: GuildID,
+        channels: [ChannelID: [[Int]]]
+    ) {
         struct Subscribe: Encodable {
             var op = 14
             var d: Data
@@ -723,10 +734,9 @@ public actor GatewaySocket {
                 var channels: [String: [[Int]]]
             }
         }
-        send(Subscribe(d: .init(
-            guild_id: guildID.description,
-            channels: [channelID.description: ranges]
-        )))
+        var wire: [String: [[Int]]] = [:]
+        for (channelID, ranges) in channels { wire[channelID.description] = ranges }
+        send(Subscribe(d: .init(guild_id: guildID.description, channels: wire)))
     }
 
     /// Asks for the status line and session clock of every voice channel in a

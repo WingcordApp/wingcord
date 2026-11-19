@@ -55,7 +55,13 @@ struct ScrollWorkGateTests {
     /// scrolls a surface, and waiting on it waited for them as well — 17 s in a
     /// full run. Here nothing but the lease can open it, so getting through at
     /// all is the proof; the time limit is what "never" would hit.
-    @Test("A waiter behind a forgotten hold is let through", .timeLimit(.minutes(1)))
+    ///
+    /// **Three minutes, not one**: on GitHub's runner the whole run is starved
+    /// — suites that take seconds here took 155 s there — and the one-second
+    /// lease's task waited for a thread for about two minutes, failing `main`'s
+    /// build on every push since 2026-11-16 though the waiter did get through
+    /// (docs/BETA3.md §1.11). Still a limit, so "never" still fails.
+    @Test("A waiter behind a forgotten hold is let through", .timeLimit(.minutes(3)))
     func waiterOutlivesForgottenHold() async {
         let gate = ScrollGate(lease: .seconds(1))
         let owner = Owner()

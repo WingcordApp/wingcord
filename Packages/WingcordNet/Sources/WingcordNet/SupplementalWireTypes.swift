@@ -93,6 +93,11 @@ public struct ReadySupplementalSnapshot: Sendable {
         let guildPresences = payload.merged_presences?.guilds
         let membersAlign = members?.count == order.count
         let presencesAlign = guildPresences?.count == order.count
+        // Said once, because a mismatch drops every server's own record — and
+        // a server whose channels all deny `@everyone` then shows nothing.
+        if let members, !membersAlign {
+            Log.fault(.gateway, "READY_SUPPLEMENTAL: merged members for \(members.count) servers, READY named \(order.count); dropped")
+        }
 
         // The merged arrays are walked against READY's order; the voice states
         // are walked against this payload's own guilds, which name themselves.

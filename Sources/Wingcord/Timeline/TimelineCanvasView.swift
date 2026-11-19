@@ -66,7 +66,10 @@ final class TimelineCanvasView: NSView {
     /// messages from a decorated server is otherwise dozens of filmstrips
     /// resident and dozens of layers rewritten every tick, for faces nobody is
     /// looking at.
-    private let avatarFilm = HoverAvatarFilm()
+    private let avatarFilm = HoverAvatarFilm(surface: "chat")
+    /// The last "nothing played" line written, so a pointer resting on one
+    /// row writes it once (docs/BETA3.md §1.2).
+    private var lastHoverNote: String?
 
     /// Wires that film to this view. Called once, from `init`.
     ///
@@ -1093,7 +1096,13 @@ final class TimelineCanvasView: NSView {
 
         // Nothing happens on the ticks that resolve to the frame already on
         // screen, which at 24 ticks over a 12-frame-a-second asset is half.
-        if avatarFilm.advance(to: time) { invalidateRow(hoveredRow) }
+        if avatarFilm.advance(to: time) {
+            invalidateRow(hoveredRow)
+            // **A bubble's face is a layer of its own** (`StickyFaces`), not part
+            // of any row's paint: invalidating the row moved nothing there, so a
+            // face with its film up stayed on the first frame (docs/BETA3.md §1.2).
+            stickyFaces.refreshContents()
+        }
 
         // The hovered author's travelling role gradient, which the member
         // list runs on the same clock and the same cycle.
@@ -3639,7 +3648,10 @@ final class TimelineCanvasView: NSView {
             // A bubble's face riding the bottom is over another row of its
             // run: the run's last message is still the one it belongs to.
             let faceRow = pointer.flatMap { stickyFaces.face(at: $0) }.flatMap { messageRows[$0.run.tailID] }
-            guard let index = faceRow ?? hoveredRow, rows.indices.contains(index),
+            // **Any bubble of a run plays the run's face** (docs/BETA3.md D8): in
+            // bubbles only a run's last row carries the picture, and pointing at
+            // the others played nothing — 41 times in one evening's log.
+            guard let index = faceRow ?? hoveredRow.flatMap(faceRowIndex(for:)), rows.indices.contains(index),
                   case .message(let row) = rows[index].kind,
                   row.avatarRect != nil
             else { return nil }
@@ -3651,9 +3663,43 @@ final class TimelineCanvasView: NSView {
                 scale: window?.backingScaleFactor ?? 2
             )
         }()
+        noteMissingHoverFilm(wanted: wanted)
         guard avatarFilm.reconcile(to: wanted) else { return }
         invalidateRow(hoveredRow)
         refreshStickerAnimation()
+    }
+
+    /// The row that carries the picture for the message at `index`: the row
+    /// itself, or in bubbles the last row of its run, where the face rides.
+    /// Nil for a follow-up in columns, which Discord's list doesn't animate
+    /// either: only the message with the picture does.
+    private func faceRowIndex(for index: Int) -> Int? {
+        guard rows.indices.contains(index), case .message(let row) = rows[index].kind else { return nil }
+        if row.avatarRect != nil { return index }
+        for run in stickyFaces.runs {
+            guard let head = messageRows[run.headID], let tail = messageRows[run.tailID], head <= tail else { continue }
+            if (head...tail).contains(index) { return tail }
+        }
+        return nil
+    }
+
+    /// Why pointing at a message played nothing, once per row and reason.
+    private func noteMissingHoverFilm(wanted: HoverAvatarFilm.Subject?) {
+        guard wanted == nil, !isScrolling, let index = hoveredRow, rows.indices.contains(index),
+              case .message(let row) = rows[index].kind
+        else { return }
+        let reason: StaticString
+        if !AnimationClock.playsAnimatedEmoji {
+            reason = AnimationClock.whyStill
+        } else if faceRowIndex(for: index) == nil {
+            reason = "this message has no picture of its own (a follow-up)"
+        } else {
+            return
+        }
+        let note = "\(row.id.rawValue) \(reason)"
+        guard note != lastHoverNote else { return }
+        lastHoverNote = note
+        Log.info(.media, "hover chat: nothing played, \(public: reason)")
     }
 
     /// Tells the window which row the pointer is on, and where that row is.

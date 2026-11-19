@@ -70,7 +70,10 @@ struct ActivityCardPopout: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("\(popout.people.first?.name ?? "") \(popout.verb) \(popout.title)"))
         .task(id: popout.artURL) { await loadTint(popout.artURL) }
-        .onAppear { reply = model.activityReplyDrafts[entry.id] ?? "" }
+        .onAppear {
+            reply = model.activityReplyDrafts[entry.id] ?? ""
+            model.loadGameRecord(for: entry.activity)
+        }
         .onChange(of: reply) { _, value in
             if value.count > Self.limit { reply = String(value.prefix(Self.limit)) }
             model.activityReplyDrafts[entry.id] = value.isEmpty ? nil : value

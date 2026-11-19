@@ -44,7 +44,7 @@ public actor RateLimiter {
                 self.globalResetAt = nil
             }
 
-            let key = bucketByRoute[route] ?? route
+            let key = bucketKey(for: route)
             guard var bucket = buckets[key] else { return }
 
             if ContinuousClock.now >= bucket.resetAt {
@@ -70,7 +70,7 @@ public actor RateLimiter {
         if let bucketHash = header("X-RateLimit-Bucket") {
             bucketByRoute[route] = bucketHash
         }
-        let key = bucketByRoute[route] ?? route
+        let key = bucketKey(for: route)
 
         if statusCode == 429 {
             let isGlobal = header("X-RateLimit-Global").map { $0 == "true" } ?? false
@@ -96,6 +96,30 @@ public actor RateLimiter {
             remaining: remaining,
             resetAt: ContinuousClock.now.advanced(by: .seconds(resetAfter))
         )
+    }
+
+    /// The budget a route draws on: Discord's bucket, **per top-level
+    /// resource**.
+    ///
+    /// Discord's `X-RateLimit-Bucket` names a bucket "non-inclusive of
+    /// top-level resources in the path": the same hash comes back for every
+    /// channel's history, and the budget behind it is per channel (its *major
+    /// parameters*: a channel, a server, a webhook). Keyed by the hash alone,
+    /// every channel's history shared one budget, so opening a few channels in
+    /// a row — or the hover prefetch — made the next one wait for a reset that
+    /// was never its own (docs/BETA3.md §1.10).
+    func bucketKey(for route: String) -> String {
+        guard let hash = bucketByRoute[route] else { return route }
+        return hash + ":" + Self.majorParameter(of: route)
+    }
+
+    /// `channels/123`, `guilds/456`, `webhooks/789` — the resource a route is
+    /// about, or nothing for a route with none (or with its id templated out,
+    /// which shares the budget on purpose).
+    static func majorParameter(of route: String) -> String {
+        let parts = route.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)
+        guard parts.count >= 2, ["channels", "guilds", "webhooks"].contains(parts[0]) else { return "" }
+        return "\(parts[0])/\(parts[1])"
     }
 
     /// Forgets everything. Called on sign-out, so a new account does not

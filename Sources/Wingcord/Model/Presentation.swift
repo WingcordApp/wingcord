@@ -418,6 +418,10 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     /// glyph in the same gutter — same row, same metrics, different leading
     /// element. Nil everywhere else.
     var avatarURL: URL?
+    /// The avatar decoration the person wears — drawn around the face, still
+    /// at rest and moving under the pointer, as in Discord's DM list. The row
+    /// never passed one, so DM faces wore none (docs/BETA3.md §1.2).
+    var avatarDecorationURL: URL? = nil
     var monogram: String?
     /// Drawn on the avatar. Nil for a group DM, which has no single presence.
     var status: PresenceStatus?

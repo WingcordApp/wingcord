@@ -77,6 +77,10 @@ struct Composer: View {
     /// Whether this bar sits in a card, which brings its own margins.
     var isInCard = false
     var canSend: Bool
+    /// Discord's bar in the composer's place, when the server turns the reader
+    /// away for a reason that isn't a permission (`ComposerBlock`).
+    var block: ComposerBlock? = nil
+    var onBlockAction: (ComposerBlock.Action) -> Void = { _ in }
     /// The message being answered, as the reply bar draws it.
     var reply: ComposerReply?
     /// Whether the bar is holding an edit rather than a new message. It changes
@@ -315,7 +319,9 @@ struct Composer: View {
 
             // The header and the tray are inside the bar's own glass now — see
             // `accessories`.
-            if canSend {
+            if let block {
+                ComposerBlockBar(block: block, act: onBlockAction)
+            } else if canSend {
                 composerRow
             } else {
                 PermissionNotice()
@@ -327,6 +333,7 @@ struct Composer: View {
         .animation(motion.panel, value: isEditing)
         .animation(motion.panel, value: scheduledAt)
         .animation(motion.standard, value: canSend)
+        .animation(motion.standard, value: block)
         .animation(motion.fadeQuick, value: visibleCompletions.isEmpty)
         .animation(motion.fadeQuick, value: visibleMentions.isEmpty)
         .animation(motion.panel, value: pendingCommand?.command.id)

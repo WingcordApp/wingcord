@@ -6,10 +6,10 @@ import Foundation
 ///
 /// **Its fields are Discord's own parse of the payload** (`transformComponent`
 /// in its client): text inputs, labels around a field, text, string selects,
-/// radio groups, checkbox groups and checkboxes. File uploads and the
-/// member, role and channel pickers need surfaces this client does not have
-/// yet; they are kept as `unsupported` so the form still submits their empty
-/// answer, as Discord's own does for a field left alone.
+/// member, role, mentionable and channel pickers, file uploads, radio groups,
+/// checkbox groups and checkboxes (docs/BETA3.md §2.4). Anything newer stays
+/// `unsupported` so the form still submits its empty answer, as Discord's own
+/// does for a field left alone.
 public struct InteractionModal: Identifiable, Hashable, Sendable {
     /// The interaction's own id, sent back as `data.id`.
     public var id: String
@@ -57,6 +57,10 @@ public struct InteractionModal: Identifiable, Hashable, Sendable {
         case radioGroup(Choice)
         case checkboxGroup(Choice)
         case checkbox(customID: String, isDefault: Bool)
+        /// A member, role, mentionable or channel picker.
+        case entitySelect(EntitySelect)
+        /// Files to send with the form.
+        case fileUpload(FileUpload)
         /// A field this client has no surface for — a file upload, a picker.
         case unsupported(type: Int, customID: String?)
     }
@@ -121,6 +125,92 @@ public struct InteractionModal: Identifiable, Hashable, Sendable {
         case text(String)
         case values([String])
         case flag(Bool)
+        /// Files picked for a file upload, sent ahead of the form.
+        case files([PickedFile])
+    }
+
+    /// A file picked on this Mac for a form's upload.
+    public struct PickedFile: Hashable, Sendable, Identifiable {
+        public var url: URL
+        public var name: String
+        public var size: Int
+
+        public var id: URL { url }
+
+        public init(url: URL, name: String, size: Int) {
+            self.url = url
+            self.name = name
+            self.size = size
+        }
+    }
+
+    /// A member, role, mentionable or channel picker (components 5–8).
+    public struct EntitySelect: Hashable, Sendable {
+        public enum Kind: Int, Hashable, Sendable {
+            case user = 5, role = 6, mentionable = 7, channel = 8
+        }
+
+        public var kind: Kind
+        public var customID: String
+        public var placeholder: String?
+        public var minValues: Int
+        public var maxValues: Int
+        public var isRequired: Bool
+        /// The ids chosen when the form opens.
+        public var defaultIDs: [String]
+        /// The channel kinds a channel picker offers; empty is every kind.
+        public var channelTypes: [Int]
+
+        public var isSingle: Bool { maxValues <= 1 }
+
+        public init(
+            kind: Kind,
+            customID: String,
+            placeholder: String? = nil,
+            minValues: Int = 1,
+            maxValues: Int = 1,
+            isRequired: Bool = true,
+            defaultIDs: [String] = [],
+            channelTypes: [Int] = []
+        ) {
+            self.kind = kind
+            self.customID = customID
+            self.placeholder = placeholder
+            self.minValues = minValues
+            self.maxValues = max(1, maxValues)
+            self.isRequired = isRequired
+            self.defaultIDs = defaultIDs
+            self.channelTypes = channelTypes
+        }
+
+        /// Whether `count` choices may be sent: none only when the field is
+        /// optional (its `min_values` counts once something is chosen, as in
+        /// Discord), otherwise within the bounds.
+        public func accepts(_ count: Int) -> Bool {
+            if count == 0 { return !isRequired }
+            return count >= minValues && count <= maxValues
+        }
+    }
+
+    /// Files to send with the form (component 19). Discord's defaults: one
+    /// file, required.
+    public struct FileUpload: Hashable, Sendable {
+        public var customID: String
+        public var minValues: Int
+        public var maxValues: Int
+        public var isRequired: Bool
+
+        public init(customID: String, minValues: Int = 1, maxValues: Int = 1, isRequired: Bool = true) {
+            self.customID = customID
+            self.minValues = minValues
+            self.maxValues = max(1, maxValues)
+            self.isRequired = isRequired
+        }
+
+        public func accepts(_ count: Int) -> Bool {
+            if count == 0 { return !isRequired }
+            return count >= minValues && count <= maxValues
+        }
     }
 
     /// Every field that takes an answer, flattened out of rows and labels.
@@ -147,6 +237,8 @@ public struct InteractionModal: Identifiable, Hashable, Sendable {
             case .radioGroup(let choice), .checkboxGroup(let choice):
                 answers[choice.customID] = .values(choice.options.filter(\.isDefault).map(\.value))
             case .checkbox(let customID, let isDefault): answers[customID] = .flag(isDefault)
+            case .entitySelect(let select): answers[select.customID] = .values(select.defaultIDs)
+            case .fileUpload(let upload): answers[upload.customID] = .files([])
             default: break
             }
         }
@@ -170,6 +262,10 @@ public struct InteractionModal: Identifiable, Hashable, Sendable {
                 let count = Self.values(answers[choice.customID]).count
                 if count == 0 { return !choice.isRequired && (choice.minValues ?? 0) == 0 }
                 return count >= (choice.minValues ?? 0) && count <= (choice.maxValues ?? choice.options.count)
+            case .entitySelect(let select):
+                return select.accepts(Self.values(answers[select.customID]).count)
+            case .fileUpload(let upload):
+                return upload.accepts(Self.files(answers[upload.customID]).count)
             default:
                 return true
             }
@@ -178,6 +274,11 @@ public struct InteractionModal: Identifiable, Hashable, Sendable {
 
     public static func values(_ answer: Answer?) -> [String] {
         if case .values(let values) = answer { return values }
+        return []
+    }
+
+    public static func files(_ answer: Answer?) -> [PickedFile] {
+        if case .files(let files) = answer { return files }
         return []
     }
 }

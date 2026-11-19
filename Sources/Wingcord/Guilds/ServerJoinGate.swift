@@ -36,13 +36,17 @@ struct ServerJoinGate: Hashable, Sendable {
     /// **Not an index into one list** — the steps are of three kinds and only
     /// the middle one repeats, so an index would need a lookup at every use to
     /// say what it pointed at.
+    ///
+    /// **No welcome step** (docs/BETA3.md §1.6): Discord's onboarding opens on
+    /// its first question, and the welcome screen built a promise from the
+    /// question count — "0 questions about what you're here for" for a server
+    /// whose gate was up before its questions had arrived, or had none.
     enum Step: Hashable, Sendable {
-        case welcome
         case question(Int)
         case rules
     }
 
-    var step: Step = .welcome
+    var step: Step = .question(0)
 
     /// Chosen option ids, across every prompt.
     ///
@@ -97,19 +101,8 @@ struct ServerJoinGatePresentation: Hashable, Sendable {
     var forward: Forward
 
     enum Body: Hashable, Sendable {
-        case welcome(Welcome)
         case question(Question)
         case rules(Rules)
-    }
-
-    struct Welcome: Hashable, Sendable {
-        /// "One question about what you're here for, then this server's rules."
-        ///
-        /// **Built from what this server actually asks**, not a fixed sentence:
-        /// the gate already knows whether there are questions, how many, and
-        /// whether there are rules, and a welcome that promised a step that does
-        /// not exist would be the screen's only lie.
-        var promise: String
     }
 
     struct Question: Hashable, Sendable {

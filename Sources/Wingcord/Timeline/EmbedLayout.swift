@@ -492,6 +492,7 @@ nonisolated enum EmbedLayoutEngine {
                         proxyURL: media.proxyURL ?? media.url,
                         width: decode,
                         height: media.aspectRatio.map { decode / $0 },
+                        sourceSize: media.pixelSize,
                         animated: moves
                     ),
                     isCircle: false,

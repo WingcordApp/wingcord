@@ -19,6 +19,8 @@ struct ComposerContainer: View {
     /// The file panel. `@State` here rather than on the store, because it is
     /// this window's presentation and nothing else in the app can raise it.
     @State private var isChoosingFiles = false
+    /// Bumped when a waiting bar's countdown ends, so the bar is asked again.
+    @State private var blockClock = 0
     /// The Photos library's picker, and what was picked in it — taken out as
     /// files and staged, then cleared.
     @State private var isPickingPhotos = false
@@ -57,6 +59,8 @@ struct ComposerContainer: View {
             showsSendControl: post == nil,
             isInCard: post != nil,
             canSend: model.permissionGate.canSend(in: channelID),
+            block: post == nil ? currentBlock : nil,
+            onBlockAction: { handleBlockAction($0) },
             reply: reply,
             isEditing: box?.editing != nil,
             // **One field, two destinations.** An edit borrows the bar and must
@@ -677,4 +681,39 @@ struct ForumPostComposing {
     var focusKey: AnyHashable?
     /// The field's own send, should anything press it.
     var submit: () -> Void
+}
+
+// MARK: - The bar in the composer's place (docs/BETA3.md §2.3)
+
+extension ComposerContainer {
+
+    /// The bar for this channel now. Reads `blockClock` so a countdown that
+    /// ends asks again.
+    fileprivate var currentBlock: ComposerBlock? {
+        _ = blockClock
+        return model.composerBlock(in: channelID)
+    }
+
+    fileprivate func handleBlockAction(_ action: ComposerBlock.Action) {
+        guard let guildID = model.channelIndex.guildID(of: channelID) else { return }
+        switch action {
+        case .complete:
+            model.openJoinApplication(guildID)
+        case .withdraw:
+            model.askToWithdrawApplication(guildID)
+        case .learnMore:
+            model.reportActionFailure(
+                model.ownJoinRequests[guildID]?.rejectionReason
+                    ?? "The server's moderators turned your application down."
+            )
+        case .resendEmail:
+            Task {
+                if await model.sessionController.resendVerificationEmail() {
+                    model.reportSuccess("We sent you a new verification e-mail.")
+                }
+            }
+        case .expired:
+            blockClock &+= 1
+        }
+    }
 }

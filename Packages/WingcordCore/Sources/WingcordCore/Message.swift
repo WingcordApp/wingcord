@@ -825,6 +825,12 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
     public var size: Int
     public var width: Int?
     public var height: Int?
+    /// The picture's own pixels, when Discord sent them — the shape a resized
+    /// copy is asked for in (`CDN.resizedAttachment`).
+    public var pixelSize: CGSize? {
+        guard let width, let height, width > 0, height > 0 else { return nil }
+        return CGSize(width: width, height: height)
+    }
     /// A spoilered attachment is named `SPOILER_…` by the uploader; Discord
     /// carries no flag for it.
     public var isSpoiler: Bool { filename.hasPrefix("SPOILER_") }

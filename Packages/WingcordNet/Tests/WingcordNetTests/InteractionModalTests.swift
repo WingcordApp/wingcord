@@ -25,7 +25,7 @@ struct InteractionModalTests {
           {"type":3,"custom_id":"severity","options":[
             {"label":"Low","value":"low"},{"label":"High","value":"high","default":true}]}},
         {"type":18,"label":"Contact me","component":{"type":23,"custom_id":"contact","default":false}},
-        {"type":18,"label":"Logs","component":{"type":19,"custom_id":"logs"}}
+        {"type":18,"label":"Logs","component":{"type":19,"custom_id":"logs","required":false}}
       ]}}
     """#
 

@@ -23,7 +23,7 @@ import Testing
 @Suite("Server join gate snapshot")
 struct ServerJoinGateSnapshotTests {
 
-    @Test("Writes pictures of the gate's three steps")
+    @Test("Writes pictures of the gate's two kinds of step")
     func snapshots() throws {
         guard let directory = ProcessInfo.processInfo.environment["WINGCORD_SNAPSHOTS"] else {
             return
@@ -33,7 +33,6 @@ struct ServerJoinGateSnapshotTests {
         )
 
         for (name, body) in [
-            ("welcome", welcome),
             ("question", question),
             ("rules", rules),
         ] {
@@ -62,14 +61,12 @@ struct ServerJoinGateSnapshotTests {
     private func presentation(
         _ body: ServerJoinGatePresentation.Body
     ) -> ServerJoinGatePresentation {
-        let steps = 3
+        let steps = 2
         let number: Int = switch body {
-        case .welcome: 1
-        case .question: 2
-        case .rules: 3
+        case .question: 1
+        case .rules: 2
         }
         let forward: ServerJoinGatePresentation.Forward = switch body {
-        case .welcome: .next
         case .question: .next
         case .rules: .finish
         }
@@ -87,12 +84,6 @@ struct ServerJoinGateSnapshotTests {
             canGoBack: number > 1,
             forward: forward
         )
-    }
-
-    private var welcome: ServerJoinGatePresentation.Body {
-        .welcome(.init(
-            promise: "One question about what you're here for, then this server's rules."
-        ))
     }
 
     private var question: ServerJoinGatePresentation.Body {

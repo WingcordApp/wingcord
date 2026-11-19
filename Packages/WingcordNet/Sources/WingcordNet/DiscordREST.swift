@@ -773,6 +773,22 @@ public actor DiscordREST {
         }
     }
 
+    /// How long a request waited for its turn, and how long Discord took to
+    /// answer it (docs/BETA3.md §1.10).
+    ///
+    /// **Every message-history fetch, and anything the limiter held back** — the
+    /// two halves of "messages load slowly" that the open-to-landed time in
+    /// `LoadMarks` cannot tell apart. The route is public in the same sense as
+    /// the failure lines': the log store's scrubber turns its ids into hashes.
+    static func noteTiming(method: String, route: String, waited: Duration, answered: Duration) {
+        let isHistory = method == "GET" && route.hasSuffix("/messages")
+        guard isHistory || waited > .milliseconds(100) else { return }
+        Log.info(
+            .rest,
+            "\(public: method) \(public: route): waited \(waited) for the limiter, Discord answered in \(answered)"
+        )
+    }
+
     /// - Parameter headers: request-scoped headers on top of the client's own.
     ///   **Only for the analytics headers Discord's own client sends on specific
     ///   routes** — `x-context-properties` and nothing else so far. Anything
@@ -786,7 +802,9 @@ public actor DiscordREST {
         body: Body?,
         headers: [String: String] = [:]
     ) async throws -> Data {
+        let asked = ContinuousClock.now
         await limiter.acquire(route: route)
+        let waited = ContinuousClock.now - asked
 
         var components = URLComponents(
             url: metadata.apiBase.appending(path: path),
@@ -813,6 +831,7 @@ public actor DiscordREST {
         } catch {
             throw Self.transportFailure(error, route: route)
         }
+        Self.noteTiming(method: method, route: route, waited: waited, answered: ContinuousClock.now - asked - waited)
 
         guard let http = response as? HTTPURLResponse else {
             throw Failure.transport("no HTTP response")

@@ -97,7 +97,11 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
         guard kind == .image, isProxied else { return sourceURL }
         let rung = Self.renditionRungs.first { $0 >= pixels } ?? Self.renditionRungs[Self.renditionRungs.count - 1]
         if let pixelWidth, rung >= pixelWidth { return sourceURL }
-        return CDN.resizedAttachment(proxyURL: proxyURL, width: CGFloat(rung), scale: 1) ?? sourceURL
+        let source = pixelWidth.flatMap { width in
+            pixelHeight.map { CGSize(width: width, height: $0) }
+        }
+        return CDN.resizedAttachment(proxyURL: proxyURL, width: CGFloat(rung), sourceSize: source, scale: 1)
+            ?? sourceURL
     }
 
     /// The intrinsic aspect ratio, or nil when Discord sent no dimensions.
@@ -145,9 +149,9 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
         self.sourceURL = sourceURL
         proxyURL = attachment.proxyURL
         self.posterURL = posterURL ?? (kind == .video
-            ? CDN.videoPoster(proxyURL: attachment.proxyURL, width: posterWidth)
+            ? CDN.videoPoster(proxyURL: attachment.proxyURL, width: posterWidth, sourceSize: attachment.pixelSize)
                 ?? URL(string: attachment.proxyURL).flatMap { $0.isFileURL ? $0 : nil }
-            : CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: posterWidth))
+            : CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: posterWidth, sourceSize: attachment.pixelSize))
         self.posterWidth = posterWidth
         filename = attachment.filename
         contentType = attachment.contentType

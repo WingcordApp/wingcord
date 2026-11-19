@@ -57,6 +57,7 @@ final class SidebarHoverRouter {
         if hovered === agent {
             hovered = nil
             if let id = agent.activePostsChannelID { ActivePostsFlyout.shared.pointerLeftRow(id) }
+            if let id = agent.historyChannelID { HistoryPrefetcher.shared.pointerLeftRow(id) }
         }
     }
 
@@ -128,6 +129,8 @@ final class SidebarHoverRouter {
         if let agent, let id = agent.activePostsChannelID {
             ActivePostsFlyout.shared.pointerEnteredRow(id, anchor: agent)
         }
+        if let id = previous?.historyChannelID { HistoryPrefetcher.shared.pointerLeftRow(id) }
+        if let id = agent?.historyChannelID { HistoryPrefetcher.shared.pointerEnteredRow(id) }
     }
 
     // MARK: The scroll
@@ -290,6 +293,9 @@ struct SidebarRowAgent: NSViewRepresentable {
     var onHover: ((Bool) -> Void)?
     /// The channel whose active posts this row offers under the pointer.
     var activePostsChannelID: ChannelID? = nil
+    /// The conversation whose newest page is fetched when the pointer rests
+    /// on the row (`HistoryPrefetcher`).
+    var historyChannelID: ChannelID? = nil
 
     func makeNSView(context: Context) -> SidebarRowAgentView {
         let view = SidebarRowAgentView()
@@ -308,6 +314,7 @@ struct SidebarRowAgent: NSViewRepresentable {
         view.onClick = onClick ?? { _ in }
         view.onHover = onHover
         view.activePostsChannelID = activePostsChannelID
+        view.historyChannelID = historyChannelID
     }
 
     static func dismantleNSView(_ view: SidebarRowAgentView, coordinator: ()) {
@@ -321,6 +328,8 @@ final class SidebarRowAgentView: SecondaryClickCatcher.CatcherView {
     var onHover: ((Bool) -> Void)?
     /// See `SidebarRowAgent.activePostsChannelID`.
     var activePostsChannelID: ChannelID?
+    /// See `SidebarRowAgent.historyChannelID`.
+    var historyChannelID: ChannelID?
     var takesClicks = true
     var takesHover: Bool { onHover != nil }
 
@@ -360,6 +369,8 @@ struct SidebarRowPointer: ViewModifier {
     var openMenu: ((CGRect) -> Void)?
     /// The channel whose active posts the row offers — `ActivePostsFlyout`.
     var activePostsChannelID: ChannelID? = nil
+    /// The conversation fetched ahead under the pointer — `HistoryPrefetcher`.
+    var historyChannelID: ChannelID? = nil
     var hover: (Bool) -> Void
 
     @Environment(\.sidebarHoverRouter) private var router
@@ -369,7 +380,8 @@ struct SidebarRowPointer: ViewModifier {
             content.overlay {
                 SidebarRowAgent(
                     router: router, onClick: openMenu, onHover: hover,
-                    activePostsChannelID: activePostsChannelID
+                    activePostsChannelID: activePostsChannelID,
+                    historyChannelID: historyChannelID
                 )
             }
         } else {

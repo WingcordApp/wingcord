@@ -89,10 +89,24 @@ struct ServerJoinGateTests {
         #expect(model.guildOnboardings[guildID]?.answerablePrompts.count == 2)
     }
 
-    /// Welcome, the one question, the rules.
+    /// The one question, then the rules — Discord's onboarding, with no
+    /// welcome step (docs/BETA3.md §1.6: the welcome built "0 questions about
+    /// what you're here for").
     @Test("The steps are computed from what the server actually has")
     func stepsAreComputed() {
-        #expect(model().joinGateSteps(inGuild: guildID) == [.welcome, .question(0), .rules])
+        #expect(model().joinGateSteps(inGuild: guildID) == [.question(0), .rules])
+    }
+
+    /// **No questions, no gate**: Discord shows onboarding only where a prompt
+    /// is in it. Rules alone go to Discord's rules window instead.
+    @Test("A server whose onboarding asks nothing has no gate, rules or not")
+    func noQuestionsNoGate() {
+        let model = model()
+        model.guildOnboardings[guildID]?.prompts = []
+        #expect(model.joinGateSteps(inGuild: guildID).isEmpty)
+        #expect(!model.isGating(guildID))
+        model.offerJoinGateIfNeeded(guildID)
+        #expect(!model.isJoinGateShown)
     }
 
     /// **A rules gate only exists while the member is pending.** Somebody who
@@ -103,7 +117,7 @@ struct ServerJoinGateTests {
     func agreedMemberHasNoRulesStep() {
         let model = model(isPending: false)
         #expect(!model.joinGateHasRules(inGuild: guildID))
-        #expect(model.joinGateSteps(inGuild: guildID) == [.welcome, .question(0)])
+        #expect(model.joinGateSteps(inGuild: guildID) == [.question(0)])
     }
 
     /// A payload with no version has nothing to record an agreement against, so
@@ -248,18 +262,14 @@ struct ServerJoinGateTests {
     func stepsAdvanceAndRetreat() {
         let model = model()
         model.offerJoinGateIfNeeded(guildID)
-        #expect(model.joinGate?.step == .welcome)
-        model.advanceJoinGate()
         #expect(model.joinGate?.step == .question(0))
         model.advanceJoinGate()
         #expect(model.joinGate?.step == .rules)
         model.retreatJoinGate()
         #expect(model.joinGate?.step == .question(0))
-        model.retreatJoinGate()
-        #expect(model.joinGate?.step == .welcome)
         // Already at the start.
         model.retreatJoinGate()
-        #expect(model.joinGate?.step == .welcome)
+        #expect(model.joinGate?.step == .question(0))
     }
 
     // MARK: What the control says
@@ -270,7 +280,6 @@ struct ServerJoinGateTests {
     func forwardControlReflectsTheAnswer() throws {
         let model = model()
         model.offerJoinGateIfNeeded(guildID)
-        model.advanceJoinGate()
 
         #expect(model.joinGatePresentation?.forward == .skip)
         model.toggleJoinGateOption(1_108_815_692_299_928_788, inPrompt: 1_108_815_692_297_416_788)
@@ -285,7 +294,6 @@ struct ServerJoinGateTests {
         let model = model()
         model.guildOnboardings[guildID]?.prompts[0].isRequired = true
         model.offerJoinGateIfNeeded(guildID)
-        model.advanceJoinGate()
 
         #expect(model.joinGatePresentation?.forward == .blocked)
         #expect(model.joinGatePresentation?.forward.isEnabled == false)
@@ -302,7 +310,6 @@ struct ServerJoinGateTests {
         let model = model()
         model.offerJoinGateIfNeeded(guildID)
         model.advanceJoinGate()
-        model.advanceJoinGate()
         #expect(model.joinGate?.step == .rules)
         #expect(model.joinGatePresentation?.forward == .finish)
     }
@@ -315,22 +322,12 @@ struct ServerJoinGateTests {
         model.roleMemberCounts[guildID] = [:]
         model.offerJoinGateIfNeeded(guildID)
 
-        let welcome = try #require(model.joinGatePresentation)
-        #expect(welcome.serverName == "Forza Official")
-        #expect(welcome.stepNumber == 1)
-        #expect(welcome.stepCount == 3)
-        #expect(!welcome.canGoBack)
-        guard case .welcome(let body) = welcome.body else {
-            Issue.record("expected the welcome step"); return
-        }
-        // Built from what this server asks, so it cannot promise a step that
-        // does not exist.
-        #expect(body.promise == "One question about what you're here for, then this server's rules.")
-
-        model.advanceJoinGate()
+        // The first question opens the gate, under the server's name.
         let question = try #require(model.joinGatePresentation)
-        #expect(question.stepNumber == 2)
-        #expect(question.canGoBack)
+        #expect(question.serverName == "Forza Official")
+        #expect(question.stepNumber == 1)
+        #expect(question.stepCount == 2)
+        #expect(!question.canGoBack)
         guard case .question(let asked) = question.body else {
             Issue.record("expected a question step"); return
         }
@@ -357,7 +354,6 @@ struct ServerJoinGateTests {
         model.guildOnboardings[guildID]?.prompts[0].options[0].roleIDs = roles
         model.roleMemberCounts[guildID] = [roles[0]: 11_285, roles[1]: 8_940]
         model.offerJoinGateIfNeeded(guildID)
-        model.advanceJoinGate()
 
         guard case .question(let asked)? = model.joinGatePresentation?.body else {
             Issue.record("expected a question step"); return

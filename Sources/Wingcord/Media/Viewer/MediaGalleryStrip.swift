@@ -88,7 +88,9 @@ private struct MediaStripThumbnail: View {
             }
         } else {
             RemoteImage(
-                url: CDN.resizedAttachment(proxyURL: item.proxyURL, width: MediaGalleryStrip.side),
+                url: CDN.resizedAttachment(
+                    proxyURL: item.proxyURL, width: MediaGalleryStrip.side, height: MediaGalleryStrip.side
+                ),
                 side: MediaGalleryStrip.side,
                 bucket: .thumbnail
             ) {

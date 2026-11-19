@@ -49,7 +49,7 @@ struct SidebarChannelRow: View {
     var body: some View {
             VStack(alignment: .leading, spacing: Spacing.tight) {
                 HStack(spacing: Spacing.base) {
-                    SidebarRowLeading(channel: channel)
+                    SidebarRowLeading(channel: channel, isHovering: isHovering)
 
                     identity
 
@@ -155,7 +155,10 @@ struct SidebarChannelRow: View {
                 openMenu: openMenu,
                 // A forum's posts, or a channel's threads, under the pointer —
                 // Discord's More Active Posts (`ActivePostsFlyout`).
-                activePostsChannelID: channel.offersActivePosts ? channel.id : nil
+                activePostsChannelID: channel.offersActivePosts ? channel.id : nil,
+                // Text conversations only: a voice room's row joins a call, and
+                // a forum or a category has no page to fetch ahead.
+                historyChannelID: channel.kind.isConversation && channel.kind != .voice ? channel.id : nil
             ) { hovering in
                 guard isHovering != hovering else { return }
                 isHovering = hovering
@@ -575,14 +578,23 @@ private struct SidebarNameplate: View {
 /// guild is swapped for the DM home.
 private struct SidebarRowLeading: View {
     var channel: SidebarChannel
+    /// The row's pointer, from its one tracker (`SidebarHoverRouter`).
+    var isHovering = false
 
     var body: some View {
         switch channel.kind {
         case .directMessage, .groupDirectMessage:
+            // **The face and its decoration move under the pointer**, Discord's
+            // DM list's rule: an animated avatar played nowhere here and the
+            // decoration was never passed (docs/BETA3.md §1.2). At rest both
+            // are stills, so a list of fifty conversations runs no clock.
             AvatarView(
                 url: channel.avatarURL,
                 monogram: channel.monogram ?? "?",
-                side: Metrics.avatarDirectMessage
+                side: Metrics.avatarDirectMessage,
+                decorationURL: channel.avatarDecorationURL,
+                animates: isHovering,
+                decorationAnimates: isHovering
             )
             .overlay(alignment: .bottomTrailing) {
                 // **The dots take the dot's place, in its colour** — Discord
