@@ -910,8 +910,7 @@ struct MiniProfileCard: View {
     /// behind them, and a title that looks pressable and opens nothing is the
     /// inert control `INVARIANTS.md` §5.5 forbids.
     private func openGame(for activity: Activity) -> (() -> Void)? {
-        guard activity.kind == .playing else { return nil }
-        return model.gameProfileOpener(for: activity.applicationID)
+        model.gameProfileOpener(for: activity)
     }
 
     /// The accounts they have linked.

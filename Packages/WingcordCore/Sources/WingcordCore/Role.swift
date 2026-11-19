@@ -181,6 +181,31 @@ public struct Member: Hashable, Sendable, Codable {
     /// What they wear **in this server only** — a decoration, a nameplate, a
     /// name style set on their per-server profile. Nil for nearly everyone.
     public var cosmetics: MemberCosmetics?
+    /// Whether the payload said if this member is pending at all.
+    ///
+    /// **Discord states `pending` only in its `GUILD_` events**; a profile's
+    /// member, a voice state's or a member list row may leave it out, and a
+    /// record that replaced the last one on that basis read as "not pending" —
+    /// which is how a member who hadn't agreed to a server's rules lost the
+    /// Complete bar (2026-11-19). False keeps what was known before
+    /// (`merged(over:)`). Not coded: a record read back from a cache is as
+    /// good as its source was.
+    public var statesPending = true
+
+    private enum CodingKeys: String, CodingKey {
+        case userID, nickname, avatarHash, roleIDs, joinedAt, premiumSince, communicationDisabledUntil
+        case isPending, flags, unusualDMActivityUntil, cosmetics
+    }
+
+    /// This record over `older`: everything from this one, except whether the
+    /// member is pending where this one doesn't say.
+    public func merged(over older: Member?) -> Member {
+        guard !statesPending, let older else { return self }
+        var merged = self
+        merged.isPending = older.isPending
+        merged.statesPending = older.statesPending
+        return merged
+    }
 
     public init(
         userID: UserID,

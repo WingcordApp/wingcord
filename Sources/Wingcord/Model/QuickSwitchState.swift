@@ -95,6 +95,10 @@ nonisolated struct QuickSwitchRow: Hashable, Sendable, Identifiable {
     /// Whether the picture is a face. A person is a circle and everything else
     /// is a squircle, which is the same split every other list in this app makes.
     var isPerson = false
+    /// A channel's server, as a picture: its icon, or its initials. The row
+    /// leads with it, so two `#general`s are told apart at a glance.
+    var serverIconURL: URL?
+    var serverMonogram: String?
 
     var id: QuickSwitchTarget { target }
 }

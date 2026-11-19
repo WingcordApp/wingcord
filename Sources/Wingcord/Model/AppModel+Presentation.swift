@@ -44,6 +44,7 @@ struct SidebarMemoKey: Hashable, Sendable {
     /// The Boost progress bar — whether there is one, and its counts. Read from
     /// the experiments as well as the server, which no revision here covers.
     var boostGoal: SidebarBoostGoal? = nil
+    var guideProgress: SidebarGuideProgress? = nil
     var structureRevision: UInt64
     /// The DM list's order IS recency, so it has to key on the revision that
     /// moves when a `lastMessageID` does — the one the guild tree deliberately
@@ -197,6 +198,11 @@ extension AppModel {
         let key = SidebarMemoKey(
             eventsRow: guildID.flatMap(sidebarEventsRow(for:)),
             boostGoal: guildID.flatMap(sidebarBoostGoal(for:)),
+            guideProgress: guildID.flatMap { guildID in
+                guideProgressSummary(in: guildID).map {
+                    SidebarGuideProgress(guildID: guildID, completed: $0.completed, total: $0.total)
+                }
+            },
             structureRevision: channelIndex.structureRevision,
             valueRevision: channelIndex.valueRevision(inGuild: guildID),
             sidebarRevision: sidebarRevision,
@@ -233,7 +239,9 @@ extension AppModel {
             // A guild that is selected but has not arrived yet is a real state
             // during bootstrap. It gets an empty list, not the DM list.
             value = guildTable[guildID].map {
-                buildGuildSidebar(guild: $0, eventsRow: key.eventsRow, boostGoal: key.boostGoal)
+                buildGuildSidebar(
+                    guild: $0, eventsRow: key.eventsRow, boostGoal: key.boostGoal, guideProgress: key.guideProgress
+                )
             } ?? .empty
             sidebarCache = (key, value)
         } else {
@@ -862,8 +870,7 @@ extension AppModel {
             if VoiceNoteWords.isVoiceNote(message) {
                 text = VoiceNoteWords.preview
             } else if let attachment = message.attachments.first {
-                let type = attachment.contentType ?? ""
-                text = type.hasPrefix("image/") ? "Picture" : type.hasPrefix("video/") ? "Video" : attachment.filename
+                text = attachment.isImage ? "Picture" : attachment.isVideo ? "Video" : attachment.filename
             } else if !message.stickers.isEmpty {
                 text = "Sticker"
             } else if let poll = message.poll {
@@ -925,7 +932,8 @@ extension AppModel {
     private func buildGuildSidebar(
         guild: Guild,
         eventsRow: SidebarEventsRow?,
-        boostGoal: SidebarBoostGoal?
+        boostGoal: SidebarBoostGoal?,
+        guideProgress: SidebarGuideProgress? = nil
     ) -> SidebarPresentation {
         let channelIDs = channelIndex.channelIDs(inGuild: guild.id)
         let filtersByFollow = hidesUnfollowedChannels(inGuild: guild.id)
@@ -934,7 +942,13 @@ extension AppModel {
 
         // Discord's order: the Boost bar, the guide, then the events, then the
         // pages after.
-        if let boostGoal { rows.append(.boostGoal(boostGoal)) }
+        // A new member's Get Started stands where the Boost bar would, as in
+        // Discord (`useGuildActionRows`).
+        if let guideProgress {
+            rows.append(.guideProgress(guideProgress))
+        } else if let boostGoal {
+            rows.append(.boostGoal(boostGoal))
+        }
         let surfaces = guildSurfaceRows(for: guild.id)
         for surface in surfaces where surface == .serverGuide {
             rows.append(.guildAction(surface))
@@ -1269,9 +1283,11 @@ extension AppModel {
         isMessageRequestsOpen = false
         isFriendsOpen = false
         previewedChannelID = nil
-        // Return to where the reader was, not to the top of the list.
+        // Return to where the reader was, not to the top of the list — unless
+        // that channel can't be seen any more (a server left and joined again,
+        // a role taken away), where Discord lands on the first one that can.
         if let guildID {
-            selectedChannelID = lastChannelByGuild[guildID]
+            selectedChannelID = lastChannelByGuild[guildID].flatMap { permissionGate.canView($0) ? $0 : nil }
                 ?? firstReadableChannel(inGuild: guildID)
         } else {
             selectedChannelID = channelIndex.privateChannelIDs().first
@@ -1309,7 +1325,12 @@ extension AppModel {
         guard selectedChannelID != channelID else { return }
         selectedChannelID = channelID
         let guildID = channelIndex.guildID(of: channelID)
-        if let guildID { lastChannelByGuild[guildID] = channelID }
+        if let guildID {
+            lastChannelByGuild[guildID] = channelID
+            AppSettings.shared.rememberChannel(
+                channelID.rawValue, inGuild: guildID.rawValue, account: currentUserID?.description
+            )
+        }
         AppSettings.shared.rememberConversation(
             guildID: guildID?.rawValue, channelID: channelID.rawValue, account: currentUserID?.description
         )
@@ -1321,15 +1342,52 @@ extension AppModel {
         searchScopeDidChange()
     }
 
-    private func firstReadableChannel(inGuild guildID: GuildID) -> ChannelID? {
+    /// **Never sits on a channel the reader can't see**, as Discord doesn't:
+    /// when the open one stops being visible — the server left and joined
+    /// again, a role taken away, the reader's own record arriving — the first
+    /// channel they can see takes its place. He rejoined a server and was left
+    /// on its old channel, now named `___hidden___`, under "Messages did not
+    /// load" (his image 242, 2026-11-19).
+    ///
+    /// Nothing moves while nothing in the server can be seen yet — the record
+    /// that would show one is usually a moment away, and this runs again when
+    /// it lands.
+    func moveOffHiddenChannel(inGuild guildID: GuildID) {
+        guard selectedGuildID == guildID,
+              guildPreview?.guildID != guildID,
+              let channelID = selectedChannelID,
+              channelIndex.guildID(of: channelID) == guildID,
+              !permissionGate.canView(channelID),
+              let fallback = firstReadableChannel(inGuild: guildID),
+              fallback != channelID
+        else { return }
+        selectChannel(fallback)
+    }
+
+    /// Where a server opens when it has no remembered channel: **Discord's
+    /// default channel** — the first channel in the list's order the reader
+    /// can see among the ones that open a page (text, announcements, forums,
+    /// media), never a voice channel (`getDefaultChannel`, its bundle: voice
+    /// only when asked for, and nothing asks). Voice counted as a conversation
+    /// here, so a server with a voice room at the top opened into it.
+    func firstReadableChannel(inGuild guildID: GuildID) -> ChannelID? {
         let filtersByFollow = hidesUnfollowedChannels(inGuild: guildID)
-        return channelIndex.channelIDs(inGuild: guildID).first {
-            guard let channel = channelIndex[$0], channel.kind.isConversation,
+        let ordered = sidebarOrderedChannelIDs(inGuild: guildID)
+        return ordered.first {
+            guard let channel = channelIndex[$0], Self.isLandingKind(channel.kind),
                   permissionGate.canView($0)
             else { return false }
             // Landing on a channel the reader took out of their own list is the
             // list disagreeing with itself on the first frame after a click.
             return isChannelInList(channel, filtered: filtersByFollow)
+        }
+    }
+
+    /// Discord's selectable channels — the ones a server can open on.
+    nonisolated static func isLandingKind(_ kind: ChannelKind) -> Bool {
+        switch kind {
+        case .text, .announcement, .forum, .media: true
+        default: false
         }
     }
 
@@ -1404,16 +1462,17 @@ struct GuildBadgeWalk {
     }
 
     func badge(for guildID: GuildID) -> (mentions: Int, unread: Bool, muted: Bool) {
+        let gate = model.permissionGate
         let filtersByFollow = AppModel.hidesUnfollowedChannels(
             inGuild: guildID,
             settings: guildUserSettings,
             followed: followedChannelIDs,
-            index: channelIndex
+            index: channelIndex,
+            canView: { gate.canViewDuringWalk($0) }
         )
         // Read only where it can matter, so a rail with no follow filter on it
         // is not re-evaluated by every click in the channel list.
         let selectedChannelID = filtersByFollow ? model.selectedChannelID : nil
-        let gate = model.permissionGate
         var mentions = 0
         var unread = false
         for channelID in channelIndex.channelIDs(inGuild: guildID) {

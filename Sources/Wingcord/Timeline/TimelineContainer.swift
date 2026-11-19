@@ -54,6 +54,9 @@ struct TimelineContainer: View {
             // re-evaluates.
             activityInviteStatuses: model.activityInviteStatuses(in: channelID),
             uploadProgress: model.uploadProgress(in: channelID),
+            // Read here so the container observes the downloads: the transcript
+            // is a drawn canvas and is only told what SwiftUI re-evaluates.
+            fileTransfers: model.fileTransfers.states,
             topInset: chromeBottom,
             // The rows stop short of the composer by a little air — less
             // where the typing or slowmode row already holds some; the chrome

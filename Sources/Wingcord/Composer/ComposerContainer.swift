@@ -37,6 +37,18 @@ struct ComposerContainer: View {
         // so without this the composer would keep its old enabled state until
         // something unrelated invalidated the view.
         let _ = model.roleRevision
+        VStack(spacing: Spacing.snug) {
+            // Get Started's step for this channel, above the box
+            // (docs/QUEUE-NOV19.md S4).
+            GuideStepBanner(channelID: channelID)
+            composer(model: model, box: box)
+        }
+        .modifier(FollowChannelPresenter())
+        .modifier(GuideFinishedPresenter())
+    }
+
+    @ViewBuilder
+    private func composer(model: AppModel, box: MessageBox?) -> some View {
         Composer(
             channelName: model.channelIndex[channelID].map(model.displayName(of:)) ?? "",
             channelSigil: model.channelIndex[channelID]?.kind.isPrivate == true ? "@" : "#",
@@ -712,6 +724,8 @@ extension ComposerContainer {
                     model.reportSuccess("We sent you a new verification e-mail.")
                 }
             }
+        case .follow:
+            model.followRequest = FollowChannelRequest(id: channelID)
         case .expired:
             blockClock &+= 1
         }

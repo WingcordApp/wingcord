@@ -19,6 +19,9 @@ import WingcordNet
 /// is bumped once.
 @MainActor
 final class SessionController {
+    /// The last standing line logged per server (`logReaderStanding`).
+    private var readerStandings: [GuildID: String] = [:]
+
     static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Session")
     /// GIFs whose favourite write is out.
     ///
@@ -205,6 +208,8 @@ final class SessionController {
     /// a tracked game, and that silence is an answer worth remembering for the
     /// session. Read from `SessionController+Board`.
     var gameFetches: Set<ApplicationID> = []
+    /// Activity names already looked up as games (`resolveGameByName`).
+    var gameNameSearches: Set<String> = []
     /// Which people this session has already asked the gateway about, so a
     /// channel of two hundred messages from six people asks six times and not
     /// six hundred. See `resolveMessageMembers`.
@@ -308,6 +313,8 @@ final class SessionController {
     /// moves. Its page-two fetch is a *second* task: a scroll to the bottom must
     /// not cancel the request that is filling the grid it is scrolling.
     var discoveryTask: Task<Void, Never>?
+    /// The Void's next batch, waiting out the five seconds after a throw.
+    var orbVoidFlush: Task<Void, Never>?
     var discoveryPageTask: Task<Void, Never>?
     /// Both category lists, once per session — neither has changed in years.
     var hasLoadedDiscoveryCategories = false
@@ -1366,6 +1373,12 @@ final class SessionController {
         model.mutedGuildIDs = snapshot.mutedGuildIDs
         model.notificationPreferences = snapshot.notificationPreferences
         model.guildUserSettings = snapshot.guildUserSettings
+        // Each server's channel from last time, where this session has none.
+        for (guildRaw, channelRaw) in AppSettings.shared.lastChannels(forAccount: snapshot.currentUser.id.description) {
+            let guildID = GuildID(rawValue: guildRaw)
+            guard model.lastChannelByGuild[guildID] == nil else { continue }
+            model.lastChannelByGuild[guildID] = ChannelID(rawValue: channelRaw)
+        }
 
         // Every role the reader holds, plus their own id, as one flat set. A
         // mention test is then one lookup rather than a scan over roles per
@@ -1472,7 +1485,7 @@ final class SessionController {
             for channel in snapshot.privateChannels { model.channelIndex.upsert(channel) }
         }
         for (guildID, table) in snapshot.membersByGuild {
-            model.members[guildID, default: [:]].merge(table) { _, new in new }
+            model.members[guildID, default: [:]].merge(table) { old, new in new.merged(over: old) }
         }
         // **Anything already in the table wins**, and the rule is that simple
         // because of when this lands: READY assigns a fresh presence table a
@@ -1530,13 +1543,11 @@ final class SessionController {
             case .folder(let folder): folder.guilds
             }
             for candidate in candidates {
-                let channelID = model.channelIndex
-                    .channelIDs(inGuild: candidate.id)
-                    .first {
-                        (model.channelIndex[$0]?.kind.isConversation ?? false)
-                            && model.permissionGate.canView($0)
-                    }
-                guard let channelID else { continue }
+                // Discord's default channel: a text channel, never a voice room.
+                guard let channelID = model.lastChannelByGuild[candidate.id].flatMap({
+                    model.canOpen($0) ? $0 : nil
+                }) ?? model.firstReadableChannel(inGuild: candidate.id)
+                else { continue }
                 model.selectedGuildID = candidate.id
                 model.selectChannel(channelID)
                 return
@@ -1578,7 +1589,7 @@ final class SessionController {
 
         case .activityInstanceChanged(let instance, let members):
             if let guildID = instance.guildID, !members.isEmpty {
-                model.members[guildID, default: [:]].merge(members) { _, new in new }
+                model.members[guildID, default: [:]].merge(members) { old, new in new.merged(over: old) }
                 model.memberRevision &+= 1
             }
             model.activityInstances.apply(instance)
@@ -1605,6 +1616,9 @@ final class SessionController {
             model.clearTyping(author.id, in: message.channelID)
             model.channelIndex.patchLastMessage(message.id, in: message.channelID)
             model.noteMessageChanged(in: message.channelID)
+            model.noteThreadMessageCreated(message)
+            // A message of the reader's own does a "write" step of Get Started.
+            if message.authorID == model.currentUserID { noteGuideStep(.post, in: message.channelID) }
             bumpUnread(for: message)
             model.countForumPostMessage(message)
             // **After the unread, and it is not the same question.** The unread
@@ -1636,11 +1650,13 @@ final class SessionController {
             }
             model.noteMessageChanged(in: message.channelID)
             model.applyOpenerUpdated(message)
+            model.noteThreadMessageUpdated(message)
 
         case .messageDeleted(let messageID, let channelID):
             model.mutateBox(channelID) { $0.remove(messageID) }
             model.noteMessageChanged(in: channelID)
             model.applyOpenerDeleted(messageID, in: channelID)
+            model.noteThreadMessageDeleted(messageID, in: channelID)
 
         case .voiceStateChanged(let state, let member, let user):
             voice.apply(state: state, member: member, user: user)
@@ -1777,7 +1793,7 @@ final class SessionController {
             // change (Alex, 2026-11-18). Somebody who left goes by
             // `GUILD_MEMBER_REMOVE`, not by being missing here.
             if !members.isEmpty {
-                model.members[guild.id, default: [:]].merge(members) { _, new in new }
+                model.members[guild.id, default: [:]].merge(members) { old, new in new.merged(over: old) }
                 if let key = displayedMemberListKey, key.guildID == guild.id { repairMemberList(key) }
             }
             model.guildEmojis[guild.id] = emojis.isEmpty ? nil : emojis
@@ -1795,6 +1811,7 @@ final class SessionController {
             model.expressionRevision &+= 1
             // A server just joined turns its invite cards' Join into Go to Server.
             model.inviteSettlementChanged()
+            readerAccessChanged(inGuild: guild.id, moment: "on join")
 
         case .guildExpressionsUpdated(let guildID, let emojis, let stickers):
             // Each event replaces one half. A nil side did not change, and
@@ -1875,10 +1892,26 @@ final class SessionController {
             model.applyThreadRemoval(threadID)
             model.drafts.forget(threadID)
 
-        case .threadListSynced(let guildID, let channelIDs, let threads, let memberships):
+        case .threadListSynced(let guildID, let channelIDs, let threads, let memberships, let newest, let authors):
             model.applyThreadListSync(
                 threads, parentIDs: channelIDs, memberships: memberships, guildID: guildID
             )
+            // Each thread's newest message and count, for its card in the
+            // parent channel (docs/QUEUE-NOV19.md T2) — with the people they
+            // name, so a card draws a face and a name rather than "Unknown".
+            var learned = false
+            for author in authors {
+                let merged = author.merged(over: model.users[author.id])
+                guard model.users[author.id] != merged else { continue }
+                model.users[author.id] = merged
+                learned = true
+            }
+            if learned { model.identityRevision &+= 1 }
+            model.receiveThreadSync(threads: threads, newestMessages: newest)
+            for (threadID, messages) in Dictionary(grouping: newest, by: \.channelID) {
+                guard let parentID = model.channelIndex[threadID]?.parentID else { continue }
+                resolveMessageMembers(in: messages, channelID: parentID)
+            }
 
         case .threadMembershipChanged(let membership):
             model.applyThreadMembership(membership)
@@ -1913,7 +1946,13 @@ final class SessionController {
             armTypingExpiry(at: expiry)
 
         case .membersChunk(let guildID, let members, let users, let presences):
+            let hadFinishedGuide = model.currentUserID
+                .flatMap { model.members[guildID]?[$0] }?.flags.contains(.completedHomeActions) ?? true
             ingestMembers(members, users: users, presences: presences, inGuild: guildID)
+            if let reader = model.currentUserID, members[reader] != nil {
+                readerAccessChanged(inGuild: guildID, moment: "own record changed")
+                noteGuideFinished(in: guildID, hadFinished: hadFinishedGuide)
+            }
             // The records a list row waited on can arrive here rather than with
             // the list's own page (BETA3 §1.9).
             if let channelID = model.selectedChannelID,
@@ -2418,6 +2457,13 @@ final class SessionController {
             // Not an error state: a channel the reader can see but not read the
             // history of is a real Discord configuration. It has to LOOK like
             // that rather than like a page that never arrives.
+            // A channel that can't be seen at all is left for the first one that
+            // can, as Discord does — see `moveOffHiddenChannel`.
+            if !permissions.contains(.viewChannel), let guildID = model.channelIndex.guildID(of: channelID) {
+                let before = model.selectedChannelID
+                model.moveOffHiddenChannel(inGuild: guildID)
+                if model.selectedChannelID != before { return }
+            }
             model.mutateBox(channelID) { box in
                 box.hasMoreHistory = false
                 box.isLoadingHistory = false
@@ -2429,6 +2475,8 @@ final class SessionController {
             subscribeToMemberList(for: channelID)
             return
         }
+        // Opening a step's channel does a "read" step of Get Started.
+        noteGuideStep(.visit, in: channelID)
         let box = model.messages(in: channelID)
         guard box?.messages.isEmpty ?? true, box?.isLoadingHistory != true else {
             Self.trace("open \(channelID) already loaded")
@@ -2619,17 +2667,32 @@ final class SessionController {
         guard let target = model.memberListTarget(for: channelID), let socket else { return }
         let kept = memberListSubscription.flatMap { $0.key == target.key ? $0.pages : nil }
             ?? memberListChannels[target.key.guildID]?.first { $0.channelID == target.channelID }?.pages
+        // Never an empty page list: Discord closes 4002 on an empty range list
+        // and the whole session goes with it (BETA3 §7, R2).
         let subscription = MemberListSubscription(
             key: target.key,
             channelID: target.channelID,
-            pages: pages ?? kept ?? [0...MemberList.pageSize - 1]
+            pages: pages.flatMap { $0.isEmpty ? nil : $0 } ?? kept.flatMap { $0.isEmpty ? nil : $0 }
+                ?? [0...MemberList.pageSize - 1]
         )
-        guard force || subscription != memberListSubscription else {
+        // **"In force" is not "filled".** Discord stops keeping a list whole
+        // once the reader leaves its channel, so a list taken back as kept could
+        // be holes under its headings, placeholders until the reader scrolled
+        // and a new range made Discord send it again (his log, 2026-11-19:
+        // nothing asked for six seconds after the switch). A kept list with an
+        // empty row in its pages, or none at all, is asked for afresh.
+        let held = model.memberLists[target.key]
+        let isStale = held.map { $0.rowCount == 0 || Self.holes(in: $0, pages: subscription.pages) > 0 } ?? true
+        guard force || subscription != memberListSubscription || isStale else {
             // Nothing to ask: the list on screen is the one already in force.
             LoadMarks.shared.note("list kept", in: channelID)
             if model.isMemberListHeadFilled(target.key) { LoadMarks.shared.mark(.listFull, in: channelID) }
             return
         }
+        // The same pages again would be no change to Discord, and it would
+        // send nothing: moving to the page past the last first makes the
+        // pages new, so they come back whole (as the hole resync does).
+        let refreshesInPlace = !force && subscription == memberListSubscription && isStale
         memberListSubscription = subscription
         var recent = memberListChannels[subscription.key.guildID] ?? []
         recent.removeAll { $0.channelID == subscription.channelID }
@@ -2637,8 +2700,18 @@ final class SessionController {
         if recent.count > Self.keptMemberLists { recent.removeLast(recent.count - Self.keptMemberLists) }
         memberListChannels[subscription.key.guildID] = recent
         var channels: [ChannelID: [[Int]]] = [:]
-        for kept in recent { channels[kept.channelID] = kept.pages.map { [$0.lowerBound, $0.upperBound] } }
+        for kept in recent where !kept.pages.isEmpty {
+            channels[kept.channelID] = kept.pages.map { [$0.lowerBound, $0.upperBound] }
+        }
         Task {
+            if refreshesInPlace {
+                let beyond = (subscription.pages.map(\.upperBound).max() ?? 99) + 1
+                await socket.subscribeToMemberList(
+                    guildID: subscription.key.guildID,
+                    channelID: subscription.channelID,
+                    ranges: [[beyond, beyond + 99]]
+                )
+            }
             await socket.subscribeToMemberLists(guildID: subscription.key.guildID, channels: channels)
             // After the socket's own queue, which is part of the wait.
             LoadMarks.shared.mark(.listAsked, in: channelID)
@@ -2699,8 +2772,14 @@ final class SessionController {
             if let last = listResyncs[key], Date.now.timeIntervalSince(last) < 60 { return }
             listResyncs[key] = .now
             Self.trace("member list \(key.listID): \(holes) rows missing in its pages, asking for them again")
+            // **Never an empty range list**: Discord can't decode one, closes
+            // 4002 and throws the session away — every list back to
+            // placeholders under "Reconnecting…" (3 of 3 resyncs in his logs,
+            // BETA3 §7, R2). Moving the subscription to the page past the last
+            // and back makes the pages new again, so Discord syncs them afresh.
+            let beyond = (subscription.pages.map(\.upperBound).max() ?? 99) + 1
             await socket.subscribeToMemberList(
-                guildID: key.guildID, channelID: subscription.channelID, ranges: []
+                guildID: key.guildID, channelID: subscription.channelID, ranges: [[beyond, beyond + 99]]
             )
             await socket.subscribeToMemberList(
                 guildID: key.guildID,
@@ -2746,7 +2825,11 @@ final class SessionController {
         // thread on a real account, and the reason everything keyed on the
         // roles was rebuilt for people who have nothing to do with the reader.
         let known = model.members[guildID]
-        let changedMembers = members.filter { known?[$0.key] != $0.value }
+        // A record that doesn't say whether its member is pending keeps what
+        // was known — Discord states it only in its `GUILD_` events.
+        let changedMembers = members
+            .reduce(into: [UserID: Member]()) { $0[$1.key] = $1.value.merged(over: known?[$1.key]) }
+            .filter { known?[$0.key] != $0.value }
         var changedUsers: [UserID: User] = [:]
         for (userID, user) in users {
             let existing = model.users[userID]
@@ -3929,6 +4012,34 @@ extension SessionController {
         loadHistory(in: channelID, .older(before: nil))
     }
 
+    /// The reader's access in a server may have changed — a join, their own
+    /// record arriving or changing: the open channel is checked (Discord never
+    /// leaves the reader on one they can't see), and a server that now shows
+    /// nothing says why in the log.
+    func readerAccessChanged(inGuild guildID: GuildID, moment: StaticString) {
+        model.moveOffHiddenChannel(inGuild: guildID)
+        model.logServerVisibilityIfEmpty(guildID, moment: moment)
+        logReaderStanding(inGuild: guildID, moment: moment)
+    }
+
+    /// One line, when it changes, of what decides the bars in a server with
+    /// rules: whether the reader is pending (and whether a payload said so),
+    /// their join request, their roles and joined-at.
+    private func logReaderStanding(inGuild guildID: GuildID, moment: StaticString) {
+        guard let guild = model.guilds[guildID],
+              guild.features.contains(Self.verificationFeature) || guild.verificationLevel != nil,
+              let reader = model.currentUserID
+        else { return }
+        let me = model.members[guildID]?[reader]
+        let request = model.ownJoinRequests[guildID].map { "\($0.status)" } ?? "none"
+        let line = "pending \(me?.isPending ?? false) (stated \(me?.statesPending ?? false)), record \(me != nil), "
+            + "roles \(me?.roleIDs.count ?? 0), request \(request), gate \(guild.features.contains(Self.verificationFeature)), "
+            + "level \(guild.verificationLevel.map { "\($0)" } ?? "-"), bar \(model.isAwaitingVerification(inGuild: guildID))"
+        guard readerStandings[guildID] != line else { return }
+        readerStandings[guildID] = line
+        Log.info(.app, "server \(guildID) (\(public: moment)): reader \(public: line)")
+    }
+
     /// Asks for the reader's own record in a server when it is missing.
     ///
     /// **Every permission in a server is resolved from it** — the roles it
@@ -3978,10 +4089,40 @@ extension SessionController {
             guard let self else { return }
             defer { model.loadingGuildSurfaces.remove(fetch) }
             do {
-                model.serverGuides[guildID] = try await rest.serverGuide(of: guildID)
+                let guide = try await rest.serverGuide(of: guildID)
+                model.serverGuides[guildID] = guide
+                loadGuideFirstPictures(guide)
+                loadGuideProgress(guildID)
             } catch {
                 model.serverGuides[guildID] = ServerGuide(guildID: guildID, isEnabled: false)
                 Self.trace("server guide \(guildID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// For each resource with no picture of its own, the first picture in its
+    /// channel's first messages — Discord asks the same five
+    /// (`fetchMessages({after: channelId, limit: 5})`).
+    func loadGuideFirstPictures(_ guide: ServerGuide) {
+        for resource in guide.resources
+        where resource.iconHash == nil && resource.emojiID == nil && resource.emojiName == nil {
+            let channelID = resource.channelID
+            guard model.permissionGate.canView(channelID),
+                  model.guideFirstPicturesAsked.insert(channelID).inserted
+            else { continue }
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let page = try await rest.messages(
+                        in: channelID, after: MessageID(rawValue: channelID.rawValue), limit: 5
+                    )
+                    let oldest = page.messages.min { $0.id.rawValue < $1.id.rawValue }
+                    if let url = oldest.flatMap(AppModel.firstPicture(in:)) {
+                        model.guideFirstPictures[channelID] = url
+                    }
+                } catch {
+                    Self.trace("guide picture for \(channelID) failed: \(Self.describe(error))")
+                }
             }
         }
     }

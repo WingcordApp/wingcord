@@ -149,6 +149,20 @@ struct BubbleLayoutTests {
         #expect(badge.minX < ownBubble.rect.minX && badge.maxX > ownBubble.rect.minX)
     }
 
+    /// His image 254 (2026-11-19): a "12" tapback drew as "…".
+    @Test("A tapback's count has the room the painter draws it in")
+    func tapbackCountFits() throws {
+        for count in [12, 345] {
+            let theirs = try #require(rows([reacted(Self.them, "a sentence", [Self.thumbs(count)])]).first)
+            let badge = try #require(theirs.reactions.first)
+            let style = MessageTextStyle.current()
+            let drawn = TimelineLayoutEngine.measure("\(count)", font: TimelineMetrics.reactionCountFont(style))
+            let room = badge.rect.width - TimelineMetrics.tapbackInset - TimelineMetrics.reactionGlyphSide
+                - TimelineMetrics.reactionGlyphGap - TimelineMetrics.reactionTrailingInset
+            #expect(room >= drawn, "\(count)")
+        }
+    }
+
     @Test("Under its own caption a bubble keeps its place, its tapbacks rising beside the name")
     func tapbacksBesideCaption() throws {
         let sentence = "a sentence of some length"

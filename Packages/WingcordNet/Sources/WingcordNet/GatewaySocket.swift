@@ -499,6 +499,9 @@ public actor GatewaySocket {
             Log.info(.gateway, "READY guilds=\(ready.guilds?.count ?? 0) dms=\(ready.private_channels?.count ?? 0)")
             reconnectAttempt = 0
             sessionID = ready.session_id
+            // A new session holds no subscriptions: every guild asks for its
+            // threads again on its next subscribe.
+            threadSubscribedGuilds.removeAll()
             resumeURL = ready.resume_gateway_url
             currentUserID = ready.user.id
             // **The order the merged arrays in `READY_SUPPLEMENTAL` are indexed
@@ -729,15 +732,31 @@ public actor GatewaySocket {
             struct Data: Encodable {
                 var guild_id: String
                 var typing = true
-                var threads = false
+                /// Sent once per guild per session, as Discord's client does
+                /// (`subscribeToGuild`): it is what makes Discord send each
+                /// active thread's newest message (`THREAD_LIST_SYNC`) for the
+                /// cards in its parent channel. Left out after, so repeating a
+                /// member-list subscribe never asks for the sync again.
+                var threads: Bool?
                 var activities = true
                 var channels: [String: [[Int]]]
             }
         }
+        // **An empty range list is never sent**: Discord can't decode one, and
+        // answers with 4002 and the end of the session (docs/BETA3.md §7, R2).
         var wire: [String: [[Int]]] = [:]
-        for (channelID, ranges) in channels { wire[channelID.description] = ranges }
-        send(Subscribe(d: .init(guild_id: guildID.description, channels: wire)))
+        for (channelID, ranges) in channels where !ranges.isEmpty { wire[channelID.description] = ranges }
+        guard !wire.isEmpty else { return }
+        let asksForThreads = threadSubscribedGuilds.insert(guildID).inserted
+        send(Subscribe(d: .init(
+            guild_id: guildID.description,
+            threads: asksForThreads ? true : nil,
+            channels: wire
+        )))
     }
+
+    /// The guilds subscribed with `threads` this session.
+    private var threadSubscribedGuilds: Set<GuildID> = []
 
     /// Asks for the status line and session clock of every voice channel in a
     /// guild.
@@ -1173,12 +1192,51 @@ public actor GatewaySocket {
         // The payload is never logged. An IDENTIFY carries the account token in
         // the clear, and a log line is a file, a screen share and a sysdiagnose.
         Self.trace("send \(data.count) bytes")
+        noteSend(data)
         task.send(.data(data)) { error in
             if let error {
                 GatewaySocket.trace("send failed: \(error.localizedDescription)")
                 Self.log.error("gateway send failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    /// The last few payloads sent, by op and size — **never their contents**
+    /// (an IDENTIFY carries the token). Said beside any close Discord explains
+    /// with a 4xxx code, so a payload it refused names itself: three of his
+    /// "Reconnecting…" were a member-list resync's op 14, closed 4002 a sixth
+    /// of a second later (docs/BETA3.md §7, R2).
+    private var recentSends: [(op: Int, bytes: Int, at: ContinuousClock.Instant)] = []
+
+    private func noteSend(_ data: Data) {
+        recentSends.append((op: Self.opcode(in: data) ?? -1, bytes: data.count, at: .now))
+        if recentSends.count > 6 { recentSends.removeFirst(recentSends.count - 6) }
+    }
+
+    /// The `op` of an encoded payload, read without decoding the rest.
+    static func opcode(in data: Data) -> Int? {
+        guard let key = data.range(of: Data("\"op\":".utf8)) else { return nil }
+        var index = key.upperBound
+        while index < data.endIndex, data[index] == 0x20 { index += 1 }
+        var value = 0
+        var digits = 0
+        while index < data.endIndex, (0x30...0x39).contains(data[index]), digits < 4 {
+            value = value * 10 + Int(data[index] - 0x30)
+            digits += 1
+            index += 1
+        }
+        return digits > 0 ? value : nil
+    }
+
+    /// "op 14 (365 B, 0.15 s before), …", newest first.
+    private func recentSendsSummary() -> String {
+        let now = ContinuousClock.now
+        return recentSends.reversed().map { send in
+            let seconds = Double((now - send.at).components.attoseconds) / 1e18
+                + Double((now - send.at).components.seconds)
+            return "op \(send.op) (\(send.bytes) B, \(String(format: "%.2f", seconds)) s before)"
+        }
+        .joined(separator: ", ")
     }
 
     // MARK: Heartbeat
@@ -1201,9 +1259,23 @@ public actor GatewaySocket {
     }
 
     private func beat() {
+        /// **`d` is always written, as `null` before the first dispatch.** A
+        /// synthesized `Encodable` leaves a nil optional out, so a beat that
+        /// went before READY — the first beat is jittered, and can land a
+        /// second after IDENTIFY while a 7 MB READY is still coming — was
+        /// `{"op":1}`, which Discord can't decode: 4002, and the session gone
+        /// (his log, 2026-11-19: "op 1 (8 B, 0.81 s before)").
         struct Heartbeat: Encodable {
             var op = 1
             var d: Int?
+
+            func encode(to encoder: any Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(op, forKey: .op)
+                try container.encode(d, forKey: .d)
+            }
+
+            private enum CodingKeys: String, CodingKey { case op, d }
         }
         // A missed acknowledgement means the connection is a zombie: the socket
         // is open, writes succeed, and nothing is arriving. Only the missing ACK
@@ -1244,6 +1316,9 @@ public actor GatewaySocket {
             "socket closed: code=\(closeCode.rawValue) reason=\(public: closeReason ?? "-") "
                 + "error=\(public: nsError.domain) \(nsError.code)"
         )
+        if (4000..<5000).contains(closeCode.rawValue), !recentSends.isEmpty {
+            Log.info(.gateway, "sent before the close: \(public: recentSendsSummary())")
+        }
 
         if let outcome = CloseOutcome(closeCode: closeCode.rawValue) {
             switch outcome {
@@ -1604,6 +1679,26 @@ public struct ReadySnapshot: Sendable {
                 presences[presence.userID] = presence
             }
         }
+        // The reader's own record in every server, positional against READY's
+        // guild list and guarded on its count, as READY_SUPPLEMENTAL's merged
+        // arrays are: a mismatch would file one server's roles under another.
+        if let merged = payload.merged_members?.lists, !merged.isEmpty {
+            if merged.count == guilds.count {
+                for (offset, list) in merged.enumerated() where !list.isEmpty {
+                    let guildID = guilds[offset].id
+                    var table = membersByGuild[guildID] ?? [:]
+                    for memberDTO in list {
+                        guard let userID = memberDTO.user?.id ?? memberDTO.user_id else { continue }
+                        if let userDTO = memberDTO.user { users[userID] = userDTO.domain }
+                        table[userID] = memberDTO.domain(userID: userID)
+                    }
+                    membersByGuild[guildID] = table
+                }
+            } else {
+                Log.fault(.gateway, "READY: merged members for \(merged.count) servers, READY named \(guilds.count); dropped")
+            }
+        }
+
         self.guilds = guilds
         self.channelsByGuild = channelsByGuild
         self.threadsByGuild = threadsByGuild
@@ -1893,7 +1988,9 @@ public enum GatewayUpdate: Sendable {
         GuildID?,
         channelIDs: [ChannelID]?,
         threads: [Channel],
-        memberships: [ThreadMember]
+        memberships: [ThreadMember],
+        newestMessages: [Message],
+        newestAuthors: [User]
     )
     /// How many messages a board's posts have past the marks it asked about.
     case forumUnreads(ChannelID, counts: [ChannelID: Int])
@@ -2111,9 +2208,12 @@ public enum GatewayUpdate: Sendable {
             var members: [UserID: Member] = [:]
             var users: [UserID: User] = [:]
             for memberDTO in dto.members ?? [] {
-                guard let userDTO = memberDTO.user else { continue }
-                users[userDTO.id] = userDTO.domain
-                members[userDTO.id] = memberDTO.domain(userID: userDTO.id)
+                // A member may name its person by `user_id` alone
+                // (`DEDUPE_USER_OBJECTS`) — the reader's own record on a join
+                // among them, which says whether they're pending.
+                guard let userID = memberDTO.user?.id ?? memberDTO.user_id else { continue }
+                if let userDTO = memberDTO.user { users[userID] = userDTO.domain }
+                members[userID] = memberDTO.domain(userID: userID)
             }
             var presences: [UserID: Presence] = [:]
             for presenceDTO in dto.presences ?? [] {
@@ -2217,7 +2317,9 @@ public enum GatewayUpdate: Sendable {
                 payload.guild_id,
                 channelIDs: payload.channel_ids,
                 threads: (payload.threads ?? []).map { $0.domain(guildID: payload.guild_id) },
-                memberships: memberships
+                memberships: memberships,
+                newestMessages: payload.most_recent_messages?.elements.map(\.domain) ?? [],
+                newestAuthors: payload.most_recent_messages?.elements.compactMap { $0.author?.domain } ?? []
             )
         case .forumUnreads(let payload):
             guard payload.permission_denied != true else { return nil }

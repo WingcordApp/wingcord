@@ -148,11 +148,17 @@ struct CurrentActivityCard: View {
     /// than being a grey box dropped on it.
     @ViewBuilder
     private func artwork(placeholder: ActivityStatusLine.Glyph) -> some View {
-        // A Spotify session's cover opens what is playing, as Discord's does.
+        // A Spotify session's cover opens what is playing, as Discord's does;
+        // a game's cover opens its game profile, as Discord's does too.
         if let track = activity.spotifyTrackURL {
             Button { openInSpotify(track) } label: { artworkStack(placeholder: placeholder) }
                 .buttonStyle(.plain)
                 .help("Open in Spotify")
+        } else if let openGame {
+            Button(action: openGame) { artworkStack(placeholder: placeholder).contentShape(.rect) }
+                .buttonStyle(.plain)
+                .help("Open \(activity.name)")
+                .accessibilityLabel(Text("Open \(activity.name)"))
         } else {
             artworkStack(placeholder: placeholder)
         }

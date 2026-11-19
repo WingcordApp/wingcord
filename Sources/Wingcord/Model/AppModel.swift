@@ -959,6 +959,19 @@ final class AppModel {
     /// Whether the reader has confirmed an e-mail and holds a phone — the
     /// application form's verification row reads it. See `AccountVerification`.
     var accountVerification: AccountVerification?
+    /// Every file card's download — what the transcript paints on the card.
+    let fileTransfers = FileTransfers()
+    /// An announcement channel being followed into one of the reader's own
+    /// (`FollowChannelSheet`).
+    var followRequest: FollowChannelRequest?
+    /// Each thread's newest message and count, where Discord has said
+    /// (`AppModel+ThreadCards`). Not observed: what reads it is the transcript,
+    /// through the parent's box.
+    @ObservationIgnored var threadCards: [ChannelID: ThreadCardState] = [:]
+    /// Discover's Games tab (docs/QUEUE-NOV19.md §1).
+    var gamesDiscovery = GamesDiscoveryState()
+    /// The Void (docs/QUEUE-NOV19.md §2).
+    var orbVoid = OrbVoidState()
     /// Everywhere the account is signed in. Nil is "not asked or refused" and
     /// `[]` is "nowhere else", and the pane draws them differently.
     var authSessions: [AuthSession]?
@@ -1101,6 +1114,9 @@ final class AppModel {
     /// Games, by application id. Shared across every board and every game
     /// profile in the session.
     var games: [ApplicationID: Game] = [:]
+    /// The game a console activity names, found by its name (`/games/autocomplete`)
+    /// where its application id gives none — keyed by `activityNameKey`.
+    var gamesByActivityName: [String: ApplicationID] = [:]
     /// The names `<@$id>` mentions draw, kept apart from `games` so a board
     /// loading its fifty does not discard every laid-out row: only a game a
     /// message names moves the mention table's key.
@@ -1218,6 +1234,17 @@ final class AppModel {
     // again on every appearance for a server that has no guide.
 
     var serverGuides: [GuildID: ServerGuide] = [:]
+    /// The first picture in a guide resource's channel, for a resource with no
+    /// icon or emoji of its own — what Discord draws in their place.
+    var guideFirstPictures: [ChannelID: URL] = [:]
+    /// Resource channels already asked for their first picture this session.
+    @ObservationIgnored var guideFirstPicturesAsked: Set<ChannelID> = []
+    /// The Get Started steps the reader has done, per server
+    /// (`GET /guilds/{id}/new-member-actions`, then as they go).
+    var guideProgress: [GuildID: Set<ChannelID>] = [:]
+    /// A server whose Get Started the reader has just finished — the moment
+    /// Discord celebrates (`455796`). Cleared when it is dismissed.
+    var guideFinished: GuildID?
     var guildOnboardings: [GuildID: GuildOnboarding] = [:]
     /// How many people hold each role, for the server whose questions are open.
     var roleMemberCounts: [GuildID: [RoleID: Int]] = [:]
@@ -2166,20 +2193,36 @@ final class AppModel {
     }
 
     func setMessages(_ box: MessageBox, in channelID: ChannelID) {
+        var box = box
+        let patched = applyThreadCards(to: &box)
         noteDraft(of: box, replacing: messageBoxes[channelID], in: channelID)
         messageBoxes[channelID] = box
         touchBox(channelID)
         noteNewest(of: box, in: channelID)
+        noteThreadNewest(of: box, in: channelID)
+        if patched { messageBoxes.noteContentChanged(in: channelID) }
     }
 
     func mutateBox(_ channelID: ChannelID, _ body: (inout MessageBox) -> Void) {
         let previous = messageBoxes.peek(channelID)
         var box = previous ?? MessageBox()
         body(&box)
+        let patched = applyThreadCards(to: &box)
         noteDraft(of: box, replacing: previous, in: channelID)
         messageBoxes[channelID] = box
         touchBox(channelID)
         noteNewest(of: box, in: channelID)
+        noteThreadNewest(of: box, in: channelID)
+        if patched { messageBoxes.noteContentChanged(in: channelID) }
+    }
+
+    /// Copies what the model knows of its threads onto the messages in a
+    /// parent's box that started them (`AppModel+ThreadCards`). A box that is
+    /// not loaded picks it up when it is.
+    func refreshThreadCards(inParent parentID: ChannelID) {
+        guard var box = messageBoxes.peek(parentID), applyThreadCards(to: &box) else { return }
+        messageBoxes[parentID] = box
+        messageBoxes.noteContentChanged(in: parentID)
     }
 
     /// A message in this channel landed, changed or went.

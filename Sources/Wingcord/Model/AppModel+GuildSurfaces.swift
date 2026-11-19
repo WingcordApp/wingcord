@@ -83,6 +83,9 @@ enum SurfaceGlyph: Hashable, Sendable {
     case emoji(URL)
     case character(String)
     case symbol(String)
+    /// A picture the server uploaded (a guide step's or resource's icon),
+    /// drawn filling its well rather than as a small emoji inside it.
+    case picture(URL)
 }
 
 // MARK: - Presentation values
@@ -138,6 +141,9 @@ struct ServerGuidePresentation: Hashable, Sendable {
         /// wall.
         var channelName: String?
         var channelSymbolName: String
+        /// A Get Started step's state for a new member — a green check or an
+        /// empty ring, as Discord's list (`283012`); nil draws neither.
+        var isDone: Bool? = nil
     }
 }
 
@@ -438,23 +444,28 @@ extension AppModel {
 
         var actions: [ServerGuidePresentation.Row] = []
         actions.reserveCapacity(guide?.actions.count ?? 0)
+        let tracksProgress = pendingGuideSteps(in: guildID) != nil
         for action in guide?.actions ?? [] {
             actions.append(ServerGuidePresentation.Row(
                 id: action.id,
                 channelID: action.channelID,
                 title: action.title,
                 detail: action.detail,
-                glyph: glyph(
-                    emojiID: action.emojiID,
-                    emojiName: action.emojiName,
-                    isAnimated: action.isEmojiAnimated,
-                    // A row that asks the reader to write is a different act
-                    // from one that asks them to read, and the payload says
-                    // which. It is the only thing `action_type` is good for.
-                    fallback: action.kind == .write ? "bubble.left.and.pencil" : "book"
-                ),
+                // Discord's order (`283012`): the uploaded picture, then the
+                // emoji, then the channel's own symbol.
+                glyph: action.iconHash
+                    .flatMap { CDN.guideIcon(kind: .step, channelID: action.channelID, hash: $0) }
+                    .map(SurfaceGlyph.picture)
+                    ?? glyph(
+                        emojiID: action.emojiID,
+                        emojiName: action.emojiName,
+                        isAnimated: action.isEmojiAnimated,
+                        fallback: channelIndex[action.channelID]?.kind.symbolName
+                            ?? (action.kind == .write ? "bubble.left.and.pencil" : "book")
+                    ),
                 channelName: readableChannelName(action.channelID),
-                channelSymbolName: channelIndex[action.channelID]?.kind.symbolName ?? "number"
+                channelSymbolName: channelIndex[action.channelID]?.kind.symbolName ?? "number",
+                isDone: tracksProgress ? isGuideStepDone(action.channelID, in: guildID) : nil
             ))
         }
 
@@ -466,7 +477,10 @@ extension AppModel {
                 channelID: resource.channelID,
                 title: resource.title,
                 detail: resource.detail,
-                glyph: .symbol(channelIndex[resource.channelID]?.kind.symbolName ?? "number"),
+                // The uploaded picture (Rockstar's R★), then an emoji, then
+                // the first picture in the channel's first message, then a
+                // page — Discord's order (`452849`), never a bare "#".
+                glyph: resourceGlyph(resource),
                 channelName: readableChannelName(resource.channelID),
                 channelSymbolName: channelIndex[resource.channelID]?.kind.symbolName ?? "number"
             ))
@@ -997,12 +1011,19 @@ extension AppModel {
     /// filter on and follows nothing in the server has an unknown state rather
     /// than an empty one — Discord onboards such a member into everything — so
     /// the list is never narrowed to nothing.
+    ///
+    /// **Only followed channels the reader can see count.** Settings outlive
+    /// a membership: he left a server and joined again, his follows from before
+    /// were all channels now hidden from him, and the filter took everything he
+    /// could see out of the list (his image 242, 2026-11-19).
     func hidesUnfollowedChannels(inGuild guildID: GuildID) -> Bool {
-        Self.hidesUnfollowedChannels(
+        let gate = permissionGate
+        return Self.hidesUnfollowedChannels(
             inGuild: guildID,
             settings: guildUserSettings,
             followed: followedChannelIDs,
-            index: channelIndex
+            index: channelIndex,
+            canView: { gate.canView($0) }
         )
     }
 
@@ -1010,13 +1031,14 @@ extension AppModel {
         inGuild guildID: GuildID,
         settings: [GuildID: GuildUserSettings],
         followed: Set<ChannelID>,
-        index: ChannelIndex
+        index: ChannelIndex,
+        canView: (ChannelID) -> Bool = { _ in true }
     ) -> Bool {
         guard let flags = settings[guildID]?.flags,
               flags & GuildUserSettingsFlags.optInChannelsOn != 0
         else { return false }
         guard !followed.isEmpty else { return false }
-        return index.channelIDs(inGuild: guildID).contains { followed.contains($0) }
+        return index.channelIDs(inGuild: guildID).contains { followed.contains($0) && canView($0) }
     }
 
     /// Whether a channel belongs in the sidebar.
@@ -1131,3 +1153,43 @@ struct GuildSurfaceMemoKey: Hashable, Sendable {
     var isLoading: Bool
     var isSaving: Bool
 }
+
+// MARK: - Server Guide pictures
+
+extension AppModel {
+    /// A resource's picture, in Discord's order (`452849`): the one the server
+    /// uploaded, then its emoji, then the first picture in the channel's first
+    /// message, then a page — never a bare "#".
+    func resourceGlyph(_ resource: ServerGuide.Resource) -> SurfaceGlyph {
+        if let hash = resource.iconHash,
+           let url = CDN.guideIcon(kind: .resource, channelID: resource.channelID, hash: hash)
+        {
+            return .picture(url)
+        }
+        if resource.emojiID != nil || resource.emojiName != nil {
+            return glyph(
+                emojiID: resource.emojiID,
+                emojiName: resource.emojiName,
+                isAnimated: resource.isEmojiAnimated,
+                fallback: "doc.text"
+            )
+        }
+        if let url = guideFirstPictures[resource.channelID] { return .picture(url) }
+        return .symbol("doc.text")
+    }
+
+    /// The first picture a message carries: an image file, then an embed's
+    /// image or thumbnail.
+    nonisolated static func firstPicture(in message: Message) -> URL? {
+        if let image = message.attachments.first(where: \.isImage) {
+            return URL(string: image.proxyURL.isEmpty ? image.url : image.proxyURL)
+        }
+        for embed in message.embeds {
+            if let media = embed.image ?? embed.thumbnail {
+                return URL(string: media.proxyURL ?? media.url)
+            }
+        }
+        return nil
+    }
+}
+

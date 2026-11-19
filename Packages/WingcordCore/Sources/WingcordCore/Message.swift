@@ -550,6 +550,37 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     }
 
     /// The same box with a different reply header. See `replacingReactions`.
+    /// The same payload with the thread record swapped — how a thread card
+    /// learns its newest message and count after the page has loaded.
+    public func replacingThread(_ thread: MessageThread?) -> MessagePayload {
+        MessagePayload(
+            attachments: attachments,
+            embeds: embeds,
+            reactions: reactions,
+            stickers: stickers,
+            components: components,
+            displayComponents: displayComponents,
+            poll: poll,
+            mentionedUserIDs: mentionedUserIDs,
+            mentionedRoleIDs: mentionedRoleIDs,
+            mentionsEveryone: mentionsEveryone,
+            reference: reference,
+            forwarded: forwarded,
+            webhookID: webhookID,
+            nonce: nonce,
+            activityInvite: activityInvite,
+            listenAlong: listenAlong,
+            interaction: interaction,
+            applicationID: applicationID,
+            thread: thread,
+            sharedTheme: sharedTheme,
+            mediaMention: mediaMention,
+            guildSpaceData: guildSpaceData,
+            contentEntry: contentEntry,
+            call: call
+        )
+    }
+
     public func replacingReference(_ reference: MessageReference?) -> MessagePayload {
         MessagePayload(
             attachments: attachments,
@@ -886,12 +917,41 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
         self.isThumbnail = isThumbnail
     }
 
+    /// A picture, by its type **or by its name**, as Discord's client reads
+    /// it: attachments from before Discord sent `content_type` (early 2021
+    /// and older) carry none, and Discord still draws them — a server's
+    /// 2021 welcome screenshot was a file card here (Alex's image 245,
+    /// 2026-11-19). Discord's list, from its bundle:
+    /// `/\.(png|jpe?g|jfif|webp|gif|heic|heif|dng|avif)$/i`.
     public var isImage: Bool {
-        contentType?.hasPrefix("image/") ?? false
+        if contentType?.hasPrefix("image/") == true { return true }
+        return Self.extensionOf(filename).map(Self.imageExtensions.contains) ?? false
     }
 
+    /// A video, by its type or its name — `/\.(mp4|webm|mov|qt)$/i`.
     public var isVideo: Bool {
-        contentType?.hasPrefix("video/") ?? false
+        if contentType?.hasPrefix("video/") == true { return true }
+        guard contentType?.hasPrefix("image/") != true else { return false }
+        return Self.extensionOf(filename).map(Self.videoExtensions.contains) ?? false
+    }
+
+    /// A sound, by its type or its name —
+    /// `/\.(mp3|m4a|wav|aif|aiff|ogg|opus|flac)$/i`.
+    public var isAudio: Bool {
+        if contentType?.hasPrefix("audio/") == true { return true }
+        guard contentType == nil else { return false }
+        return Self.extensionOf(filename).map(Self.audioExtensions.contains) ?? false
+    }
+
+    static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "jfif", "webp", "gif", "heic", "heif", "dng", "avif"]
+    static let videoExtensions: Set<String> = ["mp4", "webm", "mov", "qt"]
+    static let audioExtensions: Set<String> = ["mp3", "m4a", "wav", "aif", "aiff", "ogg", "opus", "flac"]
+
+    /// The name's extension, lowercased — nil for a name without one.
+    public static func extensionOf(_ filename: String) -> String? {
+        guard let dot = filename.lastIndex(of: "."), dot != filename.startIndex else { return nil }
+        let ext = filename[filename.index(after: dot)...]
+        return ext.isEmpty ? nil : ext.lowercased()
     }
 
     /// Whether Discord's client plays it as moving. See `CDN.playsAsAnimated`.
@@ -986,12 +1046,98 @@ public struct MessageThread: Hashable, Sendable, Codable {
     /// it never decrements — see `Channel.threadMessageCount`.
     public var messageCount: Int
     public var isArchived: Bool
+    /// The thread's `last_message_id`: when it last moved, for a card with no
+    /// newer message to show.
+    public var lastMessageID: MessageID?
+    /// `thread_metadata.create_timestamp`: when it was made, for a thread with
+    /// no message id to read a time from.
+    public var createdAt: Date?
+    /// The newest message, where Discord has said what it is: a thread sync's
+    /// `most_recent_messages`, a live message, or the thread's own newest page
+    /// (Discord's `ThreadMessageStore`, `456874`).
+    public var latest: ThreadLatestMessage?
 
-    public init(id: ChannelID, name: String, messageCount: Int, isArchived: Bool = false) {
+    public init(
+        id: ChannelID,
+        name: String,
+        messageCount: Int,
+        isArchived: Bool = false,
+        lastMessageID: MessageID? = nil,
+        createdAt: Date? = nil,
+        latest: ThreadLatestMessage? = nil
+    ) {
         self.id = id
         self.name = name
         self.messageCount = messageCount
         self.isArchived = isArchived
+        self.lastMessageID = lastMessageID
+        self.createdAt = createdAt
+        self.latest = latest
+    }
+
+    /// When the thread last moved, in Discord's order (`707539.JO`): its newest
+    /// message, then when it was made, then its own id.
+    public var lastActivity: Date {
+        let newest = [latest?.id, lastMessageID].compactMap { $0 }.max { $0.rawValue < $1.rawValue }
+        return newest?.timestamp ?? createdAt ?? id.timestamp
+    }
+
+    /// The card's link, in Discord's words and rules (`321045`): "See Thread ›"
+    /// with nothing counted, "50+" for a thread from before Discord counted
+    /// past fifty, "100k+" past a hundred thousand.
+    public var countLabel: String {
+        let count = max(0, messageCount)
+        guard count > 0 else { return "See Thread \u{203A}" }
+        let shown: String
+        if count >= 50, id.rawValue <= Self.lastCappedThreadID {
+            shown = "50+"
+        } else if count >= 100_000 {
+            shown = "100k+"
+        } else {
+            shown = String(count)
+        }
+        return count == 1 ? "1 Message \u{203A}" : "\(shown) Messages \u{203A}"
+    }
+
+    /// Threads up to this id were counted only to fifty (Discord's
+    /// `992549565104128000`).
+    public static let lastCappedThreadID: UInt64 = 992_549_565_104_128_000
+}
+
+/// A thread's newest message, as its card draws it: who, one line of what, and
+/// when (Discord's `ThreadMessageAccessoryMessage`).
+public struct ThreadLatestMessage: Hashable, Sendable, Codable {
+    public var id: MessageID
+    public var authorID: UserID
+    /// One line, markdown folded away — the reply header's own excerpt.
+    public var excerpt: String
+    /// Nothing to quote but a file or a sticker: the card says so in words.
+    public var hasAttachment: Bool
+
+    public init(id: MessageID, authorID: UserID, excerpt: String, hasAttachment: Bool) {
+        self.id = id
+        self.authorID = authorID
+        self.excerpt = excerpt
+        self.hasAttachment = hasAttachment
+    }
+
+    /// From the message itself, by the rules the reply header uses.
+    public init(_ message: Message) {
+        self.init(
+            id: message.id,
+            authorID: message.authorID,
+            excerpt: message.flags.contains(.isVoiceMessage)
+                ? MessageReference.voiceMessageExcerpt
+                : MessageReference.excerpt(of: message.content),
+            hasAttachment: !message.attachments.isEmpty || !message.stickers.isEmpty
+        )
+    }
+
+    /// Whether a message can be a thread's newest: never the starter Discord
+    /// copies into the thread, nor a forum post's own opening message (both
+    /// left out by `ThreadMessageStore`).
+    public static func counts(_ message: Message, inThread threadID: ChannelID) -> Bool {
+        message.kind != .threadStarterMessage && message.id.rawValue != threadID.rawValue
     }
 }
 

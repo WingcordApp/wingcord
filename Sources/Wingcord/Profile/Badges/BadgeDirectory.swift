@@ -208,7 +208,9 @@ struct BadgeDirectory: View {
     /// never two of the same.
     @ViewBuilder private func progressCard(_ badge: CatalogBadge) -> some View {
         VStack(alignment: .leading, spacing: Spacing.snug) {
-            if isOwn, badge.kind?.showsProgress == true, let next = badge.nextTier {
+            // Discord now shows the bar for any owned badge with a next level
+            // (`c9beb9de` `eC`), the Void and Gifting among them.
+            if isOwn, badge.isOwned, badge.progress != nil, let next = badge.nextTier {
                 Text("Your progress")
                     .font(.system(.headline))
                     .foregroundStyle(InkColor.primary)
@@ -225,11 +227,17 @@ struct BadgeDirectory: View {
                 }
                 Divider()
             }
-            if let description = badge.description {
+            if let description = descriptionLine(badge) {
                 Text(description)
                     .font(.system(.body, weight: .medium))
                     .foregroundStyle(InkColor.primary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if let action = BadgeAction(badge: badge, isOwn: isOwn, model: model) {
+                Button(action.title, systemImage: action.symbol) { action.perform(model) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .frame(maxWidth: badge.kind == .orbVoid ? .infinity : nil)
             }
             if badge.tiers.count > 1, !isOwn {
                 Divider()
@@ -283,6 +291,15 @@ struct BadgeDirectory: View {
         .padding(Spacing.group)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.skeletonPlate.opacity(0.6), in: .rect(cornerRadius: 18, style: .continuous))
+    }
+
+    /// What the badge is for — or, for a badge at its top level, Discord's
+    /// line for that (`49253.JV`).
+    private func descriptionLine(_ badge: CatalogBadge) -> String? {
+        if isOwn, badge.isOwned, !badge.tiers.isEmpty, badge.nextTier == nil {
+            return "You\u{2019}ve maxed out this badge. Sit back, relax, and enjoy the view from the top."
+        }
+        return badge.description
     }
 
     /// "52 more hours" — Discord's line — where the next level's milestone

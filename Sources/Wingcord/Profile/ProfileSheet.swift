@@ -619,8 +619,7 @@ struct ProfileSheet: View {
     /// activity nobody has a page for do not, and a title that looks pressable
     /// and opens nothing is what `INVARIANTS.md` §5.5 forbids.
     private func gameOpener(for activity: Activity) -> (() -> Void)? {
-        guard activity.kind == .playing else { return nil }
-        return model.gameProfileOpener(for: activity.applicationID)
+        model.gameProfileOpener(for: activity)
     }
 
     @ViewBuilder

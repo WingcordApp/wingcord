@@ -21,14 +21,53 @@ extension AppModel {
     ///   transcript, so the viewer can peek the exact rendition already decoded
     ///   and open on the picture instead of on a placeholder. The cache key is
     ///   `(url, pixel size)` and both halves have to match the transcript's.
-    /// A file card's Download.
+    /// A file card's round button: download, stop, Show in Finder, try again
+    /// (docs/BETA3.md §7, R8).
     func downloadAttachment(messageID: MessageID, in channelID: ChannelID, attachmentIndex: Int) {
-        // The transcript's copy, or the inspector's — an older file found by
-        // search is in no transcript.
+        guard let attachment = fileAttachment(messageID: messageID, in: channelID, attachmentIndex: attachmentIndex)
+        else { return }
+        fileTransfers.pressButton(attachment)
+    }
+
+    /// A click on a file card: Quick Look (R9).
+    func previewAttachment(messageID: MessageID, in channelID: ChannelID, attachmentIndex: Int) {
+        guard let attachment = fileAttachment(messageID: messageID, in: channelID, attachmentIndex: attachmentIndex)
+        else { return }
+        fileTransfers.preview(attachment)
+    }
+
+    /// The file a card stands for. The transcript's copy, or the inspector's —
+    /// an older file found by search is in no transcript.
+    func fileAttachment(messageID: MessageID, in channelID: ChannelID, attachmentIndex: Int) -> Attachment? {
         guard let attachments = knownMessage(messageID, in: channelID)?.attachments,
               attachments.indices.contains(attachmentIndex)
+        else { return nil }
+        return attachments[attachmentIndex]
+    }
+
+    /// A file card's menu (R10).
+    func fileCardAction(
+        _ action: FileCardAction,
+        messageID: MessageID,
+        in channelID: ChannelID,
+        attachmentIndex: Int,
+        window: NSWindow?
+    ) {
+        guard let attachment = fileAttachment(messageID: messageID, in: channelID, attachmentIndex: attachmentIndex)
         else { return }
-        AttachmentDownloads.download(attachments[attachmentIndex], model: self)
+        switch action {
+        case .quickLook: fileTransfers.preview(attachment)
+        case .open: fileTransfers.open(attachment)
+        case .download: fileTransfers.save(attachment)
+        case .saveAs: fileTransfers.saveAs(attachment, in: window)
+        case .showInFinder:
+            if let url = fileTransfers.savedFile(attachment.id) {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        case .copyLink:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(attachment.url, forType: .string)
+        }
     }
 
     func openMedia(
@@ -55,8 +94,9 @@ extension AppModel {
         // it.** The check used to be whether the message had *any* viewable
         // item, so a zip beside a picture opened the picture.
         let clicked = attachments[attachmentIndex]
+        // Quick Look, as a click on a file card is (docs/BETA3.md §7, R9).
         guard MediaItem(clicked, posterWidth: Metrics.attachmentThumbnail) != nil else {
-            AttachmentDownloads.download(clicked, model: self)
+            fileTransfers.preview(clicked)
             return
         }
 

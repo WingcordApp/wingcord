@@ -33,12 +33,15 @@ struct NewMemberWelcomeDTO: Decodable, Sendable {
         var title: String?
         var description: String?
         var emoji: EmojiDTO?
+        var icon: String?
     }
 
     struct ResourceDTO: Decodable, Sendable {
         var channel_id: ChannelID?
         var title: String?
         var description: String?
+        var emoji: EmojiDTO?
+        var icon: String?
     }
 
     func domain(guildID: GuildID) -> ServerGuide {
@@ -57,7 +60,8 @@ struct NewMemberWelcomeDTO: Decodable, Sendable {
                 detail: action.description.nonEmpty,
                 emojiID: action.emoji?.id,
                 emojiName: action.emoji?.name.nonEmpty,
-                isEmojiAnimated: action.emoji?.animated ?? false
+                isEmojiAnimated: action.emoji?.animated ?? false,
+                iconHash: action.icon.nonEmpty
             ))
         }
 
@@ -70,7 +74,11 @@ struct NewMemberWelcomeDTO: Decodable, Sendable {
                 id: index,
                 channelID: channelID,
                 title: title,
-                detail: resource.description.nonEmpty
+                detail: resource.description.nonEmpty,
+                iconHash: resource.icon.nonEmpty,
+                emojiID: resource.emoji?.id,
+                emojiName: resource.emoji?.name.nonEmpty,
+                isEmojiAnimated: resource.emoji?.animated ?? false
             ))
         }
 

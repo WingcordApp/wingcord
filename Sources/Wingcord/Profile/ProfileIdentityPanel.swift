@@ -44,6 +44,14 @@ struct ProfileIdentityPanel: View {
     /// Whether the still under the moving banner has been taken away. See
     /// `bannerArtwork`.
     @State private var bannerIsPlaying = false
+    /// Whether the banner is in the viewer, its strip left to the plate
+    /// (docs/BETA3.md §7, R14).
+    @State private var isBannerLifted = false
+    /// Whether the banner's picture actually loaded. A hash whose picture
+    /// never arrives leaves the plain colour plate on screen, and that is not
+    /// something to open in the viewer (Alex, 2026-11-19) — Discord's banner
+    /// opens only as a picture.
+    @State private var isBannerShown = false
     /// Whether the pointer is over the card. Two things read it: the profile
     /// effect fades back so the name and banner under it can be read, and the
     /// edit pencils appear — both of which are "get out of the way of the thing
@@ -162,8 +170,12 @@ struct ProfileIdentityPanel: View {
         .onHover { isHovered = $0 }
         .task(id: profile.bannerURL) {
             measuredBannerBright = false
+            isBannerShown = false
             guard let url = profile.bannerURL else { return }
             measuredBannerBright = await BannerBrightness.isBright(url)
+            // Measured only from a picture that decoded: the same answer says
+            // the banner is really there.
+            isBannerShown = BannerBrightness.cached(url) != nil
         }
         // A little bigger than the card's: this is the larger surface.
         .overlay(alignment: .topLeading) {
@@ -309,7 +321,7 @@ struct ProfileIdentityPanel: View {
                 .background {
                     Rectangle().fill(ground.plateStyle(accentColorValue: profile.accentColorValue))
                 }
-                .overlay { bannerArtwork }
+                .overlay { bannerArtwork.opacity(isBannerLifted ? 0 : 1) }
                 // The handoff's fade: the artwork dissolves into the body rather
                 // than ending in a line, which is what keeps the banner and the
                 // body reading as one surface.
@@ -337,6 +349,26 @@ struct ProfileIdentityPanel: View {
                 }
                 .frame(height: Self.bannerHeight)
                 .clipped()
+                // A press on the banner opens it in the viewer, flown out of
+                // the strip and back into it (docs/BETA3.md §7, R14). Here,
+                // over the fade, so the fade doesn't take the press; under the
+                // edit menu, which keeps its own.
+                .background {
+                    if profile.bannerURL != nil, isBannerShown {
+                        MediaFlightSource(
+                            key: ProfilePicture.banner.sourceKey(for: profile.userID),
+                            cornerRadius: 0,
+                            cropsToFill: true,
+                            isLifted: $isBannerLifted
+                        )
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard profile.bannerURL != nil, isBannerShown else { return }
+                    model.openProfilePicture(.banner, of: profile)
+                }
+                .accessibilityAddTraits(profile.bannerURL != nil && isBannerShown ? .isButton : [])
                 .overlay(alignment: .topTrailing) { bannerEditMenu }
                 // The avatar's cut-out is a HOLE in the artwork, not a stroke
                 // painted over it — so what shows in the gap is the panel's own
@@ -353,6 +385,7 @@ struct ProfileIdentityPanel: View {
                 profile: profile,
                 drop: Self.avatarDrop,
                 dotSide: 26,
+                viewPicture: { model.openProfilePicture(.avatar, of: profile) },
                 side: Self.avatarSide,
                 leading: Self.gutter
             )

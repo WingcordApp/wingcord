@@ -271,6 +271,9 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
     case events(SidebarEventsRow)
     /// The Boost progress bar, first of the rows above the channels.
     case boostGoal(SidebarBoostGoal)
+    /// "Get Started · 3 of 5" and its bar, for a new member of a server with a
+    /// guide — in the Boost bar's place, as Discord draws it.
+    case guideProgress(SidebarGuideProgress)
     /// Message Requests, at the head of the conversations — drawn only while
     /// there is a request or spam waiting, with the pending ones counted.
     case messageRequests(pending: Int)
@@ -295,6 +298,7 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
         case .friends: 97
         case .pinnedGrid: 96
         case .boostGoal: 95
+        case .guideProgress: 94
         }
     }
 }
@@ -867,3 +871,11 @@ struct ChannelChrome: Hashable, Sendable {
     /// `AppSettings.showsSummaryBar`.
     var areSummariesShown = false
 }
+
+/// The channel list's Get Started header (`0ef84874` `iN`).
+struct SidebarGuideProgress: Hashable, Sendable {
+    var guildID: GuildID
+    var completed: Int
+    var total: Int
+}
+

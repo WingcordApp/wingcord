@@ -34,6 +34,9 @@ public enum BadgeKind: Int, Hashable, Sendable, CaseIterable {
     case gameTime = 20
     case gameVariety = 21
     case staff = 22
+    /// The Void: levels with Orbs thrown into it (`2026-10-orb-void`,
+    /// docs/QUEUE-NOV19.md §2).
+    case orbVoid = 23
 
     /// The profile route's string ids, as Discord's `609782` maps them.
     public static func forProfileID(_ id: String) -> BadgeKind? {
@@ -67,7 +70,7 @@ public enum BadgeKind: Int, Hashable, Sendable, CaseIterable {
     /// The four that climb through levels (`988341`'s `d`).
     public var isLevelled: Bool {
         switch self {
-        case .accountAge, .streaming, .gameTime, .gameVariety: true
+        case .accountAge, .streaming, .gameTime, .gameVariety, .orbVoid: true
         default: false
         }
     }

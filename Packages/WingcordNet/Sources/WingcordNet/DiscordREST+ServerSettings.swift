@@ -1308,12 +1308,18 @@ extension DiscordREST {
     /// hundred and thirty kilobytes of JSON it discards.
     public func gameSummaries(ids: [ApplicationID]) async throws -> [GameSummary] {
         guard !ids.isEmpty else { return [] }
-        return try await get(
-            "/games",
-            route: "games",
-            query: ids.map { URLQueryItem(name: "game_ids", value: String($0.rawValue)) },
-            as: [GameSummaryDTO].self
-        ).compactMap(\.domain)
+        // In pages of Discord's ceiling — see `gamePageSize`.
+        var summaries: [GameSummary] = []
+        for start in stride(from: 0, to: ids.count, by: Self.gamePageSize) {
+            let page = ids[start..<min(start + Self.gamePageSize, ids.count)]
+            summaries += try await get(
+                "/games",
+                route: "games",
+                query: page.map { URLQueryItem(name: "game_ids", value: String($0.rawValue)) },
+                as: [GameSummaryDTO].self
+            ).compactMap(\.domain)
+        }
+        return summaries
     }
 }
 

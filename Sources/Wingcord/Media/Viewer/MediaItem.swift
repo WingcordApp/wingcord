@@ -133,11 +133,13 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
         guard let sourceURL = URL(string: attachment.url) else { return nil }
         let type = attachment.contentType ?? ""
         let kind: Kind
-        if type.hasPrefix("video/") {
+        // By type or by name, as the transcript sorts them (`Attachment.isImage`):
+        // an attachment older than Discord's `content_type` carries none.
+        if attachment.isVideo {
             kind = .video
         } else if Self.mayAnimate(type: type, filename: attachment.filename) {
             kind = .animated
-        } else if type.hasPrefix("image/") {
+        } else if attachment.isImage {
             kind = .image
         } else {
             return nil
@@ -192,6 +194,8 @@ nonisolated struct MediaViewerRequest: Equatable, Sendable {
     enum Origin: Equatable, Sendable {
         case transcript
         case inspector
+        /// A full profile's avatar or banner (`MediaFlightSource`).
+        case profile
     }
 
     var items: [MediaItem]

@@ -14,13 +14,17 @@ struct ComposerBlockTests {
     /// so the account-age wait never applies by accident.
     private let readerID = UserID(rawValue: 42)
 
+    /// An account with an e-mail and **no verified phone** unless told
+    /// otherwise: a verified phone skips every one of a level's checks.
     private func model(
         level: VerificationLevel? = nil,
         features: Set<String> = [],
         isPending: Bool = false,
         roles: [RoleID] = [],
+        serverRoles: [Role] = [],
         joinedAt: Date = .distantPast,
-        verification: AccountVerification? = AccountVerification(isEmailVerified: true, isPhoneVerified: true),
+        serverJoinedAt: Date? = nil,
+        verification: AccountVerification? = AccountVerification(isEmailVerified: true, isPhoneVerified: false),
         kind: ChannelKind = .text
     ) -> AppModel {
         let model = AppModel()
@@ -30,11 +34,13 @@ struct ComposerBlockTests {
             name: "Somewhere",
             ownerID: UserID(rawValue: 99),
             features: features,
+            joinedAt: serverJoinedAt,
             verificationLevel: level
         )
         model.members[guildID] = [
             readerID: Member(userID: readerID, roleIDs: roles, joinedAt: joinedAt, isPending: isPending)
         ]
+        model.roles[guildID] = Dictionary(uniqueKeysWithValues: serverRoles.map { ($0.id, $0) })
         var index = ChannelIndex()
         index.replaceChannels([Channel(id: channelID, kind: kind, guildID: guildID, name: "general")], inGuild: guildID)
         model.channelIndex = index
@@ -50,6 +56,30 @@ struct ComposerBlockTests {
         #expect(block?.message == "You must complete a few more steps before you can talk.")
         #expect(block?.button?.title == "Complete")
         #expect(block?.button?.action == .complete)
+    }
+
+    /// His rejoin (2026-11-19): a record that didn't carry `pending` had
+    /// replaced the one that did, and the bar never came.
+    @Test("An unapproved join request brings the Complete bar on its own")
+    func joinRequestWitnessesPending() {
+        let model = model(features: [SessionController.verificationFeature], isPending: false)
+        #expect(model.composerBlock(in: channelID) == nil)
+        model.ownJoinRequests[guildID] = OwnJoinRequest(guildID: guildID, status: .started)
+        #expect(model.composerBlock(in: channelID) == .completeSteps)
+        model.ownJoinRequests[guildID] = OwnJoinRequest(guildID: guildID, status: .approved)
+        #expect(model.composerBlock(in: channelID) == nil)
+    }
+
+    @Test("A record that doesn't say pending keeps what was known")
+    func pendingSurvivesASilentRecord() {
+        let pending = Member(userID: readerID, isPending: true)
+        var silent = Member(userID: readerID, roleIDs: [RoleID(rawValue: 5)])
+        silent.statesPending = false
+        let merged = silent.merged(over: pending)
+        #expect(merged.isPending)
+        #expect(merged.roleIDs == [RoleID(rawValue: 5)])
+        // One that does say so wins.
+        #expect(Member(userID: readerID, isPending: false).merged(over: pending).isPending == false)
     }
 
     @Test("An application in review, and a refused one, say so")
@@ -87,14 +117,67 @@ struct ComposerBlockTests {
         #expect(model.composerBlock(in: channelID, now: until.addingTimeInterval(1)) == nil)
     }
 
-    @Test("A member with any role is past the server's level, as in Discord")
+    @Test("A member with a role the server gave is past its level, as in Discord")
     func roleBypassesTheLevel() {
         let model = model(
             level: .veryHigh,
             roles: [RoleID(rawValue: 5)],
+            serverRoles: [Role(id: RoleID(rawValue: 5), name: "Member")],
             verification: AccountVerification(isEmailVerified: false, isPhoneVerified: false)
         )
         #expect(model.composerBlock(in: channelID) == nil)
+    }
+
+    /// Discord's check runs a level's requirements only for an account without
+    /// a verified phone — his image 242 (2026-11-19): a ten-minute bar in a
+    /// server where Discord showed none.
+    @Test("A verified phone skips every wait, as in Discord")
+    func verifiedPhoneSkipsTheLevel() {
+        let model = model(
+            level: .high,
+            joinedAt: .now.addingTimeInterval(-45),
+            verification: AccountVerification(isEmailVerified: true, isPhoneVerified: true)
+        )
+        #expect(model.composerBlock(in: channelID) == nil)
+    }
+
+    @Test("An integration's role doesn't count")
+    func managedRoleDoesntCount() {
+        let model = model(
+            level: .low,
+            roles: [RoleID(rawValue: 7)],
+            serverRoles: [Role(id: RoleID(rawValue: 7), name: "A Bot", isManaged: true)],
+            verification: AccountVerification(isEmailVerified: false, isPhoneVerified: false)
+        )
+        #expect(model.composerBlock(in: channelID) == .email)
+    }
+
+    /// Onboarding hands out roles, so in a server that has ever had it a role
+    /// proves nothing for anyone who joined after onboarding existed.
+    @Test("In an onboarding server, a newer member's role doesn't count")
+    func onboardingEraRoleDoesntCount() {
+        let after = Calendar.current.date(from: DateComponents(year: 2024, month: 1, day: 1))!
+        let before = Calendar.current.date(from: DateComponents(year: 2021, month: 1, day: 1))!
+        func block(joined: Date) -> ComposerBlock? {
+            model(
+                level: .low,
+                features: [AppModel.onboardingEverEnabledFeature],
+                roles: [RoleID(rawValue: 5)],
+                serverRoles: [Role(id: RoleID(rawValue: 5), name: "Member")],
+                joinedAt: joined,
+                verification: AccountVerification(isEmailVerified: false, isPhoneVerified: false)
+            ).composerBlock(in: channelID)
+        }
+        #expect(block(joined: after) == .email)
+        #expect(block(joined: before) == nil)
+    }
+
+    @Test("The member wait counts from the server's own joined-at")
+    func memberWaitUsesTheServersJoin() throws {
+        let joined = Date.now.addingTimeInterval(-60)
+        let model = model(level: .high, joinedAt: .distantPast, serverJoinedAt: joined)
+        let block = try #require(model.composerBlock(in: channelID))
+        #expect(block == .memberAge(until: joined.addingTimeInterval(AppModel.memberAgeRequirement)))
     }
 
     @Test("Without the reader's own record, nothing is guessed")

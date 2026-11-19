@@ -24,7 +24,10 @@ struct JoinApplicationSheet: View {
     @State private var phase = Phase.loading
     @State private var application: JoinApplication?
     /// The rules with their markdown resolved, parsed once when the form lands.
-    @State private var rules: [AttributedString] = []
+    /// The rules as the server wrote them: Discord markdown, drawn by
+    /// `ProseText` so a channel, a role, a person, an emoji, a link or a
+    /// timestamp in one reads as it does in a message.
+    @State private var rules: [String] = []
     @State private var isSubmitting = false
     @State private var failure: String?
     @State private var isConfirmingClose = false
@@ -221,10 +224,14 @@ struct JoinApplicationSheet: View {
                     Text("\(index + 1).")
                         .foregroundStyle(Ink.tertiary)
                         .monospacedDigit()
-                    Text(rule)
-                        .foregroundStyle(Ink.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ProseText(
+                        markdown: rule,
+                        font: .system(.body),
+                        color: InkColor.primary,
+                        mentions: model.joinMentionContext(for: request.guildID),
+                        onLink: { model.openLink($0) }
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .font(.system(.body))
                 .padding(.horizontal, Spacing.tight)
@@ -334,7 +341,7 @@ struct JoinApplicationSheet: View {
                 request.guildID,
                 inviteCode: request.inviteCode
             )
-            rules = form.rules.map(Self.attributed)
+            rules = form.rules
             application = JoinApplication(form: form)
             if let requirement = requirement(for: form),
                model.accountVerification?.meets(requirement) == false
@@ -374,14 +381,6 @@ struct JoinApplicationSheet: View {
         model.joinApplicationRequest = nil
     }
 
-    /// A rule's `**bold**` and links resolved; the plain sentence where the
-    /// markdown does not parse — a rule with asterisks in it is still a rule.
-    nonisolated private static func attributed(_ markdown: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: markdown,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(markdown)
-    }
 }
 
 private extension View {

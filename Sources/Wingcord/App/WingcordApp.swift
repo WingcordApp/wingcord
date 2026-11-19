@@ -120,6 +120,7 @@ struct WingcordApp: App {
                 .presentsCallFullScreen()
                 .presentsMedia()
                 .presentsMessageActions()
+                .modifier(OrbVoidPresenter())
                 // **Before the profiles**, so a profile opened from one of its
                 // rows comes up over it (decision 22).
                 // The running activity, small, while its own place is off screen.

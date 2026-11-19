@@ -291,7 +291,7 @@ struct MemberDTO: Decodable, Sendable {
             nameplate: collectibles?.nameplate?.domain,
             displayNameStyle: display_name_styles?.domain
         )
-        return Member(
+        var member = Member(
             userID: userID,
             nickname: nick,
             avatarHash: avatar,
@@ -304,6 +304,10 @@ struct MemberDTO: Decodable, Sendable {
             unusualDMActivityUntil: unusual_dm_activity_until,
             cosmetics: cosmetics.isEmpty ? nil : cosmetics
         )
+        // Discord leaves `pending` out of every non-`GUILD_` payload; an
+        // absent one keeps what was known (`Member.merged(over:)`).
+        member.statesPending = pending != nil
+        return member
     }
 }
 
@@ -461,7 +465,9 @@ extension ChannelDTO {
             id: id,
             name: name ?? "",
             messageCount: message_count ?? total_message_sent ?? 0,
-            isArchived: thread_metadata?.archived ?? false
+            isArchived: thread_metadata?.archived ?? false,
+            lastMessageID: last_message_id,
+            createdAt: thread_metadata?.create_timestamp
         )
     }
 }
@@ -653,6 +659,9 @@ struct ThreadListSyncDTO: Decodable, Sendable {
     var channel_ids: [ChannelID]?
     var threads: [ChannelDTO]?
     var members: [ThreadMemberDTO]?
+    /// Each active thread's newest message — what its card in the parent
+    /// channel draws (sent because the guild is subscribed with `threads`).
+    var most_recent_messages: LossyList<MessageDTO>?
 }
 
 /// `THREAD_MEMBER_UPDATE` — our own membership of one thread.

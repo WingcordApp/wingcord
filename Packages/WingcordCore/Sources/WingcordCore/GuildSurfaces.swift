@@ -89,6 +89,9 @@ public struct ServerGuide: Hashable, Sendable {
         public var emojiID: EmojiID?
         public var emojiName: String?
         public var isEmojiAnimated: Bool
+        /// A picture the server uploaded for the step — drawn before its emoji
+        /// (`getNewMemberActionIconURL`).
+        public var iconHash: String?
 
         public init(
             id: Int,
@@ -98,8 +101,10 @@ public struct ServerGuide: Hashable, Sendable {
             detail: String? = nil,
             emojiID: EmojiID? = nil,
             emojiName: String? = nil,
-            isEmojiAnimated: Bool = false
+            isEmojiAnimated: Bool = false,
+            iconHash: String? = nil
         ) {
+            self.iconHash = iconHash
             self.id = id
             self.channelID = channelID
             self.kind = kind
@@ -130,12 +135,31 @@ public struct ServerGuide: Hashable, Sendable {
         public var channelID: ChannelID
         public var title: String
         public var detail: String?
+        /// A picture the server uploaded for it — Rockstar's R★, for one
+        /// (`getResourceChannelIconURL`).
+        public var iconHash: String?
+        public var emojiID: EmojiID?
+        public var emojiName: String?
+        public var isEmojiAnimated: Bool
 
-        public init(id: Int, channelID: ChannelID, title: String, detail: String? = nil) {
+        public init(
+            id: Int,
+            channelID: ChannelID,
+            title: String,
+            detail: String? = nil,
+            iconHash: String? = nil,
+            emojiID: EmojiID? = nil,
+            emojiName: String? = nil,
+            isEmojiAnimated: Bool = false
+        ) {
             self.id = id
             self.channelID = channelID
             self.title = title
             self.detail = detail
+            self.iconHash = iconHash
+            self.emojiID = emojiID
+            self.emojiName = emojiName
+            self.isEmojiAnimated = isEmojiAnimated
         }
     }
 }

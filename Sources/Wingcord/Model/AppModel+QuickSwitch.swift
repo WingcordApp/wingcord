@@ -559,14 +559,19 @@ extension AppModel {
             )
         }
         guard let guildID = channel.guildID else { return nil }
+        let guild = guilds[guildID]
         return QuickSwitchRow(
             target: .channel(channelID),
             title: displayName(of: channel),
             label: channel.parentID.flatMap { channelIndex[$0]?.name },
-            trailing: guilds[guildID]?.name,
+            trailing: guild?.name,
             symbolName: channel.kind.symbolName,
             mentionCount: state.muted ? 0 : state.mentions,
-            isUnread: !state.muted && state.unread
+            isUnread: !state.muted && state.unread,
+            serverIconURL: guild?.iconHash.flatMap {
+                CDN.guildIcon(guildID: guildID, hash: $0, side: QuickSwitcher.tileSide)
+            },
+            serverMonogram: guild?.monogram
         )
     }
 

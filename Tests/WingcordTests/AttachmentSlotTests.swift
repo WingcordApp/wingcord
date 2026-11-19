@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CoreGraphics
 import Foundation
@@ -192,25 +193,50 @@ struct AttachmentSlotTests {
         let slot = slot(attachment(name: "notes.zip", type: "application/zip", size: 4_096_000))
         #expect(slot?.kind == AttachmentSlot.Kind.file)
         #expect(slot?.url == nil)
-        #expect(slot?.rect.height == TimelineMetrics.fileCardHeight)
+        #expect(slot?.rect.height == TimelineMetrics.fileTileHeight)
         #expect(slot?.fileKind == .archive)
         #expect(slot?.sizeLabel.isEmpty == false)
+        #expect(slot?.fileExtension == "zip")
+        #expect(slot?.attachmentID != nil)
     }
 
-    /// Discord's `.fileWrapper{width:432px;max-width:100%}`, and its hover
-    /// group hanging 8 past the top-right corner.
-    @Test("A file card is Discord's: 432 wide, 72 tall, Download past its corner")
+    /// The file card (docs/BETA3.md §7, R8): 400 wide at most, 64 tall, its
+    /// one round button inside the card at the trailing edge.
+    @Test("A file card is the tile: 400 wide, 64 tall, its button inside")
     func fileCardGeometry() throws {
         let wide = try #require(slot(attachment(name: "app-icons.txt", type: "text/plain", size: 14_000), width: 900))
-        #expect(wide.rect.width == 432)
-        #expect(wide.rect.height == 72)
+        #expect(wide.rect.width == 400)
+        #expect(wide.rect.height == 64)
         #expect(wide.fileKind == .document)
         let button = try #require(wide.downloadRect)
         #expect(button.size == CGSize(width: 32, height: 32))
-        #expect(button.maxX == wide.rect.maxX + 8)
-        #expect(button.minY == wide.rect.minY - 8)
+        #expect(wide.rect.contains(button))
+        #expect(button.maxX == wide.rect.maxX - TimelineMetrics.fileTileInset)
+        #expect(abs(button.midY - wide.rect.midY) < 0.5)
         let narrow = try #require(slot(attachment(name: "a.zip", type: "application/zip", size: 1), width: 300))
-        #expect(narrow.rect.width < 432)
+        #expect(narrow.rect.width < 400)
+    }
+
+    /// A long name gives up its middle, never its end: the extension and the
+    /// last few characters say what the file is.
+    @Test("A long name is shortened in the middle, keeping its extension")
+    func longNameKeepsItsEnd() {
+        let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        let name = "Screen_Shot_2021-01-12_at_10.24.50_AM_with_a_much_longer_tail.png"
+        let fitted = FileTileText.fitting(name, font: font, width: 160)
+        #expect(fitted.contains("…"))
+        #expect(fitted.hasSuffix("tail.png"))
+        #expect(FileTileText.measure(fitted, font: font) <= 160)
+        #expect(FileTileText.fitting("short.png", font: font, width: 160) == "short.png")
+    }
+
+    /// His image 245 (2026-11-19): a 2021 screenshot with no `content_type`,
+    /// drawn as a file card where Discord draws the picture.
+    @Test("A picture older than content_type is still a picture")
+    func untypedPictureIsAPicture() {
+        let slot = slot(attachment(name: "Screen_Shot_2021-01-12_at_10.24.50_AM.png", type: nil, width: 1200, height: 800))
+        #expect(slot?.kind == AttachmentSlot.Kind.image)
+        #expect(slot?.url != nil)
     }
 
     @Test("Every one of Discord's fourteen file icons is in the app")

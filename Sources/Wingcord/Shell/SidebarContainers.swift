@@ -67,9 +67,8 @@ struct SidebarColumnContent: View {
                     }
             }
         }
-        // Drawn HERE, outside the rail's own `ScrollView` — which clips — and on
-        // the one view wide enough to hold a chip beside the 68-point column.
-        .railHoverLabelHost()
+        // The rail's name chip is drawn by the window shell, over everything —
+        // see `WindowShell` and `RailHoverLabelHost`.
     }
 }
 

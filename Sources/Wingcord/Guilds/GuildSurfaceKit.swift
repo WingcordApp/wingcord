@@ -230,6 +230,10 @@ struct SurfaceGlyphView: View {
                 Image(symbol: name)
                     .font(.system(.callout))
                     .foregroundStyle(isEmphasised ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.tertiary))
+            case .picture(let url):
+                RemoteImage(url: url, side: Self.side) { Color.clear }
+                    .frame(width: Self.side, height: Self.side)
+                    .clipShape(.rect(cornerRadius: Self.side * 0.22, style: .continuous))
             }
         }
         .frame(width: Self.side, height: Self.side)

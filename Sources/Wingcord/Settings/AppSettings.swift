@@ -326,6 +326,36 @@ final class AppSettings {
         }
     }
 
+    /// Discover's Games tab where Discord hasn't turned it on for this account
+    /// (`2026-10-game-discovery`, docs/QUEUE-NOV19.md G1). **On unless the
+    /// reader turns it off** (Alex, 2026-11-19); Discord's own assignment
+    /// shows it regardless.
+    var showsGamesDiscovery = true {
+        didSet {
+            guard showsGamesDiscovery != oldValue else { return }
+            defaults.set(showsGamesDiscovery, forKey: Key.showsGamesDiscovery)
+        }
+    }
+
+    /// The Void where Discord hasn't opened it to this account
+    /// (`2026-10-orb-void`, docs/QUEUE-NOV19.md V1). Discord still decides
+    /// whether a throw counts ("The void is closed right now").
+    var showsOrbVoid = false {
+        didSet {
+            guard showsOrbVoid != oldValue else { return }
+            defaults.set(showsOrbVoid, forKey: Key.showsOrbVoid)
+        }
+    }
+
+    /// Whether the reader has accepted the Terms of The Void (Discord keeps
+    /// this per device too, in `OrbVoidStore`).
+    var hasAcceptedVoidTerms = false {
+        didSet {
+            guard hasAcceptedVoidTerms != oldValue else { return }
+            defaults.set(hasAcceptedVoidTerms, forKey: Key.hasAcceptedVoidTerms)
+        }
+    }
+
     /// Which card a voice invite gets: Discord's, or its channel-row variant —
     /// as Discord's experiment puts each server, or always one of them.
     var voiceInviteCardStyle: VoiceInviteCardStyle = .asDiscordDecides {
@@ -646,6 +676,28 @@ final class AppSettings {
     func lastPlace(forAccount accountID: String?) -> LastPlace? {
         if let accountID, let place = lastPlaces[accountID] { return place }
         return lastPlaces.isEmpty ? legacyLastPlace : nil
+    }
+
+    /// The channel each server was left on, per account and per server —
+    /// Discord's `SelectedChannelStore` keeps the same across launches, so a
+    /// server opened again lands where the reader was rather than at its top.
+    private var lastChannelsByGuild: [String: [String: UInt64]] = [:]
+
+    /// This account's remembered channel in each server, by server.
+    func lastChannels(forAccount accountID: String?) -> [UInt64: UInt64] {
+        guard let accountID, let table = lastChannelsByGuild[accountID] else { return [:] }
+        var result: [UInt64: UInt64] = [:]
+        for (guild, channel) in table {
+            if let guildID = UInt64(guild) { result[guildID] = channel }
+        }
+        return result
+    }
+
+    /// Remembers the channel open in a server. Writes only when it moved.
+    func rememberChannel(_ channelID: UInt64, inGuild guildID: UInt64, account: String?) {
+        guard let account, lastChannelsByGuild[account]?[String(guildID)] != channelID else { return }
+        lastChannelsByGuild[account, default: [:]][String(guildID)] = channelID
+        defaults.set(try? JSONEncoder().encode(lastChannelsByGuild), forKey: Key.lastChannelsByGuild)
     }
 
     /// Records where the reader is. Cheap enough to call on every navigation:
@@ -1806,6 +1858,9 @@ final class AppSettings {
         blockedRPCApplications = defaults.dictionary(forKey: Key.blockedRPCApplications) as? [String: String] ?? [:]
         drawsCustomTypingIndicators = defaults.object(forKey: Key.drawsCustomTypingIndicators) as? Bool ?? true
         showsServerHub = defaults.object(forKey: Key.showsServerHub) as? Bool ?? true
+        showsGamesDiscovery = defaults.object(forKey: Key.showsGamesDiscovery) as? Bool ?? true
+        showsOrbVoid = defaults.object(forKey: Key.showsOrbVoid) as? Bool ?? false
+        hasAcceptedVoidTerms = defaults.object(forKey: Key.hasAcceptedVoidTerms) as? Bool ?? false
         voiceInviteCardStyle = defaults.string(forKey: Key.voiceInviteCardStyle)
             .flatMap(VoiceInviteCardStyle.init(rawValue:)) ?? .asDiscordDecides
         customPresences = defaults.data(forKey: Key.customPresences)
@@ -1829,6 +1884,8 @@ final class AppSettings {
         }
         lastPlaces = defaults.data(forKey: Key.lastPlaces)
             .flatMap { try? JSONDecoder().decode([String: LastPlace].self, from: $0) } ?? [:]
+        lastChannelsByGuild = defaults.data(forKey: Key.lastChannelsByGuild)
+            .flatMap { try? JSONDecoder().decode([String: [String: UInt64]].self, from: $0) } ?? [:]
         showsUnreadCounts = defaults.object(forKey: Key.showsUnreadCounts) as? Bool ?? true
         postsNotifications = defaults.object(forKey: Key.postsNotifications) as? Bool ?? true
         playsNotificationSound = defaults.object(forKey: Key.notificationSound) as? Bool ?? true
@@ -1968,6 +2025,7 @@ final class AppSettings {
         static let lastGuild = "startup.lastGuildID"
         static let lastChannel = "startup.lastChannelID"
         static let lastPlaces = "startup.lastPlaces"
+        static let lastChannelsByGuild = "startup.lastChannelsByGuild"
         static let showsUnreadCounts = "notifications.showsUnreadCounts"
         static let postsNotifications = "notifications.posts"
         static let notificationSound = "notifications.sound"
@@ -2032,6 +2090,9 @@ final class AppSettings {
         static let blockedRPCApplications = "activity.blockedRPCApplications"
         static let drawsCustomTypingIndicators = "previews.customTypingIndicators"
         static let showsServerHub = "previews.serverHub"
+        static let showsGamesDiscovery = "previews.gamesDiscovery"
+        static let showsOrbVoid = "previews.orbVoid"
+        static let hasAcceptedVoidTerms = "orbVoid.acceptedTerms"
         static let voiceInviteCardStyle = "previews.voiceInviteCardStyle"
         static let silentTyping = "silentTyping.enabled"
         static let silentTypingShowsIcon = "silentTyping.showIcon"

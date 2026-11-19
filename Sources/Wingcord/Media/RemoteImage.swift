@@ -144,6 +144,9 @@ struct AvatarView: View {
     /// is the thing the reader came to look at. A list passes its pointer, so
     /// a decoration moves only on the row under it.
     var decorationAnimates = true
+    /// Leaves the face's place empty while the decoration stays — the face is
+    /// in the viewer, flown out of here (`MediaFlightSource`).
+    var hidesFace = false
 
     @Environment(\.motion) private var motion
     /// The reader's own animation preference. Its label names avatars, so it
@@ -225,6 +228,7 @@ struct AvatarView: View {
         .onChange(of: animates) { faceIsPlaying = false }
         .frame(width: side, height: side)
         .clipShape(.circle)
+        .opacity(hidesFace ? 0 : 1)
         .overlay {
             if let decorationURL {
                 // **Two layers, and the still one is taken away once the film

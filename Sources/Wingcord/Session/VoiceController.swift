@@ -484,7 +484,8 @@ final class VoiceController {
             model.identityRevision &+= 1
         }
         if let member, let guildID = state.guildID {
-            model.members[guildID, default: [:]][member.userID] = member
+            // A voice state's member says nothing about being pending.
+            model.members[guildID, default: [:]][member.userID] = member.merged(over: model.members[guildID]?[member.userID])
             model.memberRevision &+= 1
         }
 
@@ -726,7 +727,7 @@ final class VoiceController {
         }
 
         if !members.isEmpty {
-            model.members[guildID, default: [:]].merge(members) { _, new in new }
+            model.members[guildID, default: [:]].merge(members) { old, new in new.merged(over: old) }
             model.memberRevision &+= 1
         }
         if !users.isEmpty {

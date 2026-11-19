@@ -62,6 +62,26 @@ struct GuildSurfaceTests {
         #expect(value.resources[0].title == "Rules & Roles")
     }
 
+    @Test("A resource's uploaded icon and emoji, and a step's icon, are read")
+    func guideIcons() throws {
+        let json = """
+        {"guild_id":"42","enabled":true,"welcome_message":{"author_ids":[],"message":""},
+         "new_member_actions":[{"channel_id":"7","action_type":0,"title":"Read","icon":"abc"}],
+         "resource_channels":[
+           {"channel_id":"8","title":"LFG How To","description":"","icon":"a_def"},
+           {"channel_id":"9","title":"Links","description":"","emoji":{"id":"12","name":"rstar","animated":true}}]}
+        """
+        let value = try guide(json, 42)
+        #expect(value.actions[0].iconHash == "abc")
+        #expect(value.resources[0].iconHash == "a_def")
+        #expect(value.resources[1].emojiID == EmojiID(rawValue: 12))
+        #expect(value.resources[1].isEmojiAnimated)
+        #expect(CDN.guideIcon(kind: .resource, channelID: ChannelID(rawValue: 8), hash: "a_def")?.absoluteString
+            == "https://cdn.discordapp.com/resource-channels/8/a_def.gif?size=128")
+        #expect(CDN.guideIcon(kind: .step, channelID: ChannelID(rawValue: 7), hash: "abc")?.absoluteString
+            == "https://cdn.discordapp.com/new-member-actions/7/abc.png?size=128")
+    }
+
     /// `""` and `null` are used interchangeably across these routes, and a
     /// surface that only checks for nil reserves a line for words that will
     /// never arrive.

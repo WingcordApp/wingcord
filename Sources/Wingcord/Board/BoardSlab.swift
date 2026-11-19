@@ -347,10 +347,19 @@ struct GameCover: View {
         if game.coverURL == nil {
             plate
         } else if game.isCoverArt {
-            // Real box art fills the frame. Cropped rather than letterboxed —
-            // IGDB's covers vary a little either side of 3:4 and a black bar is
-            // worse than two lost pixels.
-            image(side: referenceWidth * 2).aspectRatio(contentMode: .fill)
+            // **Box art shown whole.** A 3:4 cover fills the frame exactly, as
+            // before; one of another shape — GTA V's is far wider — sits on a
+            // blurred copy of itself instead of being cropped into what read as
+            // a zoom (Alex, 2026-11-19). No black bars either way.
+            ZStack {
+                image(side: 96)
+                    .aspectRatio(contentMode: .fill)
+                    .blur(radius: referenceWidth * 0.12, opaque: true)
+                    .saturation(1.3)
+                    .overlay(Color.black.opacity(0.18))
+                image(side: referenceWidth * 2)
+                    .aspectRatio(contentMode: .fit)
+            }
         } else {
             // **A square icon standing in for a cover.** Centred at 62% on a
             // blurred, brightened copy of itself, which is how a store makes a

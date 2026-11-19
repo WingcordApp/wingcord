@@ -170,6 +170,8 @@ extension SettingsSearch {
         .init(.connections, "Remove this app's access"),
         .init(.experiments, "Custom typing indicators", "Shows the emoji and word someone picked for their typing indicator, as Discord’s phone apps do."),
         .init(.experiments, "Server Hub", "Shows a server’s Server Hub — its banner, leaderboard, popular games, whiteboard and more — where Discord has given the server one."),
+        .init(.experiments, "The Void", "Adds Enter The Void to the Void badge in the Badge Directory. Orbs thrown into it are destroyed, and Discord still decides whether your account can throw any."),
+        .init(.experiments, "Games in Discover", "Adds Discord’s Games tab to Discover — trending games, the ones you played, what your friends play, and game search — before Discord turns it on for your account."),
         .init(.experiments, "Voice invites", "Discord is trying a voice invite that looks like the channel in the sidebar."),
         .init(.privacySafety, "Sensitive media", "How pictures Discord flags as sensitive are shown to you."),
         .init(.privacySafety, "Age-restricted commands in direct messages", "Lets people over 18 use commands marked age-restricted in DMs. Applies to every app."),

@@ -257,6 +257,9 @@ struct ChannelSidebar: View, Equatable {
                 openMenu: { openMenu($0, $1) }
             )
             .selectionDisabled()
+        case .guideProgress(let progress):
+            SidebarGuideProgressRow(progress: progress) { openSurface(.serverGuide) }
+                .selectionDisabled()
         case .boostGoal(let goal):
             // Opens a flyout rather than going anywhere, as the events row
             // opens a panel.

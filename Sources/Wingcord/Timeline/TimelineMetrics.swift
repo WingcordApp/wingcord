@@ -180,6 +180,17 @@ nonisolated enum TimelineMetrics {
     /// corner 5, hanging 8 past the card's top-right corner.
     static let fileCardHoverButton: CGFloat = 32
     static let fileCardHoverOverhang: CGFloat = 8
+    /// The file card (docs/BETA3.md §7, R8): 400 wide at most and 64 tall, its
+    /// corner 14; the file's own Finder icon at 40, 12 in; the name over its
+    /// kind and size, 12 after the icon; and one round 32-point button 12 from
+    /// the trailing edge that carries the whole download.
+    static let fileTileMaxWidth: CGFloat = 400
+    static let fileTileHeight: CGFloat = 64
+    static let fileTileCorner: CGFloat = 14
+    static let fileTileInset: CGFloat = 12
+    static let fileTileIcon: CGFloat = 40
+    static let fileTileGap: CGFloat = 12
+    static let fileTileButton: CGFloat = 32
     /// An upload card's bar, and the cancel at its trailing edge — Discord's
     /// progress bar and its `md` close glyph.
     static let uploadBarHeight: CGFloat = 6
@@ -318,13 +329,24 @@ nonisolated enum TimelineMetrics {
     // invisible until it isn't.
     /// Between the chip and whatever is above it.
     static let threadChipGap: CGFloat = 8
-    static let threadChipHeight: CGFloat = 34
-    static let threadChipLeadingInset: CGFloat = 10
-    static let threadChipTrailingInset: CGFloat = 10
+    /// Two lines — the name and its count, then the newest message — as
+    /// Discord's card (docs/QUEUE-NOV19.md T1).
+    static let threadChipHeight: CGFloat = 54
+    static let threadChipLeadingInset: CGFloat = 12
+    static let threadChipTrailingInset: CGFloat = 12
     /// Between the name and the count beside it.
     static let threadChipLabelGap: CGFloat = 8
-    /// The chevron at the trailing edge, and the room it takes.
-    static let threadChipChevronRoom: CGFloat = 14
+    /// The first line's band, from the card's top.
+    static let threadChipTopInset: CGFloat = 8
+    static let threadChipLineHeight: CGFloat = 19
+    /// Between the two lines.
+    static let threadChipLineGap: CGFloat = 2
+    /// The newest message's face, as the reply header's.
+    static let threadChipFace: CGFloat = 16
+    /// Between the face, the name, the words and the time.
+    static let threadChipItemGap: CGFloat = 6
+    /// The narrowest a card is drawn, so a short name still reads as a card.
+    static let threadChipMinWidth: CGFloat = 240
     /// How far the chip is inset from the message's content column.
     ///
     /// **Indented, because the chip belongs to the message above it.** Discord
@@ -334,7 +356,7 @@ nonisolated enum TimelineMetrics {
     static let threadChipIndent: CGFloat = 0
     /// The widest a chip is drawn, so a long thread name does not stretch one
     /// across a maximised window.
-    static let threadChipMaxWidth: CGFloat = 420
+    static let threadChipMaxWidth: CGFloat = 480
 
     // A button an app attached. Layout and painter read the SAME constants —
     // two halves of one geometry, and drifting them is invisible until it isn't.

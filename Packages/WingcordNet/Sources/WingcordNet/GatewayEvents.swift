@@ -404,6 +404,13 @@ struct ReadyPayload: Decodable, Sendable {
     var session_id: String
     var resume_gateway_url: String?
     var guilds: [GuildDTO]?
+    /// **The reader's own member record in every server** — roles, joined-at,
+    /// pending, flags, a timeout — one list per guild, in `guilds` order.
+    /// `DEDUPE_USER_OBJECTS` moves members out of the guild objects and into
+    /// here, and nothing read it: every server began as if the reader held no
+    /// roles until a member list or a request filled them in ("after READY, 97
+    /// of 97 servers have no own member record", his log, 2026-11-19).
+    var merged_members: MergedMembers?
     var private_channels: [ChannelDTO]?
     var read_state: ReadStateEnvelope?
     var user_settings: ClientSettingsDTO?
@@ -472,6 +479,35 @@ struct ReadyPayload: Decodable, Sendable {
 
         init(from decoder: any Decoder) throws {
             requests = (try? LossyList<OwnJoinRequestDTO>(from: decoder))?.elements ?? []
+        }
+    }
+
+    /// **Never the reason READY fails, and positional to the end.** A list
+    /// that can't be read is kept as an empty one, so every list after it
+    /// stays under its own server; a member that can't be read is dropped.
+    struct MergedMembers: Decodable, Sendable {
+        /// Index `i` is guild `i` of `guilds`.
+        var lists: [[MemberDTO]]
+
+        init(from decoder: any Decoder) throws {
+            var lists: [[MemberDTO]] = []
+            if var outer = try? decoder.unkeyedContainer() {
+                while !outer.isAtEnd {
+                    if let list = try? outer.decode(LossyList<MemberDTO>.self) {
+                        lists.append(list.elements)
+                    } else if (try? outer.decode(Skipped.self)) != nil {
+                        lists.append([])
+                    } else {
+                        break
+                    }
+                }
+            }
+            self.lists = lists
+        }
+
+        /// Reads anything, so a failed list's place is stepped over.
+        private struct Skipped: Decodable {
+            init(from decoder: any Decoder) throws {}
         }
     }
 

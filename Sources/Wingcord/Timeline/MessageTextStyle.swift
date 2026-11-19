@@ -396,7 +396,11 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         style.firstLineHeadIndent = codeBlockPadding
         style.headIndent = codeBlockPadding
         style.tailIndent = -codeBlockPadding
-        style.lineBreakMode = .byCharWrapping
+        // **At spaces, as Discord's `pre-wrap` does** — "…and not / outside
+        // of this Section" rather than "…outside of t / his" (his images 238
+        // and 240, 2026-11-19). A word longer than the line still breaks
+        // inside itself: word wrapping falls back to characters for that.
+        style.lineBreakMode = .byWordWrapping
         return style
     }
 

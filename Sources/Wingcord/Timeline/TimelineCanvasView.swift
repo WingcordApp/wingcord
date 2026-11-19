@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import UniformTypeIdentifiers
 import WingcordCore
 
 /// The view that paints the transcript.
@@ -349,6 +350,15 @@ final class TimelineCanvasView: NSView {
     /// How far each of the reader's uploads has got, by its echo's id — see
     /// `apply(uploadProgress:)`.
     private var uploadProgress: [MessageID: Double] = [:]
+    /// Every file card's download, by attachment — paint state, as uploads
+    /// are. See `apply(fileTransfers:)`.
+    private var fileTransfers: [AttachmentID: FileTransferState] = [:]
+    /// Repaints the rows whose check is popping in, for the instant it takes.
+    private var transferLink: CADisplayLink?
+    /// A press on a file card, held until the mouse comes up (Quick Look) or
+    /// moves far enough to drag the file out — highlighted on the press,
+    /// committed on the release, as a click should be.
+    private var pendingFilePress: (rowID: MessageID, attachment: Int, point: CGPoint)?
     /// Suppressed while a scroll is running. `.onContinuousHover`-shaped work is
     /// worst exactly during a scroll: a trackpad flick moves no pointer at all
     /// yet drags every row in the list underneath a stationary one, so the
@@ -428,6 +438,13 @@ final class TimelineCanvasView: NSView {
     var onJumpToForwarded: ((ForwardJump) -> Void)?
     /// A file card's Download, by message and attachment.
     var onDownloadAttachment: ((MessageID, Int) -> Void)?
+    /// A click on a file card itself: Quick Look.
+    var onPreviewFile: ((MessageID, Int) -> Void)?
+    /// The file a card stands for — for a drag out, which promises the file
+    /// itself, and for its menu.
+    var fileAttachment: ((MessageID, Int) -> WingcordCore.Attachment?)?
+    /// A file card's menu was chosen from.
+    var onFileMenuAction: ((MessageID, Int, FileCardAction) -> Void)?
     /// Stars or un-stars a GIF in the transcript.
     var onToggleFavoriteGIF: ((GIF) -> Void)?
     /// Starts or stops a music card's thirty-second clip.
@@ -860,6 +877,48 @@ final class TimelineCanvasView: NSView {
             guard let index = rows.firstIndex(where: { $0.messageID == id }) else { continue }
             setNeedsDisplay(rowFrame(at: index))
         }
+    }
+
+    /// The file cards' downloads: only the rows carrying a file whose state
+    /// moved repaint, and a check that just landed pops in on a short link.
+    func apply(fileTransfers transfers: [AttachmentID: FileTransferState]) {
+        guard transfers != fileTransfers else { return }
+        let moved = Set(transfers.keys).union(fileTransfers.keys).filter { transfers[$0] != fileTransfers[$0] }
+        fileTransfers = transfers
+        for index in rows.indices {
+            guard case .message(let message) = rows[index].kind,
+                  message.attachments.contains(where: { $0.attachmentID.map(moved.contains) ?? false })
+            else { continue }
+            setNeedsDisplay(rowFrame(at: index))
+        }
+        reconcileTransferLink()
+    }
+
+    private func reconcileTransferLink() {
+        let popping = fileTransfers.values.contains { state in
+            guard state.isFresh, let at = state.savedAt else { return false }
+            return Date().timeIntervalSince(at) < TimelineRowPainter.checkPopDuration
+        }
+        if popping, window != nil {
+            guard transferLink == nil else { return }
+            let link = displayLink(target: self, selector: #selector(stepFileTransfers))
+            link.add(to: .main, forMode: .common)
+            transferLink = link
+        } else if let link = transferLink {
+            link.invalidate()
+            transferLink = nil
+        }
+    }
+
+    @objc private func stepFileTransfers(_ link: CADisplayLink) {
+        let fresh = Set(fileTransfers.compactMap { id, state in state.isFresh ? id : nil })
+        for index in visibleRowRange() {
+            guard case .message(let message) = rows[index].kind,
+                  message.attachments.contains(where: { $0.attachmentID.map(fresh.contains) ?? false })
+            else { continue }
+            setNeedsDisplay(rowFrame(at: index))
+        }
+        reconcileTransferLink()
     }
 
     func apply(activityAccents accents: [ApplicationID: ActivityCardTint]) {
@@ -1879,6 +1938,13 @@ final class TimelineCanvasView: NSView {
                         }
                     }
                 }
+                if case .message(let message) = row.kind, !fileTransfers.isEmpty {
+                    for (position, slot) in message.attachments.enumerated() where slot.kind == .file {
+                        if let id = slot.attachmentID, let transfer = fileTransfers[id] {
+                            state.fileTransfers[position] = transfer
+                        }
+                    }
+                }
                 if case .message(let message) = row.kind, let upload = message.upload {
                     state.uploadProgress = uploadProgress[message.id] ?? 0
                     state.isUploadCancelHovered = state.isHovered
@@ -2391,6 +2457,12 @@ final class TimelineCanvasView: NSView {
             // two open the full player. A clip keeps the viewer, whose bar
             // carries its moments.
             let slot = row.attachments[attachmentIndex]
+            // A file card commits on the release — Quick Look — so a press
+            // that moves can drag the file out instead.
+            if slot.kind == .file {
+                pendingFilePress = (row.id, attachmentIndex, point)
+                return
+            }
             if slot.kind == .video, slot.clip == nil, event.clickCount < 2, let onPlayAttachmentVideo {
                 onPlayAttachmentVideo(row.id, attachmentIndex, slot.rect.offsetBy(dx: frame.minX, dy: frame.minY))
                 return
@@ -2636,6 +2708,14 @@ final class TimelineCanvasView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if let press = pendingFilePress {
+            let point = convert(event.locationInWindow, from: nil)
+            if hypot(point.x - press.point.x, point.y - press.point.y) > 4 {
+                pendingFilePress = nil
+                beginFileDrag(rowID: press.rowID, attachment: press.attachment, at: point, event: event)
+            }
+            return
+        }
         // The pointer's height doesn't matter once it's holding the bars.
         if let voiceScrub {
             let point = convert(event.locationInWindow, from: nil)
@@ -2656,6 +2736,11 @@ final class TimelineCanvasView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if let press = pendingFilePress {
+            pendingFilePress = nil
+            onPreviewFile?(press.rowID, press.attachment)
+            return
+        }
         if voiceScrub != nil {
             voiceScrub = nil
             return
@@ -2814,11 +2899,63 @@ final class TimelineCanvasView: NSView {
         }
         // A right-click on somebody's name or face is about them rather than
         // the message — Discord's member menu, beside what was clicked.
-        if case .person(let userID, let rect)? = target(in: row, at: point, rowIndex: index) {
+        switch target(in: row, at: point, rowIndex: index) {
+        case .person(let userID, let rect)?:
             onOpenPersonMenu?(userID, rect)
             return
+        case .attachment(let attachmentIndex, false)?, .downloadAttachment(let attachmentIndex, _)?:
+            if row.attachments[attachmentIndex].kind == .file {
+                showFileMenu(rowID: row.id, attachment: attachmentIndex, event: event)
+                return
+            }
+        default:
+            break
         }
         onOpenMenu?(row.id, CGRect(origin: point, size: CGSize(width: 1, height: 1)))
+    }
+
+    // MARK: File cards
+
+    /// A file card's menu — Quick Look, Open, Download, Save As…, Show in
+    /// Finder, Copy Link — the system's, as the Finder's is for a file. It's
+    /// also the alternative to dragging the file out that the HIG asks for.
+    private func showFileMenu(rowID: MessageID, attachment index: Int, event: NSEvent) {
+        let menu = NSMenu()
+        let isSaved = fileAttachment?(rowID, index).flatMap { fileTransfers[$0.id]?.savedURL } != nil
+        let entries: [(String, FileCardAction)] = [
+            ("Quick Look", .quickLook),
+            ("Open", .open),
+            (isSaved ? "Download Again" : "Download", .download),
+            ("Save As…", .saveAs),
+        ] + (isSaved ? [("Show in Finder", .showInFinder)] : []) + [("Copy Link", .copyLink)]
+        for (title, action) in entries {
+            let item = NSMenuItem(title: title, action: #selector(fileMenuChose(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = FileMenuChoice(rowID: rowID, attachment: index, action: action)
+            menu.addItem(item)
+            if action == .saveAs { menu.addItem(.separator()) }
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func fileMenuChose(_ sender: NSMenuItem) {
+        guard let choice = sender.representedObject as? FileMenuChoice else { return }
+        onFileMenuAction?(choice.rowID, choice.attachment, choice.action)
+    }
+
+    /// A file card dragged out: a promise of the file itself, kept by
+    /// downloading it to wherever it's dropped.
+    private func beginFileDrag(rowID: MessageID, attachment index: Int, at point: CGPoint, event: NSEvent) {
+        guard let attachment = fileAttachment?(rowID, index) else { return }
+        let promise = AttachmentFilePromise(attachment: attachment)
+        let provider = NSFilePromiseProvider(fileType: promise.fileTypeIdentifier, delegate: promise)
+        let item = NSDraggingItem(pasteboardWriter: provider)
+        let ext = WingcordCore.Attachment.extensionOf(attachment.filename) ?? ""
+        let icon = NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data)
+        icon.size = NSSize(width: 48, height: 48)
+        item.setDraggingFrame(NSRect(x: point.x - 24, y: point.y - 24, width: 48, height: 48), contents: icon)
+        let session = beginDraggingSession(with: [item], event: event, source: self)
+        session.animatesToStartingPositionsOnCancelOrFail = true
     }
 
     // MARK: Hit testing
@@ -3890,5 +4027,34 @@ final class TimelineDocumentView: NSView {
     /// view having to forward them.
     override func hitTest(_ point: NSPoint) -> NSView? {
         super.hitTest(point)
+    }
+}
+
+// MARK: - Dragging a file card out
+
+extension TimelineCanvasView: NSDraggingSource {
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        .copy
+    }
+}
+
+/// What a file card's menu offers.
+enum FileCardAction: Sendable {
+    case quickLook, open, download, saveAs, showInFinder, copyLink
+}
+
+/// A file card's menu item, carried on the item.
+private final class FileMenuChoice: NSObject {
+    let rowID: MessageID
+    let attachment: Int
+    let action: FileCardAction
+
+    init(rowID: MessageID, attachment: Int, action: FileCardAction) {
+        self.rowID = rowID
+        self.attachment = attachment
+        self.action = action
     }
 }

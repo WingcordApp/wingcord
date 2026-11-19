@@ -1681,6 +1681,10 @@ struct ProfileAvatar: View {
     var dotSide: CGFloat
     /// Nil where the avatar opens nothing — the full profile is already open.
     var openFullProfile: (() -> Void)?
+    /// Opens the picture in the viewer, flown out of its circle — the full
+    /// profile's, where the avatar has nothing else to open (docs/BETA3.md §7,
+    /// R13). Nil leaves it a picture.
+    var viewPicture: (() -> Void)? = nil
     /// **A parameter, because the two surfaces are two sizes.** The card is 320
     /// wide and the full profile's identity panel is 360, and an avatar that
     /// looked right on the first is small on the second. Every number below —
@@ -1692,6 +1696,9 @@ struct ProfileAvatar: View {
     /// one**: the card's margin is 16 and the identity panel's is 26, and the
     /// hole in the artwork has to land where the avatar does under both.
     var leading: CGFloat = Spacing.margin
+
+    /// Whether the picture is in the viewer, its circle left empty.
+    @State private var isPictureLifted = false
 
     /// The gap the cut-out leaves around the avatar, per edge.
     static let ringGap: CGFloat = 5
@@ -1753,7 +1760,8 @@ struct ProfileAvatar: View {
             // **Both profile surfaces, always.** This is the one face the reader
             // opened a card to look at; the roster's hover gate is about a
             // column of them, and there is no column here.
-            animates: true
+            animates: true,
+            hidesFace: isPictureLifted
         )
         if let openFullProfile {
             Button(action: openFullProfile) {
@@ -1762,6 +1770,22 @@ struct ProfileAvatar: View {
             .buttonStyle(.plain)
             .accessibilityLabel(Text(profile.displayName))
             .accessibilityHint("Open the full profile")
+        } else if let viewPicture, profile.avatarURL != nil {
+            Button(action: viewPicture) {
+                art.contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .background {
+                MediaFlightSource(
+                    key: ProfilePicture.avatar.sourceKey(for: profile.userID),
+                    cornerRadius: side / 2,
+                    cropsToFill: true,
+                    isLifted: $isPictureLifted
+                )
+                .frame(width: side, height: side)
+            }
+            .accessibilityLabel(Text("\(profile.displayName)’s profile picture"))
+            .accessibilityHint("Opens it full size")
         } else {
             art
         }

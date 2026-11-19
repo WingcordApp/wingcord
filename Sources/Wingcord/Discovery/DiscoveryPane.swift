@@ -62,6 +62,13 @@ struct DiscoveryPane: View {
     /// `Metrics.discoveryColumn` for why it is wider than every other surface.
     private static let measure = Metrics.discoveryColumn
 
+    @Environment(AppModel.self) private var model
+
+    /// The tabs this account has: Games only where it is offered.
+    private var tabs: [DiscoveryState.Tab] {
+        DiscoveryState.Tab.allCases.filter { $0 != .games || model.offersGamesDiscovery }
+    }
+
     var body: some View {
         // **A stack of two under one view type**, which is the same rule §1
         // states for the detail column itself: internal `_ConditionalContent`
@@ -106,7 +113,21 @@ struct DiscoveryPane: View {
         appCards.first { $0.id == openStoreID }?.name ?? ""
     }
 
+    @ViewBuilder
     private var browse: some View {
+        if tab == .games, model.offersGamesDiscovery {
+            GamesDiscoveryView(query: query)
+                .readingSurface()
+                .floatingTopBar {
+                    DiscoveryToolbar(tab: $tab, tabs: tabs, query: $query, dismiss: dismiss) { middle }
+                }
+                .animation(motion.standard, value: tab)
+        } else {
+            serversAndApps
+        }
+    }
+
+    private var serversAndApps: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Spacing.group) {
                 grid
@@ -120,7 +141,7 @@ struct DiscoveryPane: View {
         .softScrollEdgesVertical()
         .readingSurface()
         .floatingTopBar {
-            DiscoveryToolbar(tab: $tab, query: $query, dismiss: dismiss) { middle }
+            DiscoveryToolbar(tab: $tab, tabs: tabs, query: $query, dismiss: dismiss) { middle }
         }
         .animation(motion.standard, value: tab)
         .animation(motion.standard, value: showsFilters)
@@ -176,7 +197,21 @@ struct DiscoveryPane: View {
     /// value, one control at a time: see `DiscoveryFilterRow`.
     @ViewBuilder
     private var headings: some View {
-        if tab == .servers {
+        if tab == .games {
+            // Discord's two views of the Games tab.
+            SegmentedPicker(
+                options: [
+                    SegmentedPicker.Option(GamesDiscoveryState.Section.featured, "Featured"),
+                    SegmentedPicker.Option(GamesDiscoveryState.Section.trending, "Trending"),
+                ],
+                selection: Binding(
+                    get: { model.gamesDiscovery.section },
+                    set: { model.gamesDiscovery.section = $0 }
+                )
+            )
+            .fixedSize()
+            .accessibilityLabel(Text("Games view"))
+        } else if tab == .servers {
             if !categories.isEmpty {
                 SegmentedPicker(
                     options: [SegmentedPicker.Option(nil, "Featured")]
@@ -276,6 +311,7 @@ struct DiscoveryPane: View {
 /// moves when the field opens.
 private struct DiscoveryToolbar<Middle: View>: View {
     @Binding var tab: DiscoveryState.Tab
+    var tabs: [DiscoveryState.Tab]
     @Binding var query: String
     var dismiss: () -> Void
     /// The BUILT view, not the builder — an escaping `@ViewBuilder` stored on a
@@ -285,6 +321,7 @@ private struct DiscoveryToolbar<Middle: View>: View {
 
     /// Whether the field has the keyboard, in which case Escape is the field's.
     @State private var isSearchFocused = false
+    @Environment(AppModel.self) private var model
 
     private static var trailingAtWidest: CGFloat {
         Metrics.discoverySearchField + 2 * (SearchField.height + Spacing.base)
@@ -293,7 +330,7 @@ private struct DiscoveryToolbar<Middle: View>: View {
     var body: some View {
         PageHeaderBar(wrapsCenter: true, reservedTrailing: Self.trailingAtWidest) {
             SegmentedPicker(
-                options: DiscoveryState.Tab.allCases.map {
+                options: tabs.map {
                     SegmentedPicker.Option($0, $0.title)
                 },
                 selection: $tab
@@ -311,7 +348,9 @@ private struct DiscoveryToolbar<Middle: View>: View {
                     side: SearchField.height,
                     action: dismiss
                 )
-                .keyboardShortcut(isSearchFocused ? nil : .cancelAction)
+                // Not while something is open over Discover — a game's
+                // profile, a person's — whose own Escape closes it.
+                .keyboardShortcut(isSearchFocused || model.escapeLayer != nil ? nil : .cancelAction)
             }
         }
     }

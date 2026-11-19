@@ -178,6 +178,10 @@ extension AppModel {
             if let quoted = message.message.reference?.authorID {
                 resolve(quoted, into: &result)
             }
+            // A thread card's newest message, by its author's name and face.
+            if let newest = message.message.thread?.latest?.authorID {
+                resolve(newest, into: &result)
+            }
             // AutoMod's card names two more: the person an app's modal was
             // shown to, and whoever switched Activity Alerts on — each only
             // where this client knows them, as Discord draws neither otherwise.

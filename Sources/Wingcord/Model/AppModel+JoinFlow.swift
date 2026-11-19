@@ -505,3 +505,13 @@ extension AppModel {
         return card
     }
 }
+
+extension AppModel {
+    /// The names a server's rules and questions resolve their mentions with:
+    /// the whole session's people where that server is the one open, its
+    /// channels and roles wherever it is.
+    func joinMentionContext(for guildID: GuildID) -> MentionContext {
+        let openGuild = selectedChannelID.flatMap { channelIndex.guildID(of: $0) }
+        return openGuild == guildID ? mentionContext() : mentionContext(inGuild: guildID)
+    }
+}

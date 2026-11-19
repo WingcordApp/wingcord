@@ -176,6 +176,9 @@ nonisolated enum TimelineRowPainter {
         /// How far an upload's files have got, 0...1 — the session's, and so
         /// painted rather than laid out. See `UploadCardSlot`.
         var uploadProgress: Double = 0
+        /// The downloads of this row's file cards, by attachment index — the
+        /// session's, and so painted rather than laid out (`FileTransfers`).
+        var fileTransfers: [Int: FileTransferState] = [:]
         /// Whether the pointer is on an upload card's cancel.
         var isUploadCancelHovered = false
         /// One frame of this author's moving avatar, or nil for the still —
@@ -796,11 +799,12 @@ nonisolated enum TimelineRowPainter {
                 favorite: state.hoveredAttachment == index
                     ? (state.isHoveredAttachmentFavorite ? .starred : .unstarred)
                     : nil,
-                // A file's Download, on the file the pointer is on — lit while
-                // it is on the button itself.
+                // A file card under the pointer, and whether the pointer is on
+                // its round button.
                 download: state.hoveredAttachment == index && slot.downloadRect != nil
                     ? state.hoveredComponent == slot.downloadRect?.origin
                     : nil,
+                transfer: state.fileTransfers[index],
                 voicePlayback: state.voicePlayback,
                 voiceHover: state.hoveredAttachment == index ? state.hoveredComponent : nil
             )
@@ -1008,6 +1012,8 @@ nonisolated enum TimelineRowPainter {
                 in: chip.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY),
                 context: context,
                 style: style,
+                images: images,
+                scale: scale,
                 isHovered: state.hoveredComponent == chip.rect.origin
             )
         }
@@ -1996,9 +2002,11 @@ nonisolated enum TimelineRowPainter {
         isLayered: Bool = false,
         clock: Double,
         favorite: FavoriteBadge?,
-        /// Whether a file card shows its Download — nil where it does not —
-        /// and whether the pointer is on it.
+        /// Whether the pointer is on a file card — nil where it is not — and
+        /// whether it is on the card's round button.
         download: Bool? = nil,
+        /// A file card's download, where one is under way or done.
+        transfer: FileTransferState? = nil,
         /// Where the voice notes stand, and which of a note's controls the pointer's on.
         voicePlayback: VoiceNotePlayback? = nil,
         voiceHover: CGPoint? = nil
@@ -2038,13 +2046,16 @@ nonisolated enum TimelineRowPainter {
             // The hosted card draws it.
             break
         case .file:
-            drawFileCard(slot, in: frame, context: context, style: style, scale: scale)
-            if let isLit = download, let button = slot.downloadRect {
-                drawFileHoverButton(
+            drawFileCard(
+                slot, in: frame, context: context, style: style, scale: scale,
+                transfer: transfer, isHovered: download != nil
+            )
+            if let button = slot.downloadRect {
+                drawFileButton(
                     button.offsetBy(dx: frame.minX - slot.rect.minX, dy: frame.minY - slot.rect.minY),
-                    isLit: isLit,
-                    context: context,
-                    style: style
+                    isLit: download == true,
+                    transfer: transfer,
+                    context: context
                 )
             }
         }
@@ -2357,66 +2368,91 @@ nonisolated enum TimelineRowPainter {
     ) {
         let ink = ThemeInk.current
         let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
-        drawFileCardGround(frame, context: context)
-        drawFileIcon(slot.fileKind, in: frame, context: context, scale: scale)
+        drawFileTileGround(frame, isHovered: false, context: context)
+
+        let side = TimelineMetrics.fileTileIcon
+        let iconRect = CGRect(x: frame.minX + TimelineMetrics.fileTileInset, y: frame.midY - side / 2, width: side, height: side)
+        if let icon = FinderIconArt.image(forExtension: slot.fileExtension, side: side, scale: scale) {
+            drawFlipped(icon, in: iconRect, context: context)
+        } else if let art = FileIconArt.image(for: slot.fileKind, scale: scale) {
+            drawFlipped(art, in: iconRect.insetBy(dx: 5, dy: 0), context: context)
+        }
         _ = drawText(
             slot.title,
-            font: style.bodyFont,
+            font: FileTileText.nameFont(style),
             color: style.primaryColor,
             at: CGPoint(x: slot.titleOrigin.x + offset.x, y: slot.titleOrigin.y + offset.y),
             maxWidth: slot.titleWidth,
             context: context
         )
+        // Every byte up and Discord still making the message: "Processing…".
+        let line = progress < 1
+            ? "Uploading \(Int((progress * 100).rounded()))% · \(slot.sizeLabel)"
+            : "Processing…"
         _ = drawText(
-            slot.sizeLabel,
+            line,
             font: style.metadataFont,
-            color: style.tertiaryColor,
+            color: style.secondaryColor,
             at: CGPoint(x: slot.sizeOrigin.x + offset.x, y: slot.sizeOrigin.y + offset.y),
-            maxWidth: max(0, frame.maxX - slot.sizeOrigin.x - offset.x),
+            maxWidth: slot.progressRect.width,
             context: context
         )
 
-        let bar = slot.progressRect.offsetBy(dx: offset.x, dy: offset.y)
-        guard progress < 1 else {
-            // Every byte is up and Discord is still making the message.
-            _ = drawText(
-                "Processing...",
-                font: style.metadataFont,
-                color: style.tertiaryColor,
-                at: CGPoint(x: bar.minX, y: bar.midY - style.metadataFont.pointSize / 2 - 1),
-                maxWidth: bar.width,
-                context: context
-            )
-            return
-        }
-        let radius = bar.height / 2
-        context.addPath(CGPath(roundedRect: bar, cornerWidth: radius, cornerHeight: radius, transform: nil))
-        context.setFillColor(ink.lift(0.12))
+        // The round button: the ring filling clockwise around a ✕.
+        let button = slot.cancelRect.offsetBy(dx: offset.x, dy: offset.y)
+        let accent = NSColor(cgColor: ink.accent) ?? .controlAccentColor
+        context.addEllipse(in: button)
+        context.setFillColor(accent.withAlphaComponent(isCancelHovered ? 0.3 : 0.16).cgColor)
         context.fillPath()
-        let filled = CGRect(x: bar.minX, y: bar.minY, width: max(bar.height, bar.width * progress), height: bar.height)
-        context.addPath(CGPath(roundedRect: filled, cornerWidth: radius, cornerHeight: radius, transform: nil))
-        context.setFillColor(ink.accent)
-        context.fillPath()
-
-        drawSymbol(
-            "xmark",
-            tint: isCancelHovered ? style.primaryColor : style.secondaryColor,
-            in: slot.cancelRect.offsetBy(dx: offset.x, dy: offset.y).insetBy(dx: 2, dy: 2),
-            context: context
+        let ring = button.insetBy(dx: 3.5, dy: 3.5)
+        context.saveGState()
+        context.setLineWidth(2.5)
+        context.setLineCap(.round)
+        context.setStrokeColor(accent.withAlphaComponent(0.28).cgColor)
+        context.addEllipse(in: ring)
+        context.strokePath()
+        let start = -CGFloat.pi / 2
+        context.addArc(
+            center: CGPoint(x: ring.midX, y: ring.midY),
+            radius: ring.width / 2,
+            startAngle: start,
+            endAngle: start + 2 * .pi * CGFloat(max(0.02, min(1, progress))),
+            clockwise: false
         )
+        context.setStrokeColor(accent.cgColor)
+        context.strokePath()
+        context.restoreGState()
+        drawSymbol("xmark", tint: accent, in: button.insetBy(dx: 11, dy: 11), context: context)
     }
 
-    /// Discord's file card (`745268`'s `O`): its ground and hairline, the
-    /// file type's icon, the name in the link colour, the size muted.
+    /// The file card (docs/BETA3.md §7, R8): a raised, rounded tile with the
+    /// file's own Finder icon, its name in the reading ink, and under it the
+    /// file's kind and size — or how far its download has got, that it was
+    /// saved, or that it failed. Lighter while the pointer is on it.
     private static func drawFileCard(
         _ slot: AttachmentSlot,
         in frame: CGRect,
         context: CGContext,
         style: MessageTextStyle,
-        scale: CGFloat
+        scale: CGFloat,
+        transfer: FileTransferState?,
+        isHovered: Bool
     ) {
-        drawFileCardGround(frame, context: context)
-        drawFileIcon(slot.fileKind, in: frame, context: context, scale: scale)
+        drawFileTileGround(frame, isHovered: isHovered, context: context)
+
+        let side = TimelineMetrics.fileTileIcon
+        let iconRect = CGRect(
+            x: frame.minX + TimelineMetrics.fileTileInset,
+            y: frame.midY - side / 2,
+            width: side,
+            height: side
+        )
+        if let icon = FinderIconArt.image(forExtension: slot.fileExtension, side: side, scale: scale) {
+            drawFlipped(icon, in: iconRect, context: context)
+        } else if let art = FileIconArt.image(for: slot.fileKind, scale: scale) {
+            drawFlipped(art, in: iconRect.insetBy(dx: 5, dy: 0), context: context)
+        }
+
         // **The words are laid out in the row's space and drawn in the
         // canvas's**, so they move by exactly what moved the card. Drawn at the
         // row-space origins they landed wherever row zero would be — every file
@@ -2425,24 +2461,140 @@ nonisolated enum TimelineRowPainter {
         let shift = CGPoint(x: frame.minX - slot.rect.minX, y: frame.minY - slot.rect.minY)
         let title = CGPoint(x: slot.titleOrigin.x + shift.x, y: slot.titleOrigin.y + shift.y)
         let subtitle = CGPoint(x: slot.subtitleOrigin.x + shift.x, y: slot.subtitleOrigin.y + shift.y)
-        let room = max(0, frame.maxX - TimelineMetrics.fileCardInset - title.x)
+        let buttonMinX = (slot.downloadRect?.minX ?? slot.rect.maxX) + shift.x
+        let room = max(0, buttonMinX - TimelineMetrics.fileTileGap - title.x)
         _ = drawText(
             slot.filename,
-            font: style.bodyFont,
-            color: style.linkColor,
+            font: FileTileText.nameFont(style),
+            color: style.primaryColor,
             at: title,
             maxWidth: room,
             context: context
         )
-        _ = drawText(
-            slot.sizeLabel,
-            font: style.metadataFont,
-            color: style.tertiaryColor,
-            at: subtitle,
-            maxWidth: room,
-            context: context
-        )
+        let second = fileTileSecondLine(slot, transfer: transfer, style: style)
+        _ = drawText(second.text, font: style.metadataFont, color: second.color, at: subtitle, maxWidth: room, context: context)
     }
+
+    /// The tile's ground: **a frosted plate, not Discord's black slab** — a
+    /// lift of the reading ink over whatever the theme is (white over a dark
+    /// one, black over a light one), with a hairline of the same, so a file
+    /// sits in the conversation's colour as a bubble does. Lighter under the
+    /// pointer.
+    static func drawFileTileGround(_ frame: CGRect, isHovered: Bool, context: CGContext) {
+        let ink = ThemeInk.current
+        let corner = TimelineMetrics.fileTileCorner
+        context.addPath(CGPath(roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil))
+        context.setFillColor(ink.lift(isHovered ? 0.13 : 0.085))
+        context.fillPath()
+        context.addPath(CGPath(
+            roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
+            cornerWidth: corner - 0.5,
+            cornerHeight: corner - 0.5,
+            transform: nil
+        ))
+        context.setStrokeColor(ink.lift(0.12))
+        context.setLineWidth(1)
+        context.strokePath()
+    }
+
+    /// The card's second line: the file's kind and size, or what its download
+    /// is doing. Never the pale ink: it's the line that says what happened.
+    static func fileTileSecondLine(
+        _ slot: AttachmentSlot,
+        transfer: FileTransferState?,
+        style: MessageTextStyle
+    ) -> (text: String, color: NSColor) {
+        guard let transfer else { return (slot.sizeLabel, style.secondaryColor) }
+        switch transfer.phase {
+        case .downloading:
+            guard transfer.total > 0 else { return ("Downloading…", style.secondaryColor) }
+            return (
+                "\(DiscordFileSize.text(transfer.received)) of \(DiscordFileSize.text(transfer.total))",
+                style.secondaryColor
+            )
+        case .saved:
+            return (transfer.isFresh ? "Saved to Downloads" : slot.sizeLabel, style.secondaryColor)
+        case .failed:
+            return ("Couldn’t download it. Try again?", NSColor.systemRed)
+        }
+    }
+
+    /// The card's one round button, which carries the whole download: ↓ to
+    /// download; while it comes down, a ring filling clockwise around a stop
+    /// square (HIG: a determinate circle, filling clockwise, and a way to halt
+    /// it); a check that springs in once it's saved, then the magnifying glass
+    /// of Show in Finder; ↻ when it failed.
+    private static func drawFileButton(
+        _ rect: CGRect,
+        isLit: Bool,
+        transfer: FileTransferState?,
+        context: CGContext
+    ) {
+        let ink = ThemeInk.current
+        let accent = NSColor(cgColor: ink.accent) ?? .controlAccentColor
+        let tint = transfer?.phase == .failed ? NSColor.systemRed : accent
+        context.addEllipse(in: rect)
+        context.setFillColor(tint.withAlphaComponent(isLit ? 0.3 : 0.16).cgColor)
+        context.fillPath()
+
+        let glyph = rect.insetBy(dx: 9, dy: 9)
+        switch transfer?.phase {
+        case .downloading?:
+            let ring = rect.insetBy(dx: 3.5, dy: 3.5)
+            context.saveGState()
+            context.setLineWidth(2.5)
+            context.setLineCap(.round)
+            context.setStrokeColor(tint.withAlphaComponent(0.28).cgColor)
+            context.addEllipse(in: ring)
+            context.strokePath()
+            // From twelve o'clock, clockwise on screen in this flipped view.
+            let fraction = CGFloat(max(0.02, min(1, transfer?.fraction ?? 0)))
+            let start = -CGFloat.pi / 2
+            context.addArc(
+                center: CGPoint(x: ring.midX, y: ring.midY),
+                radius: ring.width / 2,
+                startAngle: start,
+                endAngle: start + 2 * .pi * fraction,
+                clockwise: false
+            )
+            context.setStrokeColor(tint.cgColor)
+            context.strokePath()
+            context.restoreGState()
+            let stop = CGRect(x: rect.midX - 4.5, y: rect.midY - 4.5, width: 9, height: 9)
+            context.addPath(CGPath(roundedRect: stop, cornerWidth: 2, cornerHeight: 2, transform: nil))
+            context.setFillColor(tint.cgColor)
+            context.fillPath()
+        case .saved?:
+            if transfer?.isFresh == true {
+                let side = glyph.width * checkPop(since: transfer?.savedAt)
+                drawSymbol(
+                    "checkmark",
+                    tint: tint,
+                    in: CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side),
+                    context: context
+                )
+            } else {
+                drawSymbol("magnifyingglass", tint: tint, in: glyph, context: context)
+            }
+        case .failed?:
+            drawSymbol("arrow.clockwise", tint: tint, in: glyph, context: context)
+        case nil:
+            drawSymbol("arrow.down", tint: tint, in: glyph, context: context)
+        }
+    }
+
+    /// How big the check is, a moment after the file landed: from 0.6 to a
+    /// touch past full and settling, over 0.45 s — a little bounce, because a
+    /// download finishing is a moment worth marking.
+    static func checkPop(since savedAt: Date?) -> CGFloat {
+        guard let savedAt else { return 1 }
+        let elapsed = Date().timeIntervalSince(savedAt)
+        guard elapsed >= 0, elapsed < checkPopDuration else { return 1 }
+        let progress = elapsed / checkPopDuration
+        return CGFloat(1 - 0.4 * exp(-5 * progress) * cos(progress * .pi * 2.2))
+    }
+
+    static let checkPopDuration: TimeInterval = 0.45
 
     /// A voice note: `(▶) bars 0:12 [1×]`.
     ///
@@ -2758,78 +2910,6 @@ nonisolated enum TimelineRowPainter {
         context.restoreGState()
     }
 
-    /// The glyph for a document, from its extension.
-    ///
-    /// A short table rather than a UTType lookup: `UTType(filenameExtension:)`
-    /// consults the type database, and this is asked once per file card per
-    /// repaint.
-    /// A file card's ground, as Discord's `.file`: the raised fill, a hairline
-    /// (`--border-subtle`), the corner 8.
-    private static func drawFileCardGround(_ frame: CGRect, context: CGContext) {
-        let ink = ThemeInk.current
-        let outline = CGPath(
-            roundedRect: frame,
-            cornerWidth: EmbedLayoutEngine.corner,
-            cornerHeight: EmbedLayoutEngine.corner,
-            transform: nil
-        )
-        context.addPath(outline)
-        context.setFillColor(ink.discordCard)
-        context.fillPath()
-        context.addPath(CGPath(
-            roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
-            cornerWidth: EmbedLayoutEngine.corner - 0.5,
-            cornerHeight: EmbedLayoutEngine.corner - 0.5,
-            transform: nil
-        ))
-        context.setStrokeColor(ink.hoverFill)
-        context.setLineWidth(1)
-        context.strokePath()
-    }
-
-    /// The file type's icon, 30×40, 16 in from the card's leading edge and
-    /// centred on its height.
-    private static func drawFileIcon(_ kind: AttachmentFileKind, in frame: CGRect, context: CGContext, scale: CGFloat) {
-        guard let icon = FileIconArt.image(for: kind, scale: scale) else { return }
-        let size = TimelineMetrics.fileCardIcon
-        drawFlipped(
-            icon,
-            in: CGRect(
-                x: frame.minX + TimelineMetrics.fileCardInset,
-                y: frame.midY - size.height / 2,
-                width: size.width,
-                height: size.height
-            ),
-            context: context
-        )
-    }
-
-    /// Discord's hover group on a file (`06ab4`): one button, Download, on
-    /// the darker ground with a hairline of the darkest, its corner 5 — the
-    /// hover fill and the brighter ink while the pointer is on it.
-    private static func drawFileHoverButton(_ rect: CGRect, isLit: Bool, context: CGContext, style: MessageTextStyle) {
-        let ink = ThemeInk.current
-        let outline = CGPath(roundedRect: rect, cornerWidth: 5, cornerHeight: 5, transform: nil)
-        context.addPath(outline)
-        context.setFillColor(ink.surface)
-        context.fillPath()
-        if isLit {
-            context.addPath(outline)
-            context.setFillColor(ink.hoverFill)
-            context.fillPath()
-        }
-        context.addPath(CGPath(roundedRect: rect.insetBy(dx: -0.5, dy: -0.5), cornerWidth: 5.5, cornerHeight: 5.5, transform: nil))
-        context.setStrokeColor(ink.canvas)
-        context.setLineWidth(1)
-        context.strokePath()
-        drawSymbol(
-            "arrow.down.to.line",
-            tint: isLit ? style.primaryColor : style.secondaryColor,
-            in: rect.insetBy(dx: 6, dy: 6),
-            context: context
-        )
-    }
-
     /// The chip under a message that started a thread.
     ///
     /// **A rounded rectangle, not a capsule.** A capsule at this height reads as
@@ -2841,6 +2921,8 @@ nonisolated enum TimelineRowPainter {
         in frame: CGRect,
         context: CGContext,
         style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat,
         isHovered: Bool
     ) {
         let path = CGPath(
@@ -2855,56 +2937,105 @@ nonisolated enum TimelineRowPainter {
         )
         context.fillPath()
 
-        var x = frame.minX + TimelineMetrics.threadChipLeadingInset
-        // Everything but the chevron and the insets. Clamped at zero so a chip
-        // squeezed to nothing does not ask `drawText` to truncate to a negative
-        // width, which draws the full string past the rect.
-        let room = max(
-            0,
-            frame.maxX - TimelineMetrics.threadChipTrailingInset
-                - TimelineMetrics.threadChipChevronRoom - x
-        )
+        let left = frame.minX + TimelineMetrics.threadChipLeadingInset
+        let right = frame.maxX - TimelineMetrics.threadChipTrailingInset
+        let gap = TimelineMetrics.threadChipItemGap
 
-        // The name takes the accent, because it is the link. The count beside it
-        // is metadata in the quietest ink, exactly as a timestamp is.
-        let nameWidth = min(slot.nameWidth, room)
-        _ = drawText(
-            slot.name,
-            font: style.authorFont,
-            color: NSColor.controlAccentColor,
-            at: CGPoint(x: x, y: frame.midY - style.authorFont.pointSize * 0.7),
-            maxWidth: nameWidth,
-            context: context
+        // **Line one: the name, then the count as the link** — Discord's
+        // order: the thread's name in the strongest ink, "29 Messages ›" in the
+        // link colour, because that is where the click goes.
+        let first = CGRect(
+            x: left,
+            y: frame.minY + TimelineMetrics.threadChipTopInset,
+            width: max(0, right - left),
+            height: TimelineMetrics.threadChipLineHeight
         )
-        x += nameWidth + TimelineMetrics.threadChipLabelGap
-
-        let countRoom = max(0, frame.maxX - TimelineMetrics.threadChipTrailingInset
-            - TimelineMetrics.threadChipChevronRoom - x)
-        if countRoom > 0 {
+        // The count keeps its room; the name gives way first.
+        let countWidth = min(slot.countWidth, first.width)
+        let nameWidth = max(0, min(slot.nameWidth, first.width - countWidth - TimelineMetrics.threadChipLabelGap))
+        if nameWidth > 0 {
             _ = drawText(
-                slot.countText,
-                font: style.metadataFont,
-                color: style.tertiaryColor,
-                at: CGPoint(x: x, y: frame.midY - style.metadataFont.pointSize * 0.7),
-                maxWidth: countRoom,
+                slot.name,
+                font: style.authorFont,
+                color: style.primaryColor,
+                at: CGPoint(x: left, y: capCenteredY(of: style.authorFont, in: first)),
+                maxWidth: nameWidth,
                 context: context
             )
         }
-
-        // The chevron says this goes somewhere, which is the one thing the fill
-        // alone does not.
-        let side: CGFloat = 10
-        drawSymbol(
-            "chevron.right",
-            tint: style.tertiaryColor,
-            in: CGRect(
-                x: frame.maxX - TimelineMetrics.threadChipTrailingInset - side,
-                y: frame.midY - side / 2,
-                width: side,
-                height: side
-            ),
+        let countX = left + (nameWidth > 0 ? nameWidth + TimelineMetrics.threadChipLabelGap : 0)
+        _ = drawText(
+            slot.countText,
+            font: style.metadataFont,
+            color: NSColor.controlAccentColor,
+            at: CGPoint(x: countX, y: capCenteredY(of: style.metadataFont, in: first)),
+            maxWidth: max(0, right - countX),
             context: context
         )
+
+        // **Line two: the newest message**, or Discord's sentence for none —
+        // face, name in its colour, one line of words, and how long ago; the
+        // time keeps its room and the words give way.
+        let line = slot.line
+        let second = CGRect(
+            x: left,
+            y: first.maxY + TimelineMetrics.threadChipLineGap,
+            width: first.width,
+            height: TimelineMetrics.threadChipLineHeight
+        )
+        var x = left
+        if let author = line.author {
+            let side = TimelineMetrics.threadChipFace
+            drawAvatar(
+                url: author.avatarURL,
+                monogram: author.monogram,
+                in: CGRect(x: x, y: second.midY - side / 2, width: side, height: side),
+                context: context,
+                style: style,
+                images: images,
+                scale: scale,
+                peekSide: Metrics.avatarMessage
+            )
+            x += side + gap
+            let nameRoom = max(0, right - x)
+            let nameWidth = min(author.nameWidth, nameRoom)
+            if nameWidth > 0 {
+                _ = drawText(
+                    author.name,
+                    font: style.metadataFont,
+                    color: author.colorValue.map { NSColor(Color(hex: $0)) } ?? style.secondaryColor,
+                    at: CGPoint(x: x, y: capCenteredY(of: style.metadataFont, in: second)),
+                    maxWidth: nameWidth,
+                    context: context
+                )
+                x += nameWidth + gap
+            }
+        }
+        let timeRoom = line.time == nil ? 0 : line.timeWidth + gap + 2
+        let textFont = line.isPlaceholder ? style.metadataItalicFont : style.metadataFont
+        let textWidth = min(line.textWidth, max(0, right - x - timeRoom))
+        if textWidth > 0 {
+            _ = drawText(
+                line.text,
+                font: textFont,
+                color: line.isPlaceholder ? style.tertiaryColor : style.secondaryColor,
+                at: CGPoint(x: x, y: capCenteredY(of: textFont, in: second)),
+                maxWidth: textWidth,
+                context: context
+            )
+            x += textWidth
+        }
+        if let time = line.time, right - x - gap > 0 {
+            let timeX = x + (textWidth > 0 ? gap + 2 : 0)
+            _ = drawText(
+                time,
+                font: style.metadataFont,
+                color: style.tertiaryColor,
+                at: CGPoint(x: timeX, y: capCenteredY(of: style.metadataFont, in: second)),
+                maxWidth: max(0, right - timeX),
+                context: context
+            )
+        }
     }
 
     /// One of the two square controls at the end of the reaction row.

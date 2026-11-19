@@ -442,6 +442,27 @@ extension AppModel {
         return { [weak self] in self?.openGameProfile(gameID) }
     }
 
+    /// What opens a playing activity's game profile: its application's game,
+    /// or — **where the id gives none** — the game its name names. A console
+    /// title can come with no application at all, or one with no game behind
+    /// it, and Discord's profile opens it anyway (`application?.id ??
+    /// activity.application_id`, its application found by name). His friend's
+    /// GTA VI on PlayStation only selected its title here (2026-11-19).
+    func gameProfileOpener(for activity: Activity) -> (() -> Void)? {
+        guard activity.kind == .playing else { return nil }
+        if let opener = gameProfileOpener(for: activity.applicationID) { return opener }
+        guard let gameID = gamesByActivityName[Self.activityNameKey(activity.name)],
+              let game = games[gameID], !game.isProfileDisabled
+        else { return nil }
+        return { [weak self] in self?.openGameProfile(gameID) }
+    }
+
+    /// A game's name as a lookup key: case and accents folded, ends trimmed.
+    nonisolated static func activityNameKey(_ name: String) -> String {
+        name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// The game an application is about — Discord's `getCanonicalGameId`.
     ///
     /// **An activity's application is not always the game.** A title played on

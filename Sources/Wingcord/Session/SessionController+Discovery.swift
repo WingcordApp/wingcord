@@ -29,6 +29,9 @@ extension SessionController {
         case .apps:
             model.discovery?.isLoadingApps = true
             model.discovery?.appFailure = nil
+        case .games:
+            // The Games page asks for itself (`GamesDiscoveryView`).
+            return
         }
 
         discoveryTask = Task { [weak self] in
@@ -40,6 +43,7 @@ extension SessionController {
             switch state.tab {
             case .servers: await fetchGuilds(for: state.serverRequest, appending: false)
             case .apps: await fetchApps(for: state.appRequest, appending: false)
+            case .games: break
             }
         }
     }

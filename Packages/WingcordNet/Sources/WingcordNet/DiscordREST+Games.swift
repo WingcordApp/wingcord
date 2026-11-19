@@ -5,14 +5,12 @@ extension DiscordREST {
 
     // MARK: - Games
 
-    /// How many game ids one `/games` call may name.
-    ///
-    /// **Discord's own client sends far more than this in a single URL** — a
-    /// captured board asks for seventeen at once and a similar-games list asks
-    /// for twenty — but the ceiling is undocumented and a URL has one. Chunked
-    /// at fifty, which is comfortably under any server limit and keeps the query
-    /// string under two kilobytes.
-    public static let gamePageSize = 50
+    /// How many game ids one `/games` call may name: **25, Discord's own
+    /// ceiling** — "game_ids: Must be between 1 and 25 in length", its 400 for
+    /// more. This was 50 on a guess, so any batch past 25 failed whole, was
+    /// never latched, and was asked again the same way: those games never had
+    /// a record, and their profiles never opened (his log, 2026-11-19).
+    public static let gamePageSize = 25
 
     /// Every game a board names, in one round trip per chunk.
     ///

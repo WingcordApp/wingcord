@@ -274,6 +274,19 @@ public enum CDN {
     }
 
     /// A group DM's icon.
+    /// A Server Guide step's or resource's uploaded picture, at Discord's 128
+    /// (`getNewMemberActionIconURL` / `getResourceChannelIconURL`), keyed by
+    /// the channel it points at.
+    public static func guideIcon(kind: GuideIconKind, channelID: ChannelID, hash: String) -> URL? {
+        let ext = hash.hasPrefix("a_") ? "gif" : "png"
+        return URL(string: "\(host)/\(kind.rawValue)/\(channelID.rawValue)/\(hash).\(ext)?size=128")
+    }
+
+    public enum GuideIconKind: String, Sendable {
+        case step = "new-member-actions"
+        case resource = "resource-channels"
+    }
+
     public static func channelIcon(
         channelID: ChannelID,
         hash: String,

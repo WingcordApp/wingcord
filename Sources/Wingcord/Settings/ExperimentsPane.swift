@@ -29,6 +29,21 @@ struct ExperimentsPane: View {
                     isOn: $settings.showsServerHub
                 )
                 CardDivider()
+                SettingsToggle(
+                    title: "Games in Discover",
+                    help: "Adds Discord\u{2019}s Games tab to Discover \u{2014} trending games, the ones you "
+                        + "played, what your friends play, and game search \u{2014} before Discord turns it on "
+                        + "for your account.",
+                    isOn: $settings.showsGamesDiscovery
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "The Void",
+                    help: "Adds Enter The Void to the Void badge in the Badge Directory. Orbs thrown into it are "
+                        + "destroyed, and Discord still decides whether your account can throw any.",
+                    isOn: $settings.showsOrbVoid
+                )
+                CardDivider()
                 SettingsControlRow(
                     "Voice invites",
                     help: "Discord is trying a voice invite that looks like the channel in the sidebar."

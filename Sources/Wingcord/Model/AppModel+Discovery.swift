@@ -113,6 +113,9 @@ extension AppModel {
         case .apps:
             guard state.appPage < state.appPageCount else { return }
             sessionController.loadMoreDirectoryApps()
+        case .games:
+            // Games pages with its own pager.
+            return
         }
     }
 

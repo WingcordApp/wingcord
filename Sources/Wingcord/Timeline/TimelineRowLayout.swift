@@ -635,6 +635,8 @@ nonisolated struct UploadCardSlot: Sendable {
     /// The bar's track; "Processing..." is set on its line once it is full.
     var progressRect: CGRect
     var cancelRect: CGRect
+    /// The file's extension, for its Finder icon — empty for several files.
+    var fileExtension: String = ""
 }
 
 /// A message request's media, before it is accepted — Discord's restricted
@@ -709,9 +711,14 @@ nonisolated struct AttachmentSlot: Sendable {
     var sizeLabel: String = ""
     /// Which of Discord's file icons a file card draws.
     var fileKind: AttachmentFileKind = .unknown
-    /// A file card's Download, in the hover group that hangs past its corner.
-    /// Nil on every other kind.
+    /// A file card's round button — download, stop, Show in Finder, try
+    /// again — inside the card at its trailing edge. Nil on every other kind.
     var downloadRect: CGRect?
+    /// The attachment a file card stands for, so its download's state can be
+    /// painted on it. Nil on every other kind.
+    var attachmentID: AttachmentID?
+    /// The file's extension, lowercased — which Finder icon it wears.
+    var fileExtension: String = ""
     /// Where the name and the size sit inside a file card.
     var titleOrigin: CGPoint = .zero
     var subtitleOrigin: CGPoint = .zero
@@ -997,12 +1004,40 @@ nonisolated struct ThreadChipSlot: Sendable {
     var rect: CGRect
     var targetID: ChannelID
     var name: String
-    /// "720 Messages", pre-composed: the painter draws strings, and pluralising
-    /// per frame in a draw loop is work with one answer.
+    /// "720 Messages ›", pre-composed in Discord's words and rules
+    /// (`MessageThread.countLabel`): the painter draws strings, and
+    /// pluralising per frame in a draw loop is work with one answer.
     var countText: String
     /// Where the name ends and the count begins, so the painter can colour the
     /// two differently without measuring again.
     var nameWidth: CGFloat
+    var countWidth: CGFloat
+    /// The second line: the newest message, or Discord's sentence for none.
+    var line: ThreadChipLine
+}
+
+/// A thread card's second line (Discord's `ThreadMessageAccessoryMessage`): a
+/// face, a name in its colour, one line of words, and how long ago — or one of
+/// Discord's two sentences for a thread with nothing to show.
+nonisolated struct ThreadChipLine: Sendable {
+    var author: Author?
+    /// The words, or the sentence.
+    var text: String
+    var textWidth: CGFloat
+    /// A sentence or a placeholder rather than quoted words: set in italics.
+    var isPlaceholder: Bool
+    /// "11h ago", or nil where Discord shows no time.
+    var time: String?
+    var timeWidth: CGFloat
+
+    struct Author: Sendable {
+        var avatarURL: URL?
+        var monogram: String
+        var name: String
+        var nameWidth: CGFloat
+        /// The role colour, as a hex value; nil draws in the secondary ink.
+        var colorValue: UInt32?
+    }
 }
 
 /// One chip under a message: one half of one emoji's reactions.
@@ -1465,6 +1500,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var ids = [message.authorID]
         if let invoker = message.interaction?.userID { ids.append(invoker) }
         if let quoted = message.reference?.authorID { ids.append(quoted) }
+        // A thread card's newest message draws its author's face and name.
+        if let newest = message.thread?.latest?.authorID { ids.append(newest) }
         if let autoMod { ids.append(contentsOf: autoMod.namedUserIDs) }
         return ids
     }
@@ -2641,7 +2678,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 contentX: $0,
                 y: y,
                 width: contentWidth,
-                style: input.style
+                style: input.style,
+                authors: input.authors
             )
         }, width: { $0.slot?.rect.width ?? 0 })
         y = chip.bottom
@@ -2986,7 +3024,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             contentX: contentX,
             y: reactionsBottom,
             width: contentWidth,
-            style: input.style
+            style: input.style,
+            authors: input.authors
         )
         // Discord's Invite to Speak under a hand that is still up, for a
         // reader who may answer it.
@@ -3356,25 +3395,31 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         contentX: CGFloat,
         y startY: CGFloat,
         width: CGFloat,
-        style: MessageTextStyle
+        style: MessageTextStyle,
+        authors: [UserID: AuthorInfo]
     ) -> (slot: ThreadChipSlot?, bottom: CGFloat) {
         guard let thread else { return (nil, startY) }
 
         let y = startY + TimelineMetrics.threadChipGap
-        let countText = thread.messageCount == 1
-            ? "1 Message"
-            : "\(thread.messageCount) Messages"
+        let countText = thread.countLabel
         let nameWidth = measure(thread.name, font: style.authorFont)
         let countWidth = measure(countText, font: style.metadataFont)
+        let line = threadChipLine(for: thread, style: style, authors: authors)
 
+        let gap = TimelineMetrics.threadChipItemGap
+        let firstLine = nameWidth + TimelineMetrics.threadChipLabelGap + countWidth
+        var secondLine = line.textWidth
+        if let author = line.author {
+            secondLine += TimelineMetrics.threadChipFace + gap + author.nameWidth + gap
+        }
+        if line.time != nil { secondLine += gap + 2 + line.timeWidth }
         let natural = TimelineMetrics.threadChipLeadingInset
-            + nameWidth + TimelineMetrics.threadChipLabelGap + countWidth
-            + TimelineMetrics.threadChipChevronRoom
+            + max(firstLine, secondLine)
             + TimelineMetrics.threadChipTrailingInset
-        // Clamped at both ends: never wider than the column it sits in, never
-        // wider than the cap, and never narrower than the room the chevron needs
-        // on its own.
-        let chipWidth = min(natural, min(width, TimelineMetrics.threadChipMaxWidth))
+        // Never wider than the column it sits in or than the cap, and never so
+        // narrow that a short name stops reading as a card.
+        let cap = min(width, TimelineMetrics.threadChipMaxWidth)
+        let chipWidth = min(max(natural, TimelineMetrics.threadChipMinWidth), cap)
 
         return (
             ThreadChipSlot(
@@ -3387,10 +3432,86 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 targetID: thread.id,
                 name: thread.name,
                 countText: countText,
-                nameWidth: nameWidth
+                nameWidth: nameWidth,
+                countWidth: countWidth,
+                line: line
             ),
             y + TimelineMetrics.threadChipHeight
         )
+    }
+
+    /// The card's second line, in Discord's order (`fc454d1c` `aa`): an
+    /// archived thread and an empty one say so; otherwise the newest message,
+    /// or — with none known — that there is no recent one, and when it moved.
+    static func threadChipLine(
+        for thread: MessageThread,
+        style: MessageTextStyle,
+        authors: [UserID: AuthorInfo],
+        now: Date = Date()
+    ) -> ThreadChipLine {
+        func sentence(_ text: String, time: String?) -> ThreadChipLine {
+            ThreadChipLine(
+                author: nil,
+                text: text,
+                textWidth: measure(text, font: style.metadataItalicFont),
+                isPlaceholder: true,
+                time: time,
+                timeWidth: time.map { measure($0, font: style.metadataFont) } ?? 0
+            )
+        }
+        if thread.isArchived {
+            return sentence("There are no recent messages in this thread.", time: nil)
+        }
+        if thread.messageCount <= 0 {
+            return sentence("There are no messages in this thread yet.", time: nil)
+        }
+        let time = threadAge(thread.lastActivity, now: now)
+        guard let latest = thread.latest else {
+            return sentence("There are no recent messages in this thread.", time: time)
+        }
+        let info = authors[latest.authorID]
+        let text: String
+        let isPlaceholder: Bool
+        if info?.isBlocked == true {
+            (text, isPlaceholder) = ("Blocked message", true)
+        } else if info?.isIgnored == true {
+            (text, isPlaceholder) = ("Ignored message", true)
+        } else if !latest.excerpt.isEmpty {
+            (text, isPlaceholder) = (latest.excerpt, false)
+        } else if latest.hasAttachment {
+            (text, isPlaceholder) = ("Click to see attachment", true)
+        } else {
+            (text, isPlaceholder) = ("", false)
+        }
+        let name = info?.name ?? "Unknown"
+        return ThreadChipLine(
+            author: .init(
+                avatarURL: info?.isBlocked == true ? nil : info?.avatarURL,
+                monogram: info?.monogram ?? "?",
+                name: name,
+                nameWidth: measure(name, font: style.metadataFont),
+                colorValue: info?.colorValue
+            ),
+            text: text,
+            textWidth: text.isEmpty ? 0 : measure(text, font: isPlaceholder ? style.metadataItalicFont : style.metadataFont),
+            isPlaceholder: isPlaceholder,
+            time: time,
+            timeWidth: measure(time, font: style.metadataFont)
+        )
+    }
+
+    /// How long ago, in Discord's short form (`469881`): "1m ago" under a
+    /// minute, then minutes, hours and days, ">30d ago" up to a year, then the
+    /// date.
+    static func threadAge(_ date: Date, now: Date) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        switch seconds {
+        case ..<3_600: return "\(max(1, Int(seconds / 60)))m ago"
+        case ..<86_400: return "\(Int(seconds / 3_600))h ago"
+        case ..<2_592_000: return "\(Int(seconds / 86_400))d ago"
+        case ..<31_104_000: return ">30d ago"
+        default: return date.formatted(date: .long, time: .omitted)
+        }
     }
 
     static func layoutReactions(
@@ -3522,9 +3643,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         func place(_ reaction: Reaction, kind: ReactionKind, imageURL: URL?, palette: SuperReactionPalette?) {
             let count = reaction.count(of: kind)
             // A count only where there is more than one: a single tapback is
-            // a circle round its emoji, as Messages draws it.
+            // a circle round its emoji, as Messages draws it. **Measured in the
+            // face the painter draws it in** (`reactionCountFont`, a point
+            // larger and semibold): measured in the metadata face, "12" was
+            // given less room than it takes and drew as "…" (his image 254,
+            // 2026-11-19).
             let width = TimelineMetrics.tapbackWidth(
-                countWidth: count > 1 ? measure("\(count)", font: style.metadataFont) : nil
+                countWidth: count > 1 ? measure("\(count)", font: TimelineMetrics.reactionCountFont(style)) : nil
             )
             let minX = side == .trailing ? edge - width : edge
             slots.append(ReactionSlot(
@@ -4703,20 +4828,18 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         availableWidth: CGFloat,
         style: MessageTextStyle
     ) -> AttachmentSlot {
-        let sizeLabel = DiscordFileSize.text(attachment.size)
-        let textX = origin.x + TimelineMetrics.fileCardInset + TimelineMetrics.fileCardIcon.width
-            + TimelineMetrics.fileCardIconGap
-        // Discord's card is 432 whatever its name, and less only where the
-        // column is.
-        let width = min(availableWidth, TimelineMetrics.fileCardMaxWidth)
-        let height = TimelineMetrics.fileCardHeight
+        let inset = TimelineMetrics.fileTileInset
+        let width = min(availableWidth, TimelineMetrics.fileTileMaxWidth)
+        let height = TimelineMetrics.fileTileHeight
         let rect = CGRect(x: origin.x, y: origin.y, width: width, height: height)
+        let side = TimelineMetrics.fileTileButton
+        let button = CGRect(x: rect.maxX - inset - side, y: rect.midY - side / 2, width: side, height: side)
+        let textX = origin.x + inset + TimelineMetrics.fileTileIcon + TimelineMetrics.fileTileGap
+        let room = max(0, button.minX - TimelineMetrics.fileTileGap - textX)
         // Two lines stacked about the card's middle: the name on the upper
-        // baseline, the size on the lower.
+        // baseline, its kind and size on the lower.
         let block = style.bodyFont.pointSize + style.metadataFont.pointSize + 4
         let top = origin.y + (height - block) / 2
-        let button = TimelineMetrics.fileCardHoverButton
-        let overhang = TimelineMetrics.fileCardHoverOverhang
         return AttachmentSlot(
             rect: rect,
             url: nil,
@@ -4724,10 +4847,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             altText: attachment.description,
             decodeWidth: width,
             kind: .file,
-            filename: attachment.filename,
-            sizeLabel: sizeLabel,
+            filename: FileTileText.fitting(attachment.filename, font: FileTileText.nameFont(style), width: room),
+            sizeLabel: FileTileText.kindAndSize(attachment),
             fileKind: AttachmentFileKind(filename: attachment.filename, contentType: attachment.contentType),
-            downloadRect: CGRect(x: rect.maxX + overhang - button, y: rect.minY - overhang, width: button, height: button),
+            downloadRect: button,
+            attachmentID: attachment.id,
+            fileExtension: Attachment.extensionOf(attachment.filename) ?? "",
             titleOrigin: CGPoint(x: textX, y: top),
             subtitleOrigin: CGPoint(x: textX, y: top + style.bodyFont.pointSize + 4)
         )
@@ -4758,60 +4883,44 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         )
     }
 
-    /// An upload's card: a file card's geometry, with a bar where its size
-    /// line would be and a cancel at its trailing edge.
+    /// An upload's card: the file card's tile (docs/BETA3.md §7, R12) — the
+    /// file's icon, its name, how far it has got on the line under it, and
+    /// the same round button as a download's, a ring filling clockwise
+    /// around a ✕ that cancels.
     private static func uploadSlot(
         _ summary: UploadSummary,
         origin: CGPoint,
         availableWidth: CGFloat,
         style: MessageTextStyle
     ) -> UploadCardSlot {
-        let inset = TimelineMetrics.fileCardInset
+        let inset = TimelineMetrics.fileTileInset
         let rect = CGRect(
             x: origin.x,
             y: origin.y,
-            width: min(availableWidth, TimelineMetrics.fileCardMaxWidth),
-            height: TimelineMetrics.fileCardHeight
+            width: min(availableWidth, TimelineMetrics.fileTileMaxWidth),
+            height: TimelineMetrics.fileTileHeight
         )
-        let cancelSide = TimelineMetrics.uploadCancelSide
-        let cancelRect = CGRect(
-            x: rect.maxX - inset - cancelSide,
-            y: rect.midY - cancelSide / 2,
-            width: cancelSide,
-            height: cancelSide
-        )
-        let textX = rect.minX + inset + TimelineMetrics.fileCardIcon.width + TimelineMetrics.fileCardIconGap
-        let room = max(0, cancelRect.minX - Spacing.base - textX)
-        let sizeLabel = "— \(DiscordFileSize.text(summary.size))"
-        let sizeWidth = measure(sizeLabel, font: style.metadataFont)
-        // The name gives way to the size, never the other way round: how big
-        // the upload is says how long the bar will take.
-        let titleWidth = min(measure(summary.title, font: style.bodyFont), max(0, room - sizeWidth - 4))
-        // Two lines stacked about the card's middle, as a file card's are: the
-        // name on the upper, the bar on the lower.
+        let side = TimelineMetrics.fileTileButton
+        let cancelRect = CGRect(x: rect.maxX - inset - side, y: rect.midY - side / 2, width: side, height: side)
+        let textX = rect.minX + inset + TimelineMetrics.fileTileIcon + TimelineMetrics.fileTileGap
+        let room = max(0, cancelRect.minX - TimelineMetrics.fileTileGap - textX)
+        let font = FileTileText.nameFont(style)
+        let title = FileTileText.fitting(summary.title, font: font, width: room)
         let lineGap: CGFloat = 4
         let block = style.bodyFont.pointSize + lineGap + style.metadataFont.pointSize
         let top = rect.minY + (rect.height - block) / 2
-        let barLine = top + style.bodyFont.pointSize + lineGap
-        let barHeight = TimelineMetrics.uploadBarHeight
+        let secondLine = top + style.bodyFont.pointSize + lineGap
         return UploadCardSlot(
             rect: rect,
             fileKind: AttachmentFileKind(filename: summary.title, contentType: nil),
-            title: summary.title,
+            title: title,
             titleOrigin: CGPoint(x: textX, y: top),
-            titleWidth: titleWidth,
-            sizeLabel: sizeLabel,
-            sizeOrigin: CGPoint(
-                x: textX + titleWidth + 4,
-                y: top + style.bodyFont.pointSize - style.metadataFont.pointSize
-            ),
-            progressRect: CGRect(
-                x: textX,
-                y: barLine + (style.metadataFont.pointSize - barHeight) / 2,
-                width: room,
-                height: barHeight
-            ),
-            cancelRect: cancelRect
+            titleWidth: room,
+            sizeLabel: DiscordFileSize.text(summary.size),
+            sizeOrigin: CGPoint(x: textX, y: secondLine),
+            progressRect: CGRect(x: textX, y: secondLine, width: room, height: style.metadataFont.pointSize + 2),
+            cancelRect: cancelRect,
+            fileExtension: summary.title.contains(".") ? (Attachment.extensionOf(summary.title) ?? "") : ""
         )
     }
 

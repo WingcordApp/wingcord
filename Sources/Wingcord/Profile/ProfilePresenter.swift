@@ -257,7 +257,8 @@ struct ProfilePresenter: ViewModifier {
                 // The member the server answered with, filed now — the roster
                 // and the transcript read the new nickname and face from it.
                 if let member = editor.savedMember, let guildID = editor.scope.guildID {
-                    model.members[guildID, default: [:]][member.userID] = member
+                    model.members[guildID, default: [:]][member.userID] =
+                        member.merged(over: model.members[guildID]?[member.userID])
                 }
                 // Nothing echoes the account's own indicator back, so the
                 // draft that just landed is the truth until the next READY.

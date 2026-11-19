@@ -25,6 +25,9 @@ struct TimelineView: NSViewRepresentable {
     /// How far each of the reader's uploads has got — read by the container for
     /// the reason the statuses are, and painted. See `UploadCardSlot`.
     var uploadProgress: [MessageID: Double] = [:]
+    /// Every file card's download — read by the container for the same reason,
+    /// and painted. See `FileTransfers`.
+    var fileTransfers: [AttachmentID: FileTransferState] = [:]
     /// How much of the scroll view's foot the composer covers.
     ///
     /// The transcript deliberately extends UNDERNEATH the composer so messages
@@ -141,6 +144,7 @@ struct TimelineView: NSViewRepresentable {
             activityAccents: activityAccents,
             activityInviteStatuses: activityInviteStatuses,
             uploadProgress: uploadProgress,
+            fileTransfers: fileTransfers,
             topInset: topInset,
             bottomInset: bottomInset,
             jump: jump,
@@ -680,6 +684,21 @@ final class TimelineCoordinator: NSObject {
             guard let self, let channelID = self.channelID else { return }
             self.model.downloadAttachment(messageID: messageID, in: channelID, attachmentIndex: index)
         }
+        canvas.onPreviewFile = { [weak self] messageID, index in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.previewAttachment(messageID: messageID, in: channelID, attachmentIndex: index)
+        }
+        canvas.fileAttachment = { [weak self] messageID, index in
+            guard let self, let channelID = self.channelID else { return nil }
+            return self.model.fileAttachment(messageID: messageID, in: channelID, attachmentIndex: index)
+        }
+        canvas.onFileMenuAction = { [weak self] messageID, index, action in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.fileCardAction(
+                action, messageID: messageID, in: channelID, attachmentIndex: index,
+                window: self.canvas?.window
+            )
+        }
 
         let document = TimelineDocumentView(frame: .zero)
         document.addSubview(canvas)
@@ -979,6 +998,7 @@ final class TimelineCoordinator: NSObject {
         activityAccents: [ApplicationID: ActivityCardTint],
         activityInviteStatuses: [ApplicationID: ActivityInviteStatus],
         uploadProgress: [MessageID: Double],
+        fileTransfers: [AttachmentID: FileTransferState] = [:],
         topInset: CGFloat,
         bottomInset: CGFloat,
         jump: MessageJump?,
@@ -1020,6 +1040,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.apply(voiceRevision: voiceRevision, isLive: isVoiceLive)
         canvas?.apply(activityInviteStatuses: activityInviteStatuses)
         canvas?.apply(uploadProgress: uploadProgress)
+        canvas?.apply(fileTransfers: fileTransfers)
         // Measured against where a glide is GOING, not where it has got to: an
         // update in the middle of one is not a new change.
         if let scrollView,

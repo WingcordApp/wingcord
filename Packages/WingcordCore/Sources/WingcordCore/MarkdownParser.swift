@@ -81,38 +81,60 @@ public struct MarkdownParser: Sendable {
                 continue
             }
 
-            // ``` opens a fenced block and everything to the closing fence is
-            // literal, headings and quotes included. This must be tested first.
-            if line.starts(with: ByteSequence.tripleBacktick) {
+            // A fence at the start of a line opens Discord's code block, and
+            // everything to the closing fence is literal, headings and quotes
+            // included — so it is tested first. A fence that never closes is
+            // not a block in Discord (its rule needs the closing fence), and
+            // the line falls through to its other readings.
+            if line.starts(with: ByteSequence.tripleBacktick),
+               let block = Self.codeBlock(in: scanner.bytes, at: line.startIndex)
+            {
                 flushParagraph()
-                scanner.advanceLine()
-                blocks.append(parseFencedCode(&scanner, openingLine: line))
+                blocks.append(block.node(in: scanner.bytes))
+                scanner.resume(after: block.end)
                 continue
             }
 
-            if let level = headingLevel(of: line) {
+            if let heading = Self.heading(in: line) {
                 flushParagraph()
                 scanner.advanceLine()
-                let body = line.dropFirst(level + 1)
-                blocks.append(.heading(level: level, inlineNodes(of: body)))
+                blocks.append(.heading(level: heading.level, inlineNodes(of: heading.body)))
                 continue
             }
 
-            if line.starts(with: ByteSequence.subtext) {
+            if let body = Self.subtextBody(of: line) {
                 flushParagraph()
                 scanner.advanceLine()
-                blocks.append(.subtext(inlineNodes(of: line.dropFirst(3))))
+                blocks.append(.subtext(inlineNodes(of: body)))
                 continue
             }
 
-            if quoteDepth < 3, let stripped = quoteBody(of: line) {
+            // **Discord's quotes don't nest** (its rule returns nothing while
+            // `inQuote`): inside one, a `>` is a character.
+            if quoteDepth == 0, let contentStart = Self.quoteToEndStart(of: line) {
+                // `>>> ` takes the rest of the message, every line of it —
+                // Discord's `^( *>>> +([\s\S]*))`.
+                flushParagraph()
+                var inner = LineScanner(bytes: Array(scanner.bytes[contentStart...]))
+                var innerBlocks: [BlockNode] = []
+                parseBlocks(&inner, into: &innerBlocks, quoteDepth: quoteDepth + 1)
+                blocks.append(.quote(innerBlocks))
+                scanner.seekToEnd()
+                continue
+            }
+
+            if quoteDepth == 0, let stripped = Self.quoteBody(of: line) {
                 flushParagraph()
                 // Gather the whole consecutive run of quoted lines and re-parse
                 // it one level in, so a quote can contain a list or a code
-                // block, which is what Discord does.
+                // block, which is what Discord does. A `>>> ` line ends the run:
+                // it starts a quote of its own that takes the rest.
                 var quoted: [UInt8] = Array(stripped)
                 scanner.advanceLine()
-                while let next = scanner.peekLine(), let body = quoteBody(of: next) {
+                while let next = scanner.peekLine(),
+                      Self.quoteToEndStart(of: next) == nil,
+                      let body = Self.quoteBody(of: next)
+                {
                     quoted.append(.newline)
                     quoted.append(contentsOf: body)
                     scanner.advanceLine()
@@ -130,6 +152,18 @@ public struct MarkdownParser: Sendable {
                 continue
             }
 
+            // Words, and perhaps a code block opening after them. Discord's
+            // rule matches wherever a fence starts outside an inline code span,
+            // so `see ```this``` here` is words, a block, and words.
+            if let block = Self.codeBlock(after: line, in: scanner.bytes) {
+                let before = scanner.bytes[line.startIndex..<block.start]
+                if before.contains(where: { $0 != UInt8.space }) { paragraph.append(before) }
+                flushParagraph()
+                blocks.append(block.node(in: scanner.bytes))
+                scanner.resume(after: block.end)
+                continue
+            }
+
             scanner.advanceLine()
             paragraph.append(line)
         }
@@ -137,29 +171,212 @@ public struct MarkdownParser: Sendable {
         flushParagraph()
     }
 
-    /// `#`, `##`, `###` followed by a space. Discord stops at three.
-    private func headingLevel(of line: ArraySlice<UInt8>) -> Int? {
-        var level = 0
-        var index = line.startIndex
-        while index < line.endIndex, line[index] == UInt8.hash, level < 3 {
-            level += 1
-            index = line.index(after: index)
+    // MARK: Code blocks
+
+    /// A code block found in the bytes: where its fences are, and what is
+    /// between them.
+    struct CodeBlockMatch: Equatable {
+        /// The opening fence's first backtick.
+        var start: Int
+        var language: Range<Int>?
+        var body: Range<Int>
+        /// Past the closing fence.
+        var end: Int
+
+        func node(in bytes: [UInt8]) -> BlockNode {
+            .codeBlock(
+                language: language.map { String(decoding: bytes[$0], as: UTF8.self) },
+                code: String(decoding: bytes[body], as: UTF8.self)
+            )
         }
-        guard level > 0, index < line.endIndex, line[index] == UInt8.space else { return nil }
-        return level
     }
 
-    /// `> ` or `>>> `. Returns the line with the marker removed, or nil.
+    /// Discord's code block opening at `start`, read by its own rule (its
+    /// bundle): `^```(?:([a-z0-9_+\-.#]+?)\n)?\n*([^\n][^]*?)\n*```` — case
+    /// insensitive.
     ///
-    /// A bare `>` with no following space is not a quote — it is a greater-than
-    /// sign someone typed, and treating it as one turns every inequality in a
-    /// maths discussion into a blockquote.
-    private func quoteBody(of line: ArraySlice<UInt8>) -> ArraySlice<UInt8>? {
-        if line.starts(with: ByteSequence.tripleQuote) { return line.dropFirst(4) }
-        if line.starts(with: ByteSequence.quote) { return line.dropFirst(2) }
-        // A quote line with nothing after the marker is a blank quoted line.
-        if line.count == 1, line.first == UInt8.greaterThan { return line.dropFirst(1) }
+    /// **A language only when it is one word followed by a line break.** The
+    /// old reading took everything after the opening fence on its line as the
+    /// language, so a one-line block — ```` ```1) All previously agreed…``` ````,
+    /// six of them in a row in a server's rules — came out as a "language" and
+    /// an empty box (Alex's image 238, 2026-11-19). **The block ends at the
+    /// next fence wherever it is**, at the end of a line of code as well as on
+    /// a line of its own; the line breaks round the code are not part of it.
+    /// **No closing fence, no block**: the rule needs one, and Discord shows
+    /// the backticks as they were typed.
+    static func codeBlock(in bytes: [UInt8], at start: Int) -> CodeBlockMatch? {
+        guard start + 3 <= bytes.count,
+              bytes[start] == UInt8.backtick,
+              bytes[start + 1] == UInt8.backtick,
+              bytes[start + 2] == UInt8.backtick
+        else { return nil }
+        let afterFence = start + 3
+
+        // The optional language, and the regex's backtracking: when the block
+        // fails with the word read as a language — ```` ```js\n``` ```` — it is
+        // read again without one, and the word is the code.
+        var probe = afterFence
+        while probe < bytes.count, bytes[probe].isCodeLanguageByte { probe += 1 }
+        if probe > afterFence, probe < bytes.count, bytes[probe] == UInt8.newline,
+           let block = codeBody(in: bytes, start: start, from: probe + 1, language: afterFence..<probe)
+        {
+            return block
+        }
+        return codeBody(in: bytes, start: start, from: afterFence, language: nil)
+    }
+
+    /// `\n*([^\n][^]*?)\n*```` from `cursor`.
+    private static func codeBody(
+        in bytes: [UInt8],
+        start: Int,
+        from cursor: Int,
+        language: Range<Int>?
+    ) -> CodeBlockMatch? {
+        var bodyStart = cursor
+        while bodyStart < bytes.count, bytes[bodyStart] == UInt8.newline { bodyStart += 1 }
+        // `[^\n]`: the code has at least one character, and the newlines were
+        // just skipped, so whatever is here qualifies.
+        guard bodyStart < bytes.count else { return nil }
+        var search = bodyStart + 1
+        while search + 3 <= bytes.count {
+            if bytes[search] == UInt8.backtick,
+               bytes[search + 1] == UInt8.backtick,
+               bytes[search + 2] == UInt8.backtick
+            {
+                var bodyEnd = search
+                while bodyEnd > bodyStart + 1, bytes[bodyEnd - 1] == UInt8.newline { bodyEnd -= 1 }
+                return CodeBlockMatch(start: start, language: language, body: bodyStart..<bodyEnd, end: search + 3)
+            }
+            search += 1
+        }
         return nil
+    }
+
+    /// The first code block that opens on `line` outside an inline code span
+    /// or an escape — where Discord's rule would match first, reading the line
+    /// from the left.
+    static func codeBlock(after line: ArraySlice<UInt8>, in bytes: [UInt8]) -> CodeBlockMatch? {
+        var index = line.startIndex
+        let end = line.endIndex
+        while index < end {
+            let byte = bytes[index]
+            if byte == UInt8.backslash {
+                // An escaped character is never a marker.
+                index += 2
+                continue
+            }
+            guard byte == UInt8.backtick else {
+                index += 1
+                continue
+            }
+            var run = 0
+            while index + run < end, bytes[index + run] == UInt8.backtick { run += 1 }
+            if run >= 3, let block = codeBlock(in: bytes, at: index) { return block }
+            // An inline code span is literal: a fence inside one opens nothing.
+            index = inlineCodeEnd(in: bytes, from: index + run, runLength: run, limit: end) ?? index + run
+        }
+        return nil
+    }
+
+    /// Past the run of exactly `runLength` backticks that closes an inline code
+    /// span, on the same line, around at least one character.
+    private static func inlineCodeEnd(in bytes: [UInt8], from start: Int, runLength: Int, limit: Int) -> Int? {
+        var cursor = start
+        while cursor < limit {
+            guard bytes[cursor] == UInt8.backtick else {
+                cursor += 1
+                continue
+            }
+            let closeStart = cursor
+            while cursor < limit, bytes[cursor] == UInt8.backtick { cursor += 1 }
+            if cursor - closeStart == runLength, closeStart > start { return cursor }
+        }
+        return nil
+    }
+
+    // MARK: Headings, subtext, quotes
+
+    /// Discord's heading, `^ *(#{1,3})(?:\s+)((?!\s*#{1,3}\s)[^\n]+?)#*\s*(?:\n|$)`:
+    /// spaces may come before the marks, any run of spaces after them, and
+    /// closing marks at the end are dropped. A second marker straight after the
+    /// first — `# # words` — is not a heading.
+    static func heading(in line: ArraySlice<UInt8>) -> (level: Int, body: ArraySlice<UInt8>)? {
+        var index = line.startIndex
+        while index < line.endIndex, line[index] == UInt8.space { index += 1 }
+        var level = 0
+        while index < line.endIndex, line[index] == UInt8.hash, level < 3 {
+            level += 1
+            index += 1
+        }
+        guard level > 0, index < line.endIndex, line[index].isInlineSpace else { return nil }
+        while index < line.endIndex, line[index].isInlineSpace { index += 1 }
+        guard index < line.endIndex else { return nil }
+
+        // `(?!\s*#{1,3}\s)`
+        var marks = 0
+        var probe = index
+        while probe < line.endIndex, line[probe] == UInt8.hash, marks < 4 {
+            marks += 1
+            probe += 1
+        }
+        if (1...3).contains(marks), probe < line.endIndex, line[probe].isInlineSpace { return nil }
+
+        // `[^\n]+?#*\s*`: closing marks and the spaces round them come off,
+        // and at least one character stays.
+        var end = line.endIndex
+        while end > index + 1, line[end - 1].isInlineSpace { end -= 1 }
+        while end > index + 1, line[end - 1] == UInt8.hash { end -= 1 }
+        while end > index + 1, line[end - 1].isInlineSpace { end -= 1 }
+        return (level, line[index..<end])
+    }
+
+    /// Discord's subtext, `^ *-# +((?!-#)[^\n]+)(?:\n|$)`.
+    static func subtextBody(of line: ArraySlice<UInt8>) -> ArraySlice<UInt8>? {
+        var index = line.startIndex
+        while index < line.endIndex, line[index] == UInt8.space { index += 1 }
+        guard index + 2 < line.endIndex,
+              line[index] == UInt8.hyphen,
+              line[index + 1] == UInt8.hash,
+              line[index + 2] == UInt8.space
+        else { return nil }
+        index += 2
+        while index < line.endIndex, line[index] == UInt8.space { index += 1 }
+        guard index < line.endIndex else { return nil }
+        if line[index...].starts(with: ByteSequence.subtextMark) { return nil }
+        return line[index...]
+    }
+
+    /// `> words`: Discord's `^ *>(?!>>) +`, and the marker comes off with one
+    /// space (`^ *> ?`). Returns the line's words, or nil.
+    ///
+    /// A `>` with no space after it is not a quote — it is a greater-than sign
+    /// someone typed, and treating it as one turns every inequality in a maths
+    /// discussion into a blockquote. **That includes a `>` alone on its line**:
+    /// Discord's rule needs the space, so a bare `>` ends a quote rather than
+    /// adding a blank line to it.
+    static func quoteBody(of line: ArraySlice<UInt8>) -> ArraySlice<UInt8>? {
+        var index = line.startIndex
+        while index < line.endIndex, line[index] == UInt8.space { index += 1 }
+        guard index + 1 < line.endIndex,
+              line[index] == UInt8.greaterThan,
+              line[index + 1] == UInt8.space
+        else { return nil }
+        return line[(index + 2)...]
+    }
+
+    /// `>>> words`: where the quote's words start — they run to the end of the
+    /// message — or nil. Discord's `^ *>>> +`, the marker taken off with one
+    /// space (`^ *>>> ?`).
+    static func quoteToEndStart(of line: ArraySlice<UInt8>) -> Int? {
+        var index = line.startIndex
+        while index < line.endIndex, line[index] == UInt8.space { index += 1 }
+        guard index + 3 < line.endIndex,
+              line[index] == UInt8.greaterThan,
+              line[index + 1] == UInt8.greaterThan,
+              line[index + 2] == UInt8.greaterThan,
+              line[index + 3] == UInt8.space
+        else { return nil }
+        return index + 4
     }
 
     private struct ListMarker {
@@ -223,39 +440,6 @@ public struct MarkdownParser: Sendable {
         return .list(ordered: ordered, startIndex: max(1, start), items: items)
     }
 
-    private func parseFencedCode(
-        _ scanner: inout LineScanner,
-        openingLine: ArraySlice<UInt8>
-    ) -> BlockNode {
-        // Anything after the opening fence on the same line is the language tag.
-        let tag = openingLine.dropFirst(3)
-        let language = tag.isEmpty ? nil : String(decoding: tag, as: UTF8.self)
-            .trimmingCharacters(in: .whitespaces)
-
-        var body: [UInt8] = []
-        var closed = false
-        while let line = scanner.peekLine() {
-            scanner.advanceLine()
-            if line.starts(with: ByteSequence.tripleBacktick), line.count == 3 {
-                closed = true
-                break
-            }
-            if !body.isEmpty { body.append(.newline) }
-            body.append(contentsOf: line)
-        }
-
-        // An unclosed fence is common — someone is mid-typing, or pasted a
-        // snippet and forgot. Discord renders it as a code block to the end of
-        // the message rather than reverting to prose, and matching that means a
-        // half-typed block does not flicker between two layouts on every
-        // keystroke.
-        _ = closed
-        return .codeBlock(
-            language: language?.isEmpty == true ? nil : language,
-            code: String(decoding: body, as: UTF8.self)
-        )
-    }
-
     // MARK: Inline
 
     private func inlineNodes(of slice: ArraySlice<UInt8>) -> [InlineNode] {
@@ -300,6 +484,19 @@ private struct LineScanner {
         while index < bytes.count, bytes[index] != UInt8.newline { index += 1 }
         if index < bytes.count { index += 1 }
     }
+
+    /// Carries on after a block that ended at `end`, perhaps mid-line: the
+    /// spaces after it are skipped, and a line break right after it ends its
+    /// line rather than leaving an empty one.
+    mutating func resume(after end: Int) {
+        var probe = end
+        while probe < bytes.count, bytes[probe] == UInt8.space { probe += 1 }
+        if probe < bytes.count, bytes[probe] == UInt8.newline { probe += 1 }
+        index = probe
+    }
+
+    /// Past everything — a `>>> ` quote took the rest.
+    mutating func seekToEnd() { index = bytes.count }
 }
 
 // MARK: - Byte helpers
@@ -330,6 +527,18 @@ extension UInt8 {
 
     var isASCIIDigit: Bool { self >= .zero && self <= .nine }
 
+    /// `\s` without the line break: a space or a tab.
+    var isInlineSpace: Bool { self == .space || self == 0x09 }
+
+    /// A code block's language, `[a-z0-9_+\-.#]`, either case (the rule is
+    /// case insensitive).
+    var isCodeLanguageByte: Bool {
+        (self >= 0x30 && self <= 0x39)
+            || (self >= 0x41 && self <= 0x5A)
+            || (self >= 0x61 && self <= 0x7A)
+            || self == .underscore || self == 0x2B || self == .hyphen || self == .period || self == .hash
+    }
+
     /// The word-character test `_` emphasis depends on.
     ///
     /// Discord requires `_` to sit on a word boundary, which is what stops
@@ -346,7 +555,5 @@ extension UInt8 {
 
 private enum ByteSequence {
     static let tripleBacktick: [UInt8] = [.backtick, .backtick, .backtick]
-    static let tripleQuote: [UInt8] = [.greaterThan, .greaterThan, .greaterThan, .space]
-    static let quote: [UInt8] = [.greaterThan, .space]
-    static let subtext: [UInt8] = [.hyphen, .hash, .space]
+    static let subtextMark: [UInt8] = [.hyphen, .hash]
 }

@@ -485,14 +485,22 @@ private struct GuideActionCard: View {
     var act: (ChannelID) -> Void
 
     @State private var isHovered = false
+    @Environment(\.motion) private var motion
 
     var body: some View {
         Button { act(row.channelID) } label: {
             VStack(alignment: .leading, spacing: Spacing.snug) {
-                SurfaceGlyphView(glyph: row.glyph)
-                    .scaleEffect(GuideMetrics.glyphScale)
-                    .frame(width: GuideMetrics.glyphWell, height: GuideMetrics.glyphWell)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
+                if case .picture(let url) = row.glyph {
+                    // The server's own picture fills the well, as Discord's does.
+                    RemoteImage(url: url, side: GuideMetrics.glyphWell) { Color.white.opacity(0.08) }
+                        .frame(width: GuideMetrics.glyphWell, height: GuideMetrics.glyphWell)
+                        .clipShape(Circle())
+                } else {
+                    SurfaceGlyphView(glyph: row.glyph)
+                        .scaleEffect(GuideMetrics.glyphScale)
+                        .frame(width: GuideMetrics.glyphWell, height: GuideMetrics.glyphWell)
+                        .background(Circle().fill(Color.white.opacity(0.08)))
+                }
                 Text(row.title)
                     .font(.system(.title3, weight: .semibold))
                     .foregroundStyle(Ink.primary)
@@ -506,6 +514,7 @@ private struct GuideActionCard: View {
             }
             .padding(Spacing.margin)
             .frame(maxWidth: .infinity, minHeight: 176, alignment: .topLeading)
+            .overlay(alignment: .topTrailing) { doneMark }
             .modifier(GuideCardChrome(isHovered: isHovered, isOpen: isOpen))
             .contentShape(.rect(cornerRadius: GuideMetrics.cardCorner, style: .continuous))
         }
@@ -513,7 +522,34 @@ private struct GuideActionCard: View {
         .disabled(row.channelName == nil)
         .onHover { isHovered = $0 && row.channelName != nil }
         .accessibilityLabel(Text(row.title))
-        .accessibilityValue(Text(row.channelName.map { "Opens \($0)" } ?? ""))
+        .accessibilityValue(Text(accessibilityValue))
+    }
+
+    /// Discord's check or empty ring (`283012`): done, or still to do.
+    @ViewBuilder
+    private var doneMark: some View {
+        if let isDone = row.isDone {
+            Group {
+                if isDone {
+                    Image(systemName: "checkmark.circle.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color(red: 0.14, green: 0.64, blue: 0.35))
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                } else {
+                    Image(systemName: "circle")
+                        .foregroundStyle(Ink.tertiary)
+                }
+            }
+            .font(.system(size: 22, weight: .regular))
+            .padding(Spacing.margin)
+            .animation(motion.standard, value: isDone)
+            .accessibilityHidden(true)
+        }
+    }
+
+    private var accessibilityValue: String {
+        let status = row.isDone.map { $0 ? "Completed. " : "Not completed. " } ?? ""
+        return status + (row.channelName.map { "Opens \($0)" } ?? "")
     }
 }
 
@@ -565,13 +601,21 @@ private struct GuideResourceCard: View {
     var body: some View {
         Button { act(row.channelID) } label: {
             HStack(alignment: .center, spacing: Spacing.margin) {
-                SurfaceGlyphView(glyph: row.glyph)
-                    .scaleEffect(GuideMetrics.glyphScale)
-                    .frame(width: 64, height: 64)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
-                    )
+                if case .picture(let url) = row.glyph {
+                    // The server's own picture — Rockstar's R★ — filling the
+                    // well, as Discord's thumbnail does.
+                    RemoteImage(url: url, side: 64) { Color.white.opacity(0.08) }
+                        .frame(width: 64, height: 64)
+                        .clipShape(.rect(cornerRadius: 14, style: .continuous))
+                } else {
+                    SurfaceGlyphView(glyph: row.glyph)
+                        .scaleEffect(GuideMetrics.glyphScale)
+                        .frame(width: 64, height: 64)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.white.opacity(0.08))
+                        )
+                }
                 VStack(alignment: .leading, spacing: 5) {
                     Text(row.title)
                         .font(.system(.title3, weight: .semibold))

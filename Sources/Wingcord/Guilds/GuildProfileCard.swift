@@ -265,6 +265,11 @@ struct GuildProfileCard: View {
         .padding(.bottom, Spacing.margin)
     }
 
+    private var isLimitedAbove: Bool {
+        if case .limited = profile.refusal { return true }
+        return false
+    }
+
     /// The foot of a card with no way in to offer.
     ///
     /// **Discord's one sentence, and only where it has one.** A server that
@@ -274,7 +279,9 @@ struct GuildProfileCard: View {
     /// server" was this client's sentence, never Discord's.
     @ViewBuilder
     private var notInThisServer: some View {
-        if profile.isUnnamed {
+        // Said once: where the refusal line above already says it, the foot
+        // doesn't say it again in a smaller hand (his image 259, 2026-11-19).
+        if profile.isUnnamed, !isLimitedAbove {
             Text("The server has limited who can see this profile.")
                 .font(Typeface.rowSubtitle)
                 .foregroundStyle(InkColor.tertiary)

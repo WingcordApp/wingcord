@@ -1,4 +1,5 @@
 import AppKit
+import QuickLookUI
 
 /// Holds a quit until the rail's last rearrangement is saved.
 ///
@@ -44,4 +45,20 @@ final class WingcordAppDelegate: NSObject, NSApplicationDelegate {
         }
         return .terminateLater
     }
+}
+
+// MARK: - Quick Look
+
+/// **The Quick Look panel finds its controller along the responder chain**,
+/// which ends at the application and its delegate: answering here keeps a file
+/// card's preview (`FilePreview`) the panel's source however the key window
+/// changes under it.
+extension WingcordAppDelegate {
+    nonisolated override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+
+    nonisolated override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated { FilePreview.shared.take(panel) }
+    }
+
+    nonisolated override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {}
 }

@@ -41,21 +41,49 @@ extension SessionController {
     /// decides whether an activity's card opens a game profile at all — see
     /// `AppModel.gameProfileOpener` — and the full profile draws every one.
     private func loadActivityGames(_ activities: [Activity]) {
-        let ids = activities.compactMap { $0.kind == .playing ? $0.applicationID : nil }
-        guard !ids.isEmpty else { return }
+        let playing = activities.filter { $0.kind == .playing }
+        guard !playing.isEmpty else { return }
+        let ids = playing.compactMap(\.applicationID)
         Task { [weak self] in
             guard let self else { return }
-            await loadGames(ids: ids)
-            // **The hop Discord makes for a console title** — see
-            // `AppModel.canonicalGameID`. An application `/games` did not
-            // answer for may name its game in `linked_games`; its record says
-            // so, and the game it names is then asked for like any other. An
-            // editor or a bot has a record with no game in it, which is kept,
-            // so each costs one request for the session and not one a profile.
-            let unanswered = ids.filter { model.games[$0] == nil }
-            guard !unanswered.isEmpty else { return }
-            await loadWidgetApplications(ids: unanswered)
-            await loadGames(ids: unanswered.compactMap { model.widgetApplications[$0]?.primaryGameID })
+            if !ids.isEmpty {
+                await loadGames(ids: ids)
+                // **The hop Discord makes for a console title** — see
+                // `AppModel.canonicalGameID`. An application `/games` did not
+                // answer for may name its game in `linked_games`; its record
+                // says so, and the game it names is then asked for like any
+                // other. An editor or a bot has a record with no game in it,
+                // which is kept, so each costs one request for the session.
+                let unanswered = ids.filter { model.games[$0] == nil }
+                if !unanswered.isEmpty {
+                    await loadWidgetApplications(ids: unanswered)
+                    await loadGames(ids: unanswered.compactMap { model.widgetApplications[$0]?.primaryGameID })
+                }
+            }
+            // **And by name, where the id gives no game** — see
+            // `AppModel.gameProfileOpener(for:)`.
+            for activity in playing where model.gameProfileOpener(for: activity.applicationID) == nil {
+                await resolveGameByName(activity.name)
+            }
+        }
+    }
+
+    /// The game a name names: Discord's game search, and only an exact match
+    /// (case and accents aside) — a near one would open somebody else's game.
+    /// Once per name per session; a failed search can be asked again.
+    func resolveGameByName(_ name: String) async {
+        let key = AppModel.activityNameKey(name)
+        guard !key.isEmpty, model.gamesByActivityName[key] == nil,
+              gameNameSearches.insert(key).inserted
+        else { return }
+        do {
+            let hits = try await rest.searchGames(name)
+            guard let hit = hits.first(where: { AppModel.activityNameKey($0.name) == key }) else { return }
+            model.gamesByActivityName[key] = hit.id
+            await loadGames(ids: [hit.id])
+        } catch {
+            gameNameSearches.remove(key)
+            Self.trace("game by name failed: \(Self.describe(error))")
         }
     }
 

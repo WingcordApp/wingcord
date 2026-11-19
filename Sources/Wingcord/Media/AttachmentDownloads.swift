@@ -41,8 +41,29 @@ enum AttachmentDownloads {
         }
     }
 
+    /// Moves a finished download to a place somebody chose — Save As… —
+    /// replacing what the panel already agreed to replace, quarantined.
+    static func place(_ file: URL, at destination: URL) throws -> URL {
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: file, to: destination)
+        quarantine(destination)
+        return destination
+    }
+
+    /// Marks a file as downloaded from the internet by this app, so Gatekeeper
+    /// checks it before it opens.
+    nonisolated static func quarantine(_ file: URL) {
+        var values = URLResourceValues()
+        values.quarantineProperties = [
+            kLSQuarantineAgentNameKey as String: "Wingcord",
+            kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload as String,
+        ]
+        var placed = file
+        try? placed.setResourceValues(values)
+    }
+
     /// Moves a finished download into Downloads under a free name, quarantined.
-    private static func place(_ file: URL, named filename: String) throws -> URL {
+    static func place(_ file: URL, named filename: String) throws -> URL {
         let folder = try FileManager.default.url(
             for: .downloadsDirectory, in: .userDomainMask, appropriateFor: nil, create: true
         )
@@ -56,13 +77,7 @@ enum AttachmentDownloads {
             counter += 1
         }
         try FileManager.default.moveItem(at: file, to: destination)
-        var values = URLResourceValues()
-        values.quarantineProperties = [
-            kLSQuarantineAgentNameKey as String: "Wingcord",
-            kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload as String,
-        ]
-        var placed = destination
-        try? placed.setResourceValues(values)
+        quarantine(destination)
         return destination
     }
 

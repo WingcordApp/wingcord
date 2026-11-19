@@ -25,14 +25,17 @@ struct QuickSwitcherPresenter: ViewModifier {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
 
-    /// How far down the window the panel sits.
-    ///
-    /// **Above the middle, not centred.** The list grows downward as somebody
-    /// types, and a panel pinned to the centre pushes its own field upward every
-    /// time the answer gets longer — which moves the one thing the reader is
-    /// looking at. Anchored near the top it grows into empty space and the field
-    /// never moves.
-    private static let topInset: CGFloat = 96
+    /// Where the panel's top sits: **centred in the window**, as he asked
+    /// ("centering it on the screen", 2026-11-19) — the tallest the panel gets,
+    /// in the middle, so it reads as centred when its list is full and its
+    /// field never moves while the list grows and shrinks beneath it (a panel
+    /// pinned at its *current* centre would push its own field up with every
+    /// keystroke). Never closer to the top than the toolbar.
+    static func top(inHeight height: CGFloat) -> CGFloat {
+        max(minimumTop, (height - QuickSwitcher.maxHeight) / 2)
+    }
+
+    private static let minimumTop: CGFloat = 56
 
     /// How far the window is taken down behind the panel.
     ///
@@ -50,21 +53,24 @@ struct QuickSwitcherPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content.overlay {
-            ZStack(alignment: .top) {
-                if model.isQuickSwitchShown {
-                    dismissLayer
-                    panel
-                        .padding(.top, Self.topInset)
-                        // Grown from the top, where it came from — spatial
-                        // symmetry, and the same anchor it collapses back into.
-                        .transition(.materialize(from: .top, blurring: false))
+            GeometryReader { proxy in
+                ZStack(alignment: .top) {
+                    if model.isQuickSwitchShown {
+                        dismissLayer
+                        panel
+                            .padding(.top, Self.top(inHeight: proxy.size.height))
+                            // Grown out of the middle, where it sits, and
+                            // collapsed back into it.
+                            .transition(.materialize(from: .center, blurring: false))
+                    }
                 }
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                // Declared by the container that should animate, never by the
+                // writer — a `withAnimation` on a store property the whole
+                // window observes opens a global transaction and animates every
+                // view that happens to re-lay-out while it runs.
+                .animation(motion.panel, value: model.isQuickSwitchShown)
             }
-            // Declared by the container that should animate, never by the writer
-            // — a `withAnimation` on a store property the whole window observes
-            // opens a global transaction and animates every view that happens to
-            // re-lay-out while it runs.
-            .animation(motion.panel, value: model.isQuickSwitchShown)
         }
     }
 

@@ -432,7 +432,7 @@ extension AppModel {
     /// The same one-pass walk `buildGuildSidebar` makes, and it relies on the
     /// same fact: the flat list is already position-sorted, so each bucket
     /// comes out in the order the sidebar would draw it.
-    private func sidebarOrderedChannelIDs(inGuild guildID: GuildID) -> [ChannelID] {
+    func sidebarOrderedChannelIDs(inGuild guildID: GuildID) -> [ChannelID] {
         var byParent: [ChannelID?: [ChannelID]] = [:]
         var categories: [ChannelID] = []
         for channelID in channelIndex.channelIDs(inGuild: guildID) {

@@ -142,7 +142,7 @@ struct ServerJoinGatePane: View, Equatable {
             case .question(let question):
                 QuestionStep(question: question, toggleOption: toggleOption)
             case .rules(let rules):
-                RulesStep(rules: rules, serverName: presentation.serverName)
+                RulesStep(rules: rules, serverName: presentation.serverName, guildID: presentation.guildID)
             }
 
             if let failure = presentation.failure {
@@ -355,6 +355,7 @@ private struct GateOptionChip: View {
 private struct RulesStep: View {
     var rules: ServerJoinGatePresentation.Rules
     var serverName: String
+    var guildID: GuildID
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.margin) {
@@ -367,10 +368,7 @@ private struct RulesStep: View {
                     .foregroundStyle(Ink.primary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail = rules.detail {
-                    Text(detail)
-                        .font(.system(.callout))
-                        .foregroundStyle(Ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    RulesDetail(markdown: detail, guildID: guildID)
                         .padding(.top, Spacing.tight)
                 }
             }
@@ -378,7 +376,7 @@ private struct RulesStep: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(rules.rules.enumerated()), id: \.offset) { index, rule in
                     if index > 0 { SurfaceDivider(leading: Spacing.margin + 22 + Spacing.snug) }
-                    GateRuleRow(number: index + 1, text: rule)
+                    GateRuleRow(number: index + 1, text: rule, guildID: guildID)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -396,9 +394,32 @@ private struct RulesStep: View {
     }
 }
 
+/// The server's own paragraph above its rules, drawn as Discord markdown.
+private struct RulesDetail: View {
+    var markdown: String
+    var guildID: GuildID
+
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ProseText(
+            markdown: markdown,
+            font: .system(.callout),
+            color: InkColor.secondary,
+            mentions: model.joinMentionContext(for: guildID),
+            onLink: { model.openLink($0) }
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct GateRuleRow: View {
     var number: Int
+    /// Discord markdown, as the server wrote it.
     var text: String
+    var guildID: GuildID
+
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.snug) {
@@ -408,11 +429,16 @@ private struct GateRuleRow: View {
                 .monospacedDigit()
                 .frame(width: 22, alignment: .trailing)
                 .padding(.top, 3)
-            Text(text)
-                .font(.system(.callout))
-                .foregroundStyle(Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // The rule as a message draws it: channels, roles, people, emoji,
+            // links and timestamps, not their raw `<#…>` codes.
+            ProseText(
+                markdown: text,
+                font: .system(.callout),
+                color: InkColor.secondary,
+                mentions: model.joinMentionContext(for: guildID),
+                onLink: { model.openLink($0) }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, Spacing.margin)
         .padding(.vertical, Spacing.snug)

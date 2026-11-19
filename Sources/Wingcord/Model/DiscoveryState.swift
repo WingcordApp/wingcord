@@ -21,11 +21,15 @@ struct DiscoveryState: Hashable, Sendable {
     enum Tab: String, CaseIterable, Hashable, Sendable {
         case servers
         case apps
+        /// Only while Discord's `2026-10-game-discovery` or the reader's
+        /// preview says so — see `AppModel.offersGamesDiscovery`.
+        case games
 
         var title: String {
             switch self {
             case .servers: "Servers"
             case .apps: "Apps"
+            case .games: "Games"
             }
         }
     }

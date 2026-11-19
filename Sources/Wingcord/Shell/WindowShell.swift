@@ -60,9 +60,16 @@ struct WindowShell: View {
             // (`DetailHeader`), and the gap above the floating panel showed
             // the ground bare — a bright line along the sidebar's top.
             // Under the panel, which refracts it like everything else.
-            HeaderShade()
-                .frame(width: max(0, laidLeading ?? layout.detailLeading))
-                .accessibilityHidden(true)
+            //
+            // **Only where the column draws its own shade.** A page that draws
+            // its own row (Discover, Channels & Roles — `pageDrawsHeaderRow`)
+            // draws none, and a shade on this side alone was a dark bar over
+            // the floating panel's top edge (Alex's image 276, 2026-11-19).
+            if !model.pageDrawsHeaderRow {
+                HeaderShade()
+                    .frame(width: max(0, laidLeading ?? layout.detailLeading))
+                    .accessibilityHidden(true)
+            }
 
             SidebarPanel(layout: layout)
                 // The animated part of a change of state, keyed on the state
@@ -73,6 +80,11 @@ struct WindowShell: View {
         .onChange(of: ShellMotionKey(layout)) { old, new in
             slideConversation(from: old.detailLeading, to: new.detailLeading)
         }
+        // **The rail's name chip, drawn over the whole shell** rather than
+        // inside the panel, which clips to its own shape: with the panel down
+        // to the rail alone (Discover, a taken-over column) the chip was cut
+        // at the rail's edge (Alex's image 274, 2026-11-19).
+        .railHoverLabelHost()
         .ignoresSafeArea()
         // The ground is the shell's BACKGROUND, so nothing it draws can size
         // the window's content.

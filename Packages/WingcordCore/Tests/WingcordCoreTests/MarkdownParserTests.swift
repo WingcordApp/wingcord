@@ -141,10 +141,56 @@ struct MarkdownParserTests {
         #expect(result == [.codeBlock(language: "swift", code: "let x = **1**")])
     }
 
-    @Test("An unclosed fence runs to the end rather than reverting to prose")
+    /// Discord's rule needs the closing fence; without one the backticks are
+    /// text, as Discord shows them.
+    @Test("An unclosed fence is text, as in Discord")
     func unclosedFence() {
-        let result = blocks("```\nstill code")
-        #expect(result == [.codeBlock(language: nil, code: "still code")])
+        let result = parser.parse("```\nstill code")
+        #expect(result.blocks.count == 1)
+        #expect(result.plainText == "```\nstill code")
+        if case .codeBlock = result.blocks.first { Issue.record("an unclosed fence made a block") }
+    }
+
+    /// Alex's image 238 (2026-11-19): a server's rules, six one-line blocks in
+    /// a row, drawn as six empty boxes — the sentence had been read as the
+    /// block's language.
+    @Test("A one-line block is code, not a language")
+    func oneLineBlock() {
+        #expect(blocks("```1) All previously agreed upon rules must be followed.```") == [
+            .codeBlock(language: nil, code: "1) All previously agreed upon rules must be followed.")
+        ])
+        #expect(blocks("```a```\n```b```") == [
+            .codeBlock(language: nil, code: "a"), .codeBlock(language: nil, code: "b"),
+        ])
+    }
+
+    @Test("A language is one word followed by a line break")
+    func languageIsOneWord() {
+        #expect(blocks("```py thon\ncode```") == [.codeBlock(language: nil, code: "py thon\ncode")])
+        #expect(blocks("```C++\nint x;\n```") == [.codeBlock(language: "C++", code: "int x;")])
+        // The fence may close at the end of the last line of code.
+        #expect(blocks("```swift\nlet x = 1```") == [.codeBlock(language: "swift", code: "let x = 1")])
+        // Read again without a language when the block fails with one, as the
+        // regex backtracks: the word is the code.
+        #expect(blocks("```js\n```") == [.codeBlock(language: nil, code: "js")])
+    }
+
+    @Test("A block can open after words, and words can follow it")
+    func blockInsideALine() {
+        #expect(blocks("see ```code``` here") == [
+            .paragraph([.text("see ")]), .codeBlock(language: nil, code: "code"), .paragraph([.text("here")]),
+        ])
+        // Inside an inline code span, a fence opens nothing.
+        #expect(blocks("type `` ``` `` to start") == [
+            .paragraph([.text("type "), .code("```"), .text(" to start")])
+        ])
+    }
+
+    @Test("The line breaks round a block's code are not part of it")
+    func blockTrimsItsLineBreaks() {
+        #expect(blocks("```\n\ncode\n\n```\nafter") == [
+            .codeBlock(language: nil, code: "code"), .paragraph([.text("after")]),
+        ])
     }
 
     // MARK: Escapes
@@ -276,9 +322,20 @@ struct MarkdownParserTests {
         #expect(blocks("#nospace") == [.paragraph([.text("#nospace")])])
     }
 
+    /// `^ *(#{1,3})(?:\s+)((?!\s*#{1,3}\s)[^\n]+?)#*\s*(?:\n|$)`.
+    @Test("Headings read as Discord's rule does")
+    func headingsByDiscordsRule() {
+        #expect(blocks("  # Spaced") == [.heading(level: 1, [.text("Spaced")])])
+        #expect(blocks("##   Wide") == [.heading(level: 2, [.text("Wide")])])
+        #expect(blocks("## Closed ##") == [.heading(level: 2, [.text("Closed")])])
+        #expect(blocks("# # twice") == [.paragraph([.text("# # twice")])])
+    }
+
     @Test("Subtext")
     func subtext() {
         #expect(blocks("-# quiet") == [.subtext([.text("quiet")])])
+        #expect(blocks(" -#   quiet") == [.subtext([.text("quiet")])])
+        #expect(blocks("-#quiet") == [.paragraph([.text("-#quiet")])])
     }
 
     @Test("A quote gathers its whole run and parses one level in")
@@ -292,6 +349,34 @@ struct MarkdownParserTests {
     @Test("A bare greater-than is not a quote")
     func bareGreaterThanIsNotAQuote() {
         #expect(blocks("2 > 1") == [.paragraph([.text("2 > 1")])])
+    }
+
+    /// `^( *>>> +([\s\S]*))`: the rest of the message, every line of it.
+    @Test("A triple quote takes the rest of the message")
+    func tripleQuote() {
+        #expect(blocks(">>> a\nb") == [
+            .quote([.paragraph([.text("a"), .lineBreak, .text("b")])])
+        ])
+        #expect(blocks("before\n>>> a\nb") == [
+            .paragraph([.text("before")]),
+            .quote([.paragraph([.text("a"), .lineBreak, .text("b")])]),
+        ])
+    }
+
+    /// Discord's rule returns nothing while it is inside a quote.
+    @Test("Quotes don't nest")
+    func quotesDontNest() {
+        #expect(blocks("> > a") == [.quote([.paragraph([.text("> a")])])])
+    }
+
+    /// `> ` needs its space, so a `>` alone on a line ends the quote.
+    @Test("A greater-than alone on a line ends a quote")
+    func bareMarkerEndsAQuote() {
+        #expect(blocks("> a\n>\n> b") == [
+            .quote([.paragraph([.text("a")])]),
+            .paragraph([.text(">")]),
+            .quote([.paragraph([.text("b")])]),
+        ])
     }
 
     @Test("Lists, ordered and not")
