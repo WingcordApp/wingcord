@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>3</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.social-networking</string>
 	<key>LSMinimumSystemVersion</key>
@@ -72,6 +72,6 @@
 		</dict>
 	</array>
 	<key>WingcordPrerelease</key>
-	<string>Beta 2</string>
+	<string>Beta 3</string>
 </dict>
 </plist>
